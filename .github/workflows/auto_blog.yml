@@ -1,4 +1,4 @@
-Name: 자동 블로그 발행
+name: 자동 블로그 발행
 
 # 실행 방법 2가지:
 # 1) workflow_dispatch: GitHub 웹사이트(모바일 브라우저 포함)에서
