@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (v5 - 워드프레스 추가판)
+GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (v5.1 - 안정성 보완판)
 
 v2에서 추가된 것: 쿠팡 마크업, SEO(Open Graph 등), GA4 대시보드
 v3에서 추가된 것: AI 스키마 마크업 자동 선택, 구글 애드센스 자동광고
 v4에서 추가된 것: 구글 블로거(Blogger) 동시 발행 (OAuth 리프레시 토큰)
-v5에서 추가된 것 (현재 버전): 
-  8. 워드프레스(WordPress) 동시 발행
-     - REST API와 Application Passwords를 이용해 썸네일 업로드 및 포스트 자동 발행
-     - GitHub Pages, Blogger와 함께 3채널 동시 발행 지원
+v5에서 추가된 것: 워드프레스(WordPress) 동시 발행
+v5.1에서 보완된 것 (현재 버전): 
+  - 이미지 생성 타임아웃 방지 및 자동 재시도(Retry) 로직 추가
+  - 외부 API 호출 안정성 강화
 """
 
 import base64
@@ -50,7 +50,7 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 
-# 워드프레스 동시발행용 (v5 추가)
+# 워드프레스 동시발행용
 WP_SITE_URL = os.environ.get("WP_SITE_URL", "").rstrip("/")
 WP_USERNAME = os.environ.get("WP_USERNAME", "")
 WP_APP_PASSWORD = os.environ.get("WP_APP_PASSWORD", "")
@@ -251,6 +251,24 @@ monochrome, black and white,high contrast, dramatic lighting,dusty grainy textur
 CONTENT_IMAGE_SIZE = (360, 270)
 CONTENT_IMAGE_OPACITY = 0.10  
 
+# 공통 안전 이미지 요청 함수 (Timeout 및 Retry 적용)
+def _safe_get_image(url: str, timeout: int = 60, max_retries: int = 3):
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, timeout=timeout)
+            resp.raise_for_status()
+            return resp.content
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            print(f"  → [이미지 요청] 연결 지연/타임아웃 (시도 {attempt}/{max_retries}): {e}")
+            if attempt == max_retries:
+                return None
+            time.sleep(3 * attempt)
+        except Exception as e:
+            print(f"  → [이미지 요청] 오류 발생: {e}")
+            break
+    return None
+
+
 def build_decor_html(theme: dict, seed: str) -> str:
     rng = random.Random(seed)
     emojis = theme["decor"]
@@ -413,11 +431,8 @@ def build_json_ld(article: dict, canonical_url: str, thumb_url: str, date: str, 
                 for i, p in enumerate(products[:6], 1)
             ],
         })
-        print(f"  → [스키마 마크업] ItemList 추가 (상품 {len(products[:6])}개)")
 
     graph_data = {"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}
-
-    print(f"  → [스키마 마크업] AI가 선택한 타입: {schema_type} (+ BreadcrumbList)")
     return json.dumps(graph_data, ensure_ascii=False, indent=2)
 
 
@@ -511,7 +526,6 @@ POST_TEMPLATE = """<!DOCTYPE html>
   body {{ top: 0 !important; }}
   .goog-te-banner-frame {{ display: none !important; }}
 </style>
-</style>
 </head>
 <body>
 {translate_widget}
@@ -572,14 +586,12 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .tier-label {{ font-size: 0.85em; font-weight:900; color:#aaa; letter-spacing:2px; margin: 34px 0 12px; text-transform:uppercase; }}
   .tier-label:first-of-type {{ margin-top: 10px; }}
 
-  /* 상단(TOP) - 히어로 1건, 가장 큰 임팩트 */
   .hero {{ display:block; text-decoration:none; color:#1a1a1a; background:#fff; border-radius:20px; overflow:hidden; box-shadow: 0 6px 24px rgba(0,0,0,0.10); }}
   .hero img {{ width:100%; aspect-ratio: 21/9; object-fit:cover; display:block; }}
   .hero-body {{ padding: clamp(16px, 4vw, 22px) clamp(18px, 5vw, 26px) 28px; }}
   .hero-badge {{ display:inline-block; font-size:0.8em; font-weight:700; color:#fff; padding:5px 14px; border-radius:999px; margin-bottom:12px; }}
   .hero-title {{ font-size: clamp(1.25em, 4.5vw, 1.7em); font-weight:800; line-height:1.35; word-break: keep-all; }}
 
-  /* 중단(MID) - 2단 그리드, 중간 크기 */
   .mid-grid {{ display:grid; grid-template-columns: 1fr 1fr; gap:18px; }}
   .mid-card {{ text-decoration:none; color:#1a1a1a; background:#fff; border-radius:16px; overflow:hidden; box-shadow: 0 3px 14px rgba(0,0,0,0.08); transition: transform .15s ease; }}
   .mid-card:hover {{ transform: translateY(-3px); }}
@@ -587,7 +599,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .mid-body {{ padding: 14px 16px 18px; }}
   .mid-title {{ font-weight:700; font-size:clamp(0.92em, 3vw, 1.08em); line-height:1.4; word-break: keep-all; }}
 
-  /* 하단(BOTTOM) - 촘촘한 아카이브 그리드, 작은 크기 */
   .bottom-grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:14px; }}
   .bottom-card {{ text-decoration:none; color:#1a1a1a; background:#fff; border-radius:10px; overflow:hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }}
   .bottom-card img {{ width:100%; aspect-ratio:16/10; object-fit:cover; display:block; }}
@@ -789,7 +800,7 @@ def _load_font(size):
     for path in FONT_CANDIDATES:
         if os.path.exists(path):
             return ImageFont.truetype(path, size)
-    print("[안내] 한글 폰트를 찾지 못해 기본 폰트로 대체합니다 (한글이 깨져 보일 수 있음).")
+    print("[안내] 한글 폰트를 찾지 못해 기본 폰트로 대체합니다.")
     return ImageFont.load_default()
 
 
@@ -818,15 +829,17 @@ def _fetch_illustration(category: str, size: tuple, seed: int):
         f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
         f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     )
+    content = _safe_get_image(url, timeout=60, max_retries=3)
+    if not content:
+        print("  → [일러스트] 생성 실패, 그라데이션만 사용합니다.")
+        return None
     try:
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+        img = Image.open(io.BytesIO(content)).convert("RGBA")
         if img.size != size:
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [일러스트] 생성 실패, 그라데이션만 사용: {e}")
+        print(f"  → [일러스트] 이미지 변환 실패: {e}")
         return None
 
 
@@ -1098,10 +1111,12 @@ def _fetch_content_photo(category: str, seed: int, size=CONTENT_IMAGE_SIZE):
         f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
         f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     )
+    content = _safe_get_image(url, timeout=60, max_retries=3)
+    if not content:
+        print("  → [본문 이미지] 생성 실패, 삽입 건너뜀")
+        return None
     try:
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-        raw = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        raw = Image.open(io.BytesIO(content)).convert("RGB")
         if raw.size != size:
             raw = raw.resize(size)
 
@@ -1109,7 +1124,7 @@ def _fetch_content_photo(category: str, seed: int, size=CONTENT_IMAGE_SIZE):
         faded = Image.blend(white_bg, raw, alpha=CONTENT_IMAGE_OPACITY)
         return faded
     except Exception as e:
-        print(f"  → [본문 이미지] 생성 실패, 삽입 건너뜀: {e}")
+        print(f"  → [본문 이미지] 변환 실패: {e}")
         return None
 
 
@@ -1199,15 +1214,16 @@ def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
         f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
         f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     )
+    content = _safe_get_image(url, timeout=30, max_retries=2)
+    if not content:
+        return None
     try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        img = Image.open(io.BytesIO(content)).convert("RGB")
         if img.size != size:
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [상품 아이콘] 생성 실패, 아이콘 없이 표시: {e}")
+        print(f"  → [상품 아이콘] 변환 실패: {e}")
         return None
 
 
@@ -1525,7 +1541,6 @@ def generate_static_pages() -> None:
             continue  
         with open(path, "w", encoding="utf-8") as f:
             f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
-        print(f"  → [설정] {filename} 생성됨 (내용은 실제 정보로 직접 수정 권장)")
 
 
 def update_dashboard(posts: list) -> None:
@@ -1551,7 +1566,7 @@ def update_seo_files(posts: list) -> None:
 
 
 # ---------------------------------------------------------------------
-# 구글 블로거(Blogger) 동시 발행 - v4
+# 구글 블로거(Blogger) 동시 발행
 # ---------------------------------------------------------------------
 
 def _blogger_configured() -> bool:
@@ -1600,7 +1615,7 @@ def publish_to_blogger(article: dict, canonical_url: str, thumb_url: str, local_
                 img_b64 = base64.b64encode(f.read()).decode("ascii")
             img_src = f"data:image/webp;base64,{img_b64}"
         except Exception as e:
-            print(f"  → [블로거] 썸네일 base64 인코딩 실패, 외부 링크로 대체: {e}")
+            print(f"  → [블로거] 썸네일 인코딩 실패, 외부 링크로 대체: {e}")
             img_src = thumb_url
 
         content_html = (
@@ -1623,8 +1638,9 @@ def publish_to_blogger(article: dict, canonical_url: str, thumb_url: str, local_
     except Exception as e:
         print(f"  → [블로거] 발행 실패: {e}")
 
+
 # ---------------------------------------------------------------------
-# 워드프레스(WordPress) 동시 발행 - v5
+# 워드프레스(WordPress) 동시 발행
 # ---------------------------------------------------------------------
 
 def _wordpress_configured() -> bool:
@@ -1632,7 +1648,6 @@ def _wordpress_configured() -> bool:
 
 
 def publish_to_wordpress(article: dict, canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
-    """워드프레스 REST API를 이용해 글을 발행합니다."""
     if not _wordpress_configured():
         print("  → [워드프레스] 관련 Secrets가 없어 건너뜁니다.")
         return
@@ -1691,7 +1706,6 @@ def ensure_nojekyll() -> None:
     nojekyll_path = os.path.join(DOCS_DIR, ".nojekyll")
     if not os.path.exists(nojekyll_path):
         open(nojekyll_path, "w").close()
-        print("  → [설정] .nojekyll 파일 생성 (Jekyll 가공 비활성화)")
 
 
 def run():
@@ -1714,12 +1728,11 @@ def run():
     update_dashboard(posts)
     update_seo_files(posts)
     
-    # 3곳으로 동시 발행 (설정 안 된 곳은 자동으로 건너뜀)
+    # 동시 발행 실행
     publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
     publish_to_wordpress(article, post_url, thumb_url, local_thumb_path)
 
     print(f"  → 저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
-    print(f"  → 대시보드/사이트맵 갱신 완료")
 
 
 if __name__ == "__main__":
