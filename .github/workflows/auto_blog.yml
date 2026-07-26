@@ -1,4 +1,4 @@
-name: 자동 블로그 발행
+Name: 자동 블로그 발행
 
 # 실행 방법 2가지:
 # 1) workflow_dispatch: GitHub 웹사이트(모바일 브라우저 포함)에서
@@ -33,9 +33,6 @@ jobs:
           python-version: "3.11"
 
       - name: 무료 한글 폰트 다운로드 (나눔고딕)
-        # apt-get은 우분투 패키지 전체 목록을 새로 받아오느라 몇 분씩 걸리고 가끔 멈추기도 합니다.
-        # 실제 필요한 건 폰트 파일 하나뿐이라, 구글 폰트 공식 저장소에서 직접 받는 방식으로 바꿔
-        # 훨씬 빠르고 안정적으로 만들었습니다 (보통 몇 초 안에 끝남).
         run: |
           curl -fsSL -o font.ttf \
             "https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf" \
@@ -44,7 +41,7 @@ jobs:
       - name: 필요 패키지 설치
         run: pip install requests pillow
 
-      - name: 블로그 글 + 썸네일 자동 생성 (+ 블로거 동시발행)
+      - name: 블로그 글 + 썸네일 자동 생성 (+ 블로거 & 워드프레스 동시발행)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SITE_TITLE: ${{ vars.SITE_TITLE }}
@@ -58,10 +55,15 @@ jobs:
           COUPANG_PARTNER_TAG: ${{ secrets.COUPANG_PARTNER_TAG }}
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
           COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+          # 구글 블로거 설정
           BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          # 워드프레스 설정 추가 (v5)
+          WP_SITE_URL: ${{ secrets.WP_SITE_URL }}
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
         run: python generate_post.py "${{ github.event.inputs.title }}"
 
       - name: 변경사항 커밋 및 push
