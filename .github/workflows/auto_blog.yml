@@ -1,28 +1,31 @@
-name: 자동 블로그 발행
-
-# 실행 방법 2가지:
-# 1) workflow_dispatch: GitHub 웹사이트(모바일 브라우저 포함)에서
-#    Actions 탭 > "자동 블로그 발행" > "Run workflow" 버튼으로 수동 실행.
-#    이때 "title" 칸에 제목을 입력하면 그 제목으로, 비워두면 큐에서 자동으로 하나 꺼내 씁니다.
-# 2) schedule: 매일 정해진 시각에 자동 실행 (큐에서 자동으로 다음 키워드 사용)
+name: 자동 블로그 파이프라인 통합
 
 on:
   workflow_dispatch:
     inputs:
+      action_type:
+        description: "실행 작업 선택"
+        required: true
+        default: "publish"
+        type: choice
+        options:
+          - publish
+          - refresh
       title:
-        description: "블로그 제목 (비워두면 큐에서 자동으로 하나 사용)"
+        description: "블로그 제목 (publish 선택 시, 비워두면 큐에서 자동 사용)"
         required: false
         default: ""
   schedule:
-    - cron: "0 0 * * *"   # 매일 UTC 00:00 = 한국시간 오전 9시
+    - cron: "0 0 * * *"   # 매일 UTC 00:00 = 한국시간 오전 9시 (자동 포스팅)
+    - cron: "0 22 * * 0"  # 매주 일요일 UTC 22:00 = 한국시간 월요일 오전 7시 (키워드 보충)
 
 permissions:
-  contents: write   # docs 폴더 변경사항을 저장소에 push 하기 위해 필요
+  contents: write
 
 jobs:
-  publish:
+  run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 10   # 어떤 이유로든 멈추면 10분 후 자동 실패 처리 (무한 대기 방지)
+    timeout-minutes: 10
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
@@ -36,12 +39,17 @@ jobs:
         run: |
           curl -fsSL -o font.ttf \
             "https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf" \
-            --max-time 30 || echo "폰트 다운로드 실패, 기본 폰트로 대체됩니다 (한글이 깨져 보일 수 있음)"
+            --max-time 30 || echo "폰트 다운로드 실패, 기본 폰트로 대체됩니다."
 
       - name: 필요 패키지 설치
         run: pip install requests pillow
 
-      - name: 블로그 글 + 썸네일 자동 생성 (+ 블로거 & 워드프레스 동시발행)
+      - name: 키워드 자동 보충 실행 (스케줄 중 두 번째 혹은 수동 refresh 선택 시)
+        if: github.event_name == 'schedule' && github.cron == '0 22 * * 0' || (github.event.inputs.action_type == 'refresh')
+        run: python generate_post.py refresh
+
+      - name: 블로그 발행 실행 (일일 스케줄 또는 수동 publish 선택 시)
+        if: github.event_name == 'schedule' && github.cron == '0 0 * * *' || (github.event.name == 'workflow_dispatch' && github.event.inputs.action_type == 'publish')
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SITE_TITLE: ${{ vars.SITE_TITLE }}
@@ -55,15 +63,10 @@ jobs:
           COUPANG_PARTNER_TAG: ${{ secrets.COUPANG_PARTNER_TAG }}
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
           COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
-          # 구글 블로거 설정
           BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          # 워드프레스 설정 추가 (v5)
-          WP_SITE_URL: ${{ secrets.WP_SITE_URL }}
-          WP_USERNAME: ${{ secrets.WP_USERNAME }}
-          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
         run: python generate_post.py "${{ github.event.inputs.title }}"
 
       - name: 변경사항 커밋 및 push
@@ -71,5 +74,5 @@ jobs:
           git config user.name "auto-blog-bot"
           git config user.email "auto-blog-bot@users.noreply.github.com"
           git add docs keywords_queue.json
-          git diff --cached --quiet && echo "변경사항 없음, 커밋 생략" || git commit -m "자동 포스팅: $(date +'%Y-%m-%d %H:%M')"
+          git diff --cached --quiet && echo "변경사항 없음, 커밋 생략" || git commit -m "자동 파이프라인 실행: $(date +'%Y-%m-%d %H:%M')"
           git push
