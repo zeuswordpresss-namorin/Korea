@@ -2,6 +2,7 @@
 """
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
 - 구글 트렌드 자동 수집 + 자동 포스팅 파이프라인 통합
+- UI 개선(표 좌측상단 오류 수정) 및 서론 호기심 유발 프롬프트 적용
 """
 
 import base64
@@ -79,7 +80,7 @@ SYSTEM_PROMPT = """당신은 한국어 SEO 블로그 콘텐츠 작가 겸 구조
 3. 확인되지 않은 구체적 수치·통계·자격요건·금리·지원금액을 지어내지 않는다. 모르면 "기관별로 다를 수 있다" 식으로
    일반화해서 쓰고, 절대 구체적 숫자를 추측해서 채우지 않는다.
 4. 글자 수는 1500~2200자 내외.
-5. 두괄식으로 쓴다: 첫 문단(도입부)에서 방문자의 호기심을 유발하는 흥미로운 질문이나 반전 요소를 던져 이 글이 다루는 핵심 답/결론을 먼저 요약 제시하고, 이후 문단에서 자세히 설명한다.
+5. [중요] 서론은 방문자의 호기심을 강하게 자극하는 '훅(Hook)'으로 시작한다: 독자가 겪고 있을 만한 고민이나 궁금해할 만한 질문을 던져 깊은 공감을 이끌어내라. 그 후, 이 글을 끝까지 읽으면 어떤 확실한 정보와 해결책을 얻을 수 있는지 매력적으로 제시하여 이탈률을 낮춰라.
 6. 가독성을 위해 본문 중 최소 1곳에 <table> (수치/스펙 비교용 정리표) 또는 <ul>/<ol> 목록을 반드시 포함한다.
    단, 질문-답변(Q&A) 내용은 절대 <table>로 만들지 않는다 (표 형태는 모바일에서 깨지기 쉬움).
    FAQPage 타입을 고른 경우, 본문에는 Q&A를 별도로 나열하지 않는다 (faq_items로 충분하며, 화면에는 별도 섹션으로 자동 표시됨).
@@ -1096,20 +1097,20 @@ def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
 def enhance_tables(html_body: str, accent: str) -> str:
     counter = {"n": 0}
     def _style_cells(raw_table: str, min_width: int) -> str:
-        # 기존에 인라인 스타일이나 불완전한 태그로 인해 좌측 상단 셀이 깨지는 문제 해결을 위해 전체적인 속성 정비
+        # 태그 내의 불필요한 공백/속성을 무시하고 안정적으로 변경하기 위해 정규식 패턴 수정
         styled = re.sub(
-            r"<table[^>]*>",
-            f'<table style="width:100%;min-width:{min_width}px;border-collapse:collapse;">',
+            r"<table\b[^>]*>",
+            f'<table style="width:100%;min-width:{min_width}px;border-collapse:collapse;overflow:hidden;"',
             raw_table, count=1,
         )
         styled = re.sub(
-            r"<th[^>]*>",
+            r"<th\b[^>]*>",
             f'<th style="padding:12px 14px;text-align:left;background:{accent}1f;font-weight:800;'
             f'color:#111;border-bottom:2px solid {accent}80;white-space:nowrap;">',
             styled,
         )
         styled = re.sub(
-            r"<td[^>]*>",
+            r"<td\b[^>]*>",
             '<td style="padding:12px 14px;text-align:left;border-bottom:1px solid #ececec;line-height:1.65;vertical-align:top;">',
             styled,
         )
@@ -1121,8 +1122,11 @@ def enhance_tables(html_body: str, accent: str) -> str:
         table_html = match.group(0)
         styled_table = _style_cells(table_html, 460)
         modal_table = _style_cells(table_html, 420)
+        
+        # 표를 감싸는 wrapper에 overflow:hidden을 주어 둥근 모서리(border-radius) 밖으로
+        # 헤더 배경색이 삐져나가는 현상 방지
         return (
-            f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin:1.2em 0 0.4em;'
+            f'<div style="overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;margin:1.2em 0 0.4em;'
             f'border-radius:8px;border:1px solid #eee;">{styled_table}</div>'
             f'<div style="text-align:right;margin:0 0 1.2em;">'
             f'<button type="button" onclick="document.getElementById(\'{uid}\').style.display=\'flex\';" '
