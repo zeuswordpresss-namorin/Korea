@@ -1,14 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (v5.1 - 안정성 보완판)
-
-v2에서 추가된 것: 쿠팡 마크업, SEO(Open Graph 등), GA4 대시보드
-v3에서 추가된 것: AI 스키마 마크업 자동 선택, 구글 애드센스 자동광고
-v4에서 추가된 것: 구글 블로거(Blogger) 동시 발행 (OAuth 리프레시 토큰)
-v5에서 추가된 것: 워드프레스(WordPress) 동시 발행
-v5.1에서 보완된 것 (현재 버전): 
-  - 이미지 생성 타임아웃 방지 및 자동 재시도(Retry) 로직 추가
-  - 외부 API 호출 안정성 강화
+GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
+- 구글 트렌드 자동 수집 + 자동 포스팅 파이프라인 통합
 """
 
 import base64
@@ -23,10 +16,22 @@ import sys
 import textwrap
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
+
+# =====================================================================
+# 구글 트렌드 관련 설정
+# =====================================================================
+TRENDS_RSS_URLS = [
+    "https://trends.google.com/trending/rss?geo=KR",
+    "https://trends.google.com/trends/trendingsearches/daily/rss?geo=KR",
+]
+TOP_N = 7
+REQUEST_TIMEOUT = 15
+QUEUE_FILE = "keywords_queue.json"
 
 # =====================================================================
 # 환경변수로 받는 설정값 (GitHub 저장소 Secrets / Variables에서 자동 주입됨)
@@ -34,26 +39,20 @@ from PIL import Image, ImageDraw, ImageFont
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 SITE_TITLE = os.environ.get("SITE_TITLE", "내 자동 블로그")
 SITE_TAGLINE = os.environ.get("SITE_TAGLINE", "매일 자동으로 업데이트되는 정보 큐레이션 블로그")
-SITE_URL = os.environ.get("SITE_URL", "").rstrip("/") 
-GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "") 
-GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "") 
-ADSENSE_CLIENT_ID = os.environ.get("ADSENSE_CLIENT_ID", "") 
-ADSENSE_SLOT_ID = os.environ.get("ADSENSE_SLOT_ID", "") 
+SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")  
+GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")  
+GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")  
+ADSENSE_CLIENT_ID = os.environ.get("ADSENSE_CLIENT_ID", "")  
+ADSENSE_SLOT_ID = os.environ.get("ADSENSE_SLOT_ID", "")  
 
 COUPANG_PARTNER_TAG = os.environ.get("COUPANG_PARTNER_TAG", "")
 COUPANG_ACCESS_KEY = os.environ.get("COUPANG_ACCESS_KEY", "")
 COUPANG_SECRET_KEY = os.environ.get("COUPANG_SECRET_KEY", "")
 
-# 구글 블로거 동시발행용
 BLOGGER_BLOG_ID = os.environ.get("BLOGGER_BLOG_ID", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
-
-# 워드프레스 동시발행용
-WP_SITE_URL = os.environ.get("WP_SITE_URL", "").rstrip("/")
-WP_USERNAME = os.environ.get("WP_USERNAME", "")
-WP_APP_PASSWORD = os.environ.get("WP_APP_PASSWORD", "")
 
 FONT_CANDIDATES = [
     "font.ttf",  
@@ -63,7 +62,6 @@ FONT_CANDIDATES = [
 DOCS_DIR = "docs"
 POSTS_DIR = os.path.join(DOCS_DIR, "posts")
 POSTS_JSON = os.path.join(DOCS_DIR, "posts.json")
-QUEUE_FILE = "keywords_queue.json"
 
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -121,7 +119,9 @@ SYSTEM_PROMPT = """당신은 한국어 SEO 블로그 콘텐츠 작가 겸 구조
 }
 html_body는 <h2>, <p>, <table>, <ul> 등을 사용한 HTML 조각이어야 한다."""
 
-
+# =====================================================================
+# 카테고리별 트렌디 테마
+# =====================================================================
 CATEGORY_THEMES = {
     "뷰티패션": {
         "gradient": [(255, 107, 157), (255, 154, 158), (250, 208, 196)],
@@ -208,7 +208,6 @@ CATEGORY_THEMES = {
 }
 DEFAULT_THEME = CATEGORY_THEMES["라이프스타일"]
 
-
 def get_theme(category: str) -> dict:
     return CATEGORY_THEMES.get(category, DEFAULT_THEME)
 
@@ -226,48 +225,86 @@ ILLUSTRATION_PROMPTS = {
 }
 ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black or monochromatic vector lines, no watermark, no text"
 
-SCENE_DESCRIPTIONS = {
-    "뷰티패션": "cosmetics, lipstick, and fashion clothing items laid out on a table",
-    "푸드맛집": "a cozy cafe table with food dishes and coffee",
-    "여행": "a travel scene with an airplane, suitcase, and palm tree",
-    "테크IT": "a laptop and computer technology workspace",
-    "재테크머니": "coins, banknotes, and a finance growth chart",
-    "헬스운동": "a fitness workout scene with dumbbells and healthy food",
-    "홈인테리어": "a cozy home interior with furniture and plants",
-    "대출보험": "a bank building with documents and a contract on a desk",
-    "정부지원금": "a government office with documents and a checklist",
-    "라이프스타일": "a coffee cup, an open book, and cozy lifestyle items",
-}
+# =====================================================================
+# 구글 트렌드 및 큐 관리 함수들
+# =====================================================================
 
-CONTENT_IMAGE_PROMPT_TEMPLATE = """Create a handcrafted torn-paper collage artwork of {scene}.
-
-Reconstruct the entire scene with hand-torn fragments of magazines, catalogs, and flyers. Use mostly medium and large irregular paper pieces with visible torn fibers, wrinkles, printed ink, folds, lifted edges, glue marks, overlapping layers, and soft contact shadows.
-
-Keep the subjects, expressions, actions, background, charcoal sketch,, lighting, and spatial relationships clear and recognizable. Arrange the paper pieces at varied angles so the result feels physically handmade, imperfect, and photographed under soft studio light.
-
-Avoid tiny mosaic pieces, uniform tiles, smooth digital cutouts, vector edges, painted textures, CGI, sepia, and excessive yellow tones.
-monochrome, black and white,high contrast, dramatic lighting,dusty grainy texture,charcoal dust,smudged shadows,blended edges,textured drawing paper,sketchbook texture"""
-
-CONTENT_IMAGE_SIZE = (360, 270)
-CONTENT_IMAGE_OPACITY = 0.10  
-
-# 공통 안전 이미지 요청 함수 (Timeout 및 Retry 적용)
-def _safe_get_image(url: str, timeout: int = 60, max_retries: int = 3):
-    for attempt in range(1, max_retries + 1):
+def fetch_top_trends(n: int = TOP_N) -> list[str]:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    last_error = None
+    for url in TRENDS_RSS_URLS:
         try:
-            resp = requests.get(url, timeout=timeout)
-            resp.raise_for_status()
-            return resp.content
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            print(f"  → [이미지 요청] 연결 지연/타임아웃 (시도 {attempt}/{max_retries}): {e}")
-            if attempt == max_retries:
-                return None
-            time.sleep(3 * attempt)
-        except Exception as e:
-            print(f"  → [이미지 요청] 오류 발생: {e}")
-            break
-    return None
+            response = requests.get(url, timeout=REQUEST_TIMEOUT, headers=headers)
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            titles = []
+            for item in root.iter("item"):
+                title_text = item.findtext("title")
+                if title_text and title_text.strip():
+                    titles.append(title_text.strip())
+            if titles:
+                return titles[:n]
+            last_error = f"{url} - 응답은 성공했으나 추출된 키워드가 없습니다."
+        except requests.RequestException as req_err:
+            last_error = f"{url} - 네트워크/HTTP 요청 실패: {req_err}"
+        except ET.ParseError as xml_err:
+            last_error = f"{url} - XML 파싱 실패: {xml_err}"
+        except Exception as gen_err:
+            last_error = f"{url} - 예기치 못한 오류: {gen_err}"
 
+    raise RuntimeError(f"모든 트렌드 URL에서 수집에 실패했습니다. (마지막 오류: {last_error})")
+
+def load_queue() -> dict:
+    if not os.path.exists(QUEUE_FILE):
+        return {"pending": [], "completed": []}
+    try:
+        with open(QUEUE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            data.setdefault("pending", [])
+            data.setdefault("completed", [])
+            return data
+    except (json.JSONDecodeError, IOError) as e:
+        return {"pending": [], "completed": []}
+
+def save_queue(queue: dict) -> None:
+    with open(QUEUE_FILE, "w", encoding="utf-8") as f:
+        json.dump(queue, f, ensure_ascii=False, indent=2)
+
+def fetch_and_update_trends_queue():
+    """구글 트렌드에서 인기 검색어를 가져와 큐에 업데이트합니다."""
+    print("=" * 60)
+    print("[구글 트렌드] 대한민국 일일 인기 검색어 수집 시작...")
+    try:
+        trends = fetch_top_trends(TOP_N)
+        print(f"[수집 완료] 상위 {len(trends)}개 키워드: {trends}")
+    except Exception as e:
+        print(f"[경고] 트렌드 수집 실패, 기존 큐를 계속 사용합니다: {e}")
+        print("=" * 60)
+        return
+
+    queue = load_queue()
+    existing_keywords = set(queue.get("pending", [])) | set(queue.get("completed", []))
+
+    new_keywords = [t for t in trends if t not in existing_keywords]
+    skipped_count = len(trends) - len(new_keywords)
+
+    queue["pending"].extend(new_keywords)
+    save_queue(queue)
+
+    print(f"[처리 완료] 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
+    print(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
+    print("=" * 60)
+
+
+# =====================================================================
+# HTML 및 렌더링 템플릿들
+# =====================================================================
 
 def build_decor_html(theme: dict, seed: str) -> str:
     rng = random.Random(seed)
@@ -287,12 +324,10 @@ def build_decor_html(theme: dict, seed: str) -> str:
         )
     return '<div class="decor-layer" aria-hidden="true">' + "".join(items) + "</div>"
 
-
 def _search_console_meta() -> str:
     if not GOOGLE_SITE_VERIFICATION:
         return ""
     return f'\n<meta name="google-site-verification" content="{GOOGLE_SITE_VERIFICATION}">'
-
 
 def _ga_snippet() -> str:
     if not GA_MEASUREMENT_ID:
@@ -306,9 +341,7 @@ def _ga_snippet() -> str:
   gtag('config', '{GA_MEASUREMENT_ID}');
 </script>"""
 
-
 ENABLE_AUTO_TRANSLATE = os.environ.get("ENABLE_AUTO_TRANSLATE", "true").strip().lower() != "false"
-
 
 def _translate_widget() -> str:
     if not ENABLE_AUTO_TRANSLATE:
@@ -329,7 +362,6 @@ function googleTranslateElementInit() {
 </script>
 <script src="//[translate.google.com/translate_a/element.js?cb=googleTranslateElementInit](https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit)"></script>"""
 
-
 def _adsense_snippet() -> str:
     if not ADSENSE_CLIENT_ID:
         return ""
@@ -338,11 +370,9 @@ def _adsense_snippet() -> str:
         f'?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
     )
 
-
 def build_faq_section_html(article: dict, accent: str = "#4a90d9") -> str:
     if not article.get("faq_items"):
         return ""
-
     cards = []
     for i, qa in enumerate(article["faq_items"], 1):
         question = qa.get("question", "")
@@ -356,19 +386,17 @@ def build_faq_section_html(article: dict, accent: str = "#4a90d9") -> str:
             f'font-weight:400;color:#555;line-height:1.75;">A. {answer}</p>'
             '</details>'
         )
-
     return (
         '<h2 style="margin-top:2em;">자주 묻는 질문(FAQ) <span style="font-size:0.6em;color:#999;font-weight:400;">'
         '(탭하면 펼쳐져요)</span></h2>'
         + "".join(cards)
     )
 
-
 def build_json_ld(article: dict, canonical_url: str, thumb_url: str, date: str, platform: str = "github") -> str:
     schema_type = article.get("schema_type", "Article")
     title = article["title"]
     meta_description = article.get("meta_description", "")
-    article_type = "BlogPosting" if platform in ("blogger", "wordpress") else "Article"
+    article_type = "BlogPosting" if platform == "blogger" else "Article"
 
     if schema_type == "FAQPage" and article.get("faq_items"):
         data = {
@@ -434,7 +462,6 @@ def build_json_ld(article: dict, canonical_url: str, thumb_url: str, date: str, 
 
     graph_data = {"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}
     return json.dumps(graph_data, ensure_ascii=False, indent=2)
-
 
 def build_blog_index_json_ld(posts: list) -> str:
     data = {
@@ -547,11 +574,9 @@ POST_TEMPLATE = """<!DOCTYPE html>
 
 ALL_THEME_FONTS = sorted({t["font"] for t in CATEGORY_THEMES.values()})
 
-
 def _google_fonts_url() -> str:
     families = "&family=".join(ALL_THEME_FONTS)
     return f"[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
-
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -720,35 +745,29 @@ Sitemap: {site_url}/sitemap.xml
 GEMINI_GRADIENT_COLORS = [(66, 133, 244), (156, 39, 176), (234, 67, 121)]
 THUMB_SIZE = (1280, 720)
 
+# =====================================================================
+# 기타 유틸리티
+# =====================================================================
 
 def slugify(text: str) -> str:
     text = re.sub(r"[^\w\s-]", "", text).strip()
     return re.sub(r"[\s]+", "-", text) or "post"
 
-
 def get_title_from_args_or_queue() -> str:
     if len(sys.argv) > 1 and sys.argv[1].strip():
         return sys.argv[1].strip()
 
-    if not os.path.exists(QUEUE_FILE):
-        raise RuntimeError(f"{QUEUE_FILE} 이 없습니다. 저장소 루트에 큐 파일을 만들어주세요.")
-
-    with open(QUEUE_FILE, "r", encoding="utf-8") as f:
-        queue = json.load(f)
-
+    queue = load_queue()
     pending = queue.get("pending", [])
     if not pending:
-        raise RuntimeError("대기 중인 키워드가 없습니다. keywords_queue.json의 pending 목록을 채워주세요.")
+        raise RuntimeError("대기 중인 키워드가 없습니다. 큐 파일을 확인해주세요.")
 
     title = pending.pop(0)
     queue.setdefault("completed", []).append(title)
     queue["pending"] = pending
-
-    with open(QUEUE_FILE, "w", encoding="utf-8") as f:
-        json.dump(queue, f, ensure_ascii=False, indent=2)
+    save_queue(queue)
 
     return title
-
 
 def generate_article(title: str) -> dict:
     if not GEMINI_API_KEY:
@@ -774,7 +793,6 @@ def generate_article(title: str) -> dict:
             data = resp.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
             cleaned = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            
             decoder = json.JSONDecoder()
             article, _ = decoder.raw_decode(cleaned)
             article["keyword"] = title
@@ -795,14 +813,12 @@ def generate_article(title: str) -> dict:
 
     raise RuntimeError(f"3번 시도했지만 계속 실패했습니다: {last_error}")
 
-
 def _load_font(size):
     for path in FONT_CANDIDATES:
         if os.path.exists(path):
             return ImageFont.truetype(path, size)
-    print("[안내] 한글 폰트를 찾지 못해 기본 폰트로 대체합니다.")
+    print("[안내] 한글 폰트를 찾지 못해 기본 폰트로 대체합니다 (한글이 깨져 보일 수 있음).")
     return ImageFont.load_default()
-
 
 def _make_gradient_background(size, colors):
     w, h = size
@@ -811,17 +827,14 @@ def _make_gradient_background(size, colors):
     mask = Image.new("L", size)
     mask.putdata([int(((x / w + y / h) / 2) * 255) for y in range(h) for x in range(w)])
     blended = Image.composite(top, base, mask)
-
     mid = Image.new("RGB", size, colors[1])
     mid_mask = Image.new("L", size)
     mid_mask.putdata([int(80 * (1 - abs((x / w + y / h) / 2 - 0.5) * 2)) for y in range(h) for x in range(w)])
     return Image.composite(mid, blended, mid_mask)
 
-
 def _hex_to_rgb(hex_color: str):
     hex_color = hex_color.lstrip("#")
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
-
 
 def _fetch_illustration(category: str, size: tuple, seed: int):
     prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"]) + ILLUSTRATION_SUFFIX
@@ -829,29 +842,24 @@ def _fetch_illustration(category: str, size: tuple, seed: int):
         f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
         f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     )
-    content = _safe_get_image(url, timeout=60, max_retries=3)
-    if not content:
-        print("  → [일러스트] 생성 실패, 그라데이션만 사용합니다.")
-        return None
     try:
-        img = Image.open(io.BytesIO(content)).convert("RGBA")
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
         if img.size != size:
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [일러스트] 이미지 변환 실패: {e}")
+        print(f"  → [일러스트] 생성 실패, 그라데이션만 사용: {e}")
         return None
-
 
 def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> list:
     words = text.split(" ")
     lines = []
     current = ""
-
     def width_of(s):
         bbox = draw.textbbox((0, 0), s, font=font)
         return bbox[2] - bbox[0]
-
     for word in words:
         candidate = f"{current} {word}".strip()
         if width_of(candidate) <= max_width or not current:
@@ -874,15 +882,12 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> list:
         lines.append(current)
     return lines
 
-
 def generate_thumbnail(title: str, output_path: str, theme: dict, category: str = "라이프스타일") -> None:
     img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
-
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
     illustration = _fetch_illustration(category, THUMB_SIZE, seed)
     if illustration is not None:
         img = Image.blend(img, illustration, alpha=0.10)
-
     draw = ImageDraw.Draw(img)
     accent_rgb = _hex_to_rgb(theme["accent"])
 
@@ -905,17 +910,14 @@ def generate_thumbnail(title: str, output_path: str, theme: dict, category: str 
 
     max_text_width = 620
     max_text_height = int(THUMB_SIZE[1] * 0.65)
-
     font_size = 64
     lines, font = [], None
     while font_size >= 24:
         font = _load_font(font_size)
         lines = _wrap_by_pixel_width(draw, title, font, max_text_width)[:4]
-
         heights = [draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in lines]
         total_h = sum(heights) + (len(lines) - 1) * 16
         full_wrap_count = len(_wrap_by_pixel_width(draw, title, font, max_text_width))
-
         if total_h <= max_text_height and full_wrap_count <= 4:
             break
         font_size -= 4
@@ -927,7 +929,6 @@ def generate_thumbnail(title: str, output_path: str, theme: dict, category: str 
         lines[-1] = last.rstrip(".,!? ") + "..."
 
     y = (THUMB_SIZE[1] - total_h) / 2 + 50
-
     for line, lh in zip(lines, heights):
         bbox = draw.textbbox((0, 0), line, font=font)
         x = (THUMB_SIZE[0] - (bbox[2] - bbox[0])) / 2
@@ -937,68 +938,52 @@ def generate_thumbnail(title: str, output_path: str, theme: dict, category: str 
 
     img.convert("RGB").save(output_path, format="WEBP", quality=82, method=6)
 
-
 BRAND_GRADIENT = [(15, 23, 42), (30, 41, 59), (51, 65, 85)]
 BRAND_ACCENT = (250, 204, 21) 
-
 LOGO_SIZE = (512, 512)
 BANNER_SIZE = (1600, 420)
-
 
 def generate_site_logo(output_path: str) -> None:
     img = _make_gradient_background(LOGO_SIZE, BRAND_GRADIENT).convert("RGBA")
     draw = ImageDraw.Draw(img)
     w, h = LOGO_SIZE
-
     margin = 36
     draw.ellipse([margin, margin, w - margin, h - margin], outline=BRAND_ACCENT + (255,), width=10)
-
     initial = (SITE_TITLE.strip()[:1] or "B")
     font = _load_font(220)
     bbox = draw.textbbox((0, 0), initial, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     draw.text(((w - tw) / 2 - bbox[0], (h - th) / 2 - bbox[1]), initial, font=font, fill=(255, 255, 255, 255))
-
     img.convert("RGB").save(output_path, format="WEBP", quality=90)
-
 
 def generate_site_banner(output_path: str) -> None:
     img = _make_gradient_background(BANNER_SIZE, BRAND_GRADIENT).convert("RGBA")
     draw = ImageDraw.Draw(img)
     w, h = BANNER_SIZE
-
     draw.rectangle([(0, 0), (w, 8)], fill=BRAND_ACCENT + (255,))
-
     title_font = _load_font(88)
     tagline_font = _load_font(32)
-
     tb = draw.textbbox((0, 0), SITE_TITLE, font=title_font)
     tw = tb[2] - tb[0]
     ty = h / 2 - 60
     draw.text(((w - tw) / 2, ty), SITE_TITLE, font=title_font, fill=(255, 255, 255, 255))
-
     lb = draw.textbbox((0, 0), SITE_TAGLINE, font=tagline_font)
     lw = lb[2] - lb[0]
     draw.text(((w - lw) / 2, ty + 110), SITE_TAGLINE, font=tagline_font, fill=BRAND_ACCENT + (255,))
-
     img.convert("RGB").save(output_path, format="WEBP", quality=88)
-
 
 def ensure_brand_assets() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     logo_path = os.path.join(DOCS_DIR, "logo.webp")
     generate_site_logo(logo_path)
     generate_site_banner(os.path.join(DOCS_DIR, "banner.webp"))
-
     favicon_path = os.path.join(DOCS_DIR, "favicon.png")
     with Image.open(logo_path) as im:
         im.convert("RGB").resize((64, 64)).save(favicon_path, format="PNG")
 
-
 def _coupang_deeplink(search_url: str):
     if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY):
         return None
-
     domain = "https://api-gateway.coupang.com"
     path = "/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink"
     try:
@@ -1022,12 +1007,10 @@ def _coupang_deeplink(search_url: str):
         print(f"  → [쿠팡 딥링크] 발급 실패, 일반 링크로 대체: {e}")
         return None
 
-
 def add_ymyl_disclaimer(article: dict) -> dict:
     theme = get_theme(article.get("category", "라이프스타일"))
     if not theme.get("ymyl"):
         return article
-
     disclaimer = (
         '<div style="background:#fff8e1;border:1px solid #ffe082;border-radius:10px;'
         'padding:14px 18px;margin:24px 0;font-size:0.92em;color:#5d4037;">'
@@ -1039,19 +1022,15 @@ def add_ymyl_disclaimer(article: dict) -> dict:
     article["html_body"] += disclaimer
     return article
 
-
 def _relevance_score(article: dict, candidate: dict) -> float:
     score = 0.0
     if candidate.get("category") == article.get("category", "라이프스타일"):
         score += 3.0
-
     current_words = set(re.findall(r"[\w가-힣]+", (article.get("title", "") + " " + article.get("keyword", ""))))
     candidate_words = set(re.findall(r"[\w가-힣]+", candidate.get("title", "")))
     overlap = len(current_words & candidate_words)
     score += overlap * 1.5
-
     return score
-
 
 def add_internal_link(article: dict) -> dict:
     if not os.path.exists(POSTS_JSON):
@@ -1060,24 +1039,19 @@ def add_internal_link(article: dict) -> dict:
         posts = json.load(f)
     if not posts:
         return article
-
     scored = [(p, _relevance_score(article, p)) for p in posts]
     scored.sort(key=lambda x: x[1], reverse=True)
-
     top_pool = [p for p, s in scored[:5] if s > 0] or [p for p, s in scored[:5]]
     if not top_pool:
         return article
-
     weights = [max(s, 0.5) for p, s in scored[:len(top_pool)]]
     pick = random.choices(top_pool, weights=weights, k=1)[0]
-
     link_html = (
         f'<p style="margin-top:2em;padding-top:1em;border-top:1px dashed #ddd;">'
         f'🔗 이 글도 함께 보면 좋아요: <a href="../{pick["file"]}">{pick["title"]}</a></p>'
     )
     article["html_body"] += link_html
     return article
-
 
 def _manual_ad_unit() -> str:
     if not (ADSENSE_CLIENT_ID and ADSENSE_SLOT_ID):
@@ -1090,12 +1064,10 @@ def _manual_ad_unit() -> str:
         '</div>'
     )
 
-
 def insert_manual_ads(article: dict) -> dict:
     ad_html = _manual_ad_unit()
     if not ad_html:
         return article
-
     idx = article["html_body"].find("<h2")
     if idx != -1:
         article["html_body"] = article["html_body"][:idx] + ad_html + article["html_body"][idx:]
@@ -1103,34 +1075,26 @@ def insert_manual_ads(article: dict) -> dict:
         article["html_body"] += ad_html
     return article
 
-
-def _fetch_content_photo(category: str, seed: int, size=CONTENT_IMAGE_SIZE):
-    scene = SCENE_DESCRIPTIONS.get(category, SCENE_DESCRIPTIONS["라이프스타일"])
-    prompt = CONTENT_IMAGE_PROMPT_TEMPLATE.format(scene=scene)
+def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
+    base_prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"])
+    prompt = base_prompt.replace("flat vector illustration of", "photo illustration of") + ", high quality, natural lighting"
     url = (
         f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
         f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     )
-    content = _safe_get_image(url, timeout=60, max_retries=3)
-    if not content:
-        print("  → [본문 이미지] 생성 실패, 삽입 건너뜀")
-        return None
     try:
-        raw = Image.open(io.BytesIO(content)).convert("RGB")
-        if raw.size != size:
-            raw = raw.resize(size)
-
-        white_bg = Image.new("RGB", size, (255, 255, 255))
-        faded = Image.blend(white_bg, raw, alpha=CONTENT_IMAGE_OPACITY)
-        return faded
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        if img.size != size:
+            img = img.resize(size)
+        return img
     except Exception as e:
-        print(f"  → [본문 이미지] 변환 실패: {e}")
+        print(f"  → [본문 이미지] 생성 실패, 삽입 건너뜀: {e}")
         return None
-
 
 def enhance_tables(html_body: str, accent: str) -> str:
     counter = {"n": 0}
-
     def _style_cells(raw_table: str, min_width: int) -> str:
         styled = re.sub(
             r"<table(?![^>]*style=)",
@@ -1177,24 +1141,20 @@ def enhance_tables(html_body: str, accent: str) -> str:
 
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
-
 def insert_content_image(article: dict, slug: str) -> dict:
     category = article.get("category", "라이프스타일")
     seed = int(hashlib.md5((article["title"] + "-inline").encode("utf-8")).hexdigest(), 16) % 100000
     photo = _fetch_content_photo(category, seed)
     if photo is None:
         return article
-
     filename = f"{slug}-inline.webp"
     path = os.path.join(DOCS_DIR, "thumbs", filename)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     photo.save(path, format="WEBP", quality=82, method=6)
 
     img_html = (
-        f'<div style="text-align:center;margin:20px 0;">'
         f'<img src="../thumbs/{filename}" alt="{article["title"]} 관련 이미지" loading="lazy" '
-        'style="max-width:360px;width:100%;border-radius:10px;">'
-        f'</div>'
+        'style="width:100%;border-radius:10px;margin:20px 0;">'
     )
     idx = article["html_body"].find("</h2>")
     if idx != -1:
@@ -1203,7 +1163,6 @@ def insert_content_image(article: dict, slug: str) -> dict:
     else:
         article["html_body"] = img_html + article["html_body"]
     return article
-
 
 def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
     prompt = (
@@ -1214,24 +1173,21 @@ def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
         f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
         f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     )
-    content = _safe_get_image(url, timeout=30, max_retries=2)
-    if not content:
-        return None
     try:
-        img = Image.open(io.BytesIO(content)).convert("RGB")
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
         if img.size != size:
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [상품 아이콘] 변환 실패: {e}")
+        print(f"  → [상품 아이콘] 생성 실패, 아이콘 없이 표시: {e}")
         return None
-
 
 def build_product_list_html(article: dict, slug: str, accent: str) -> str:
     products = article.get("product_list") or []
     if not products:
         return ""
-
     os.makedirs(os.path.join(DOCS_DIR, "thumbs"), exist_ok=True)
     cards = []
     for i, item in enumerate(products[:6], 1):
@@ -1239,7 +1195,6 @@ def build_product_list_html(article: dict, slug: str, accent: str) -> str:
         desc = item.get("description", "")
         seed = int(hashlib.md5(f"{slug}-product-{i}".encode("utf-8")).hexdigest(), 16) % 100000
         icon = _fetch_product_icon(name, seed)
-
         if icon is not None:
             icon_filename = f"{slug}-product{i}.webp"
             icon.save(os.path.join(DOCS_DIR, "thumbs", icon_filename), format="WEBP", quality=80)
@@ -1253,24 +1208,19 @@ def build_product_list_html(article: dict, slug: str, accent: str) -> str:
             f'<div><p style="margin:0 0 3px;font-weight:700;color:#111;">{name}</p>'
             f'<p style="margin:0;color:#555;font-size:0.92em;line-height:1.5;">{desc}</p></div></div>'
         )
-
     return '<h2 style="margin-top:2em;">한눈에 보는 상품 목록</h2>' + "".join(cards)
-
 
 def add_coupang_markup(article: dict) -> dict:
     product_keyword = (article.get("product_keyword") or "").strip()
     if not product_keyword:
         print("  → 마크업 링크: 이 주제는 상품과 관련이 없어 추천 섹션을 생략합니다.")
         return article
-
     search_url = f"https://www.coupang.com/np/search?q={urllib.parse.quote(product_keyword)}"
     if COUPANG_PARTNER_TAG:
         search_url += f"&lptag={COUPANG_PARTNER_TAG}"
-
     link = _coupang_deeplink(search_url) or search_url
     link_type = "쿠팡파트너스 딥링크" if link != search_url else "일반 검색 링크"
     print(f"  → 마크업 링크 방식: {link_type} (검색어: {product_keyword})")
-
     extra_html = (
         f'<h2>관련 추천 상품</h2>'
         f'<p><a href="{link}" target="_blank" rel="nofollow sponsored">{product_keyword} 관련 인기 상품 보러가기</a></p>'
@@ -1280,10 +1230,8 @@ def add_coupang_markup(article: dict) -> dict:
     article["html_body"] += extra_html
     return article
 
-
 def _font_family_name(font_param: str) -> str:
     return font_param.split(":")[0].replace("+", " ")
-
 
 def _build_post_nav_html() -> str:
     prev_post = None
@@ -1291,8 +1239,7 @@ def _build_post_nav_html() -> str:
         with open(POSTS_JSON, "r", encoding="utf-8") as f:
             posts = json.load(f)
         if posts:
-            prev_post = posts[0] 
-
+            prev_post = posts[0]
     prev_html = (
         f'<a href="../{prev_post["file"]}"><img src="../{prev_post["thumb"]}" alt="이전 게시물">'
         f'<span>← 이전 게시물: {prev_post["title"]}</span></a>'
@@ -1300,9 +1247,7 @@ def _build_post_nav_html() -> str:
         '<a href="../index.html"><span class="nav-icon">🏠</span><span>목록으로</span></a>'
     )
     latest_html = '<a href="../index.html"><span class="nav-icon">📰</span><span>최신 게시물 보기</span></a>'
-
     return f'<div class="post-nav">{prev_html}{latest_html}</div>'
-
 
 def _build_related_html(exclude_slug: str) -> str:
     if not os.path.exists(POSTS_JSON):
@@ -1312,7 +1257,6 @@ def _build_related_html(exclude_slug: str) -> str:
     posts = [p for p in posts if p.get("file") != exclude_slug][:3]
     if not posts:
         return ""
-
     cards = "\n".join(
         f'<a class="related-card" href="../{p["file"]}"><img src="../{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
         f'<span>{p["title"]}</span></a>'
@@ -1320,34 +1264,25 @@ def _build_related_html(exclude_slug: str) -> str:
     )
     return f'<div class="related"><h3>📌 함께 보면 좋은 글</h3><div class="related-grid">{cards}</div></div>'
 
-
 def save_post(article: dict):
     os.makedirs(POSTS_DIR, exist_ok=True)
     os.makedirs(os.path.join(DOCS_DIR, "thumbs"), exist_ok=True)
-
     category = article.get("category", "라이프스타일")
     theme = get_theme(category)
-
     slug = slugify(article["keyword"])
     today = datetime.now().strftime("%Y-%m-%d")
     thumb_filename = f"{slug}-{today}.webp"
     post_filename = f"{slug}-{today}.html"
-
     generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category)
-
     cleaned_body = article["html_body"]
     cleaned_body = re.sub(r"<h[23]>자주\s*묻는\s*질문.*?</table>", "", cleaned_body, flags=re.DOTALL | re.IGNORECASE)
     article["html_body"] = cleaned_body
-
     article["html_body"] = enhance_tables(article["html_body"], theme["accent"])
     article = insert_content_image(article, slug)
-
     article["html_body"] += build_faq_section_html(article, theme["accent"])
     article["html_body"] += build_product_list_html(article, slug, theme["accent"])
-
     post_url = f"{SITE_URL}/posts/{post_filename}" if SITE_URL else f"posts/{post_filename}"
     thumb_url = f"{SITE_URL}/thumbs/{thumb_filename}" if SITE_URL else f"../thumbs/{thumb_filename}"
-
     title = article["title"]
     meta_description = article.get("meta_description", "")
     json_ld = build_json_ld(article, post_url, thumb_url, today)
@@ -1379,7 +1314,6 @@ def save_post(article: dict):
     )
     with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
         f.write(html)
-
     post_meta = {
         "title": title,
         "file": f"posts/{post_filename}",
@@ -1392,18 +1326,15 @@ def save_post(article: dict):
     local_thumb_path = os.path.join(DOCS_DIR, "thumbs", thumb_filename)
     return post_meta, json_ld, thumb_url, local_thumb_path, post_url
 
-
 def update_index(new_post: dict) -> list:
     os.makedirs(DOCS_DIR, exist_ok=True)
     posts = []
     if os.path.exists(POSTS_JSON):
         with open(POSTS_JSON, "r", encoding="utf-8") as f:
             posts = json.load(f)
-
     posts.insert(0, new_post)
     with open(POSTS_JSON, "w", encoding="utf-8") as f:
         json.dump(posts, f, ensure_ascii=False, indent=2)
-
     hero_posts, mid_posts, bottom_posts = posts[:1], posts[1:3], posts[3:]
 
     hero_html = ""
@@ -1417,7 +1348,6 @@ def update_index(new_post: dict) -> list:
             f'<div class="hero-title">{p["title"]}</div>'
             f'<div class="date">{p["date"]}</div></div></a>'
         )
-
     mid_html = ""
     if mid_posts:
         cards = "\n".join(
@@ -1429,7 +1359,6 @@ def update_index(new_post: dict) -> list:
             for p in mid_posts
         )
         mid_html = f'<div class="tier-label">📖 다음 이야기</div><div class="mid-grid">{cards}</div>'
-
     bottom_html = ""
     if bottom_posts:
         cards = "\n".join(
@@ -1459,9 +1388,7 @@ def update_index(new_post: dict) -> list:
             footer_html=build_footer_html(),
             translate_widget=_translate_widget(),
         ))
-
     return posts
-
 
 STATIC_PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -1485,7 +1412,6 @@ STATIC_PAGE_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-
 def build_footer_html() -> str:
     return (
         '<div class="site-footer">'
@@ -1496,7 +1422,6 @@ def build_footer_html() -> str:
         '</div>'
     )
 
-
 def generate_static_pages() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     common_kwargs = dict(
@@ -1505,7 +1430,6 @@ def generate_static_pages() -> None:
         ga_snippet=_ga_snippet(),
         adsense_snippet=_adsense_snippet(),
     )
-
     pages = {
         "about.html": (
             "블로그 소개",
@@ -1534,14 +1458,13 @@ def generate_static_pages() -> None:
             "<p><b>이메일:</b> 이 페이지의 문구를 직접 열어 본인의 연락처로 수정해주세요.</p>",
         ),
     }
-
     for filename, (page_title, page_body) in pages.items():
         path = os.path.join(DOCS_DIR, filename)
         if os.path.exists(path):
-            continue  
+            continue
         with open(path, "w", encoding="utf-8") as f:
             f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
-
+        print(f"  → [설정] {filename} 생성됨 (내용은 실제 정보로 직접 수정 권장)")
 
 def update_dashboard(posts: list) -> None:
     rows = "\n".join(
@@ -1551,27 +1474,18 @@ def update_dashboard(posts: list) -> None:
     with open(os.path.join(DOCS_DIR, "dashboard.html"), "w", encoding="utf-8") as f:
         f.write(DASHBOARD_TEMPLATE.format(site_title=SITE_TITLE, post_count=len(posts), rows=rows))
 
-
 def update_seo_files(posts: list) -> None:
     if not SITE_URL:
         print("  → [SEO] SITE_URL이 설정되지 않아 sitemap.xml/robots.txt 생성을 건너뜁니다.")
         return
-
     url_entries = "\n".join(f"<url><loc>{SITE_URL}/{p['file']}</loc></url>" for p in posts)
     with open(os.path.join(DOCS_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
         f.write(SITEMAP_TEMPLATE.format(site_url=SITE_URL, url_entries=url_entries))
-
     with open(os.path.join(DOCS_DIR, "robots.txt"), "w", encoding="utf-8") as f:
         f.write(ROBOTS_TXT.format(site_url=SITE_URL))
 
-
-# ---------------------------------------------------------------------
-# 구글 블로거(Blogger) 동시 발행
-# ---------------------------------------------------------------------
-
 def _blogger_configured() -> bool:
     return bool(BLOGGER_BLOG_ID and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN)
-
 
 def _get_blogger_access_token() -> str:
     resp = requests.post(
@@ -1587,7 +1501,6 @@ def _get_blogger_access_token() -> str:
     resp.raise_for_status()
     return resp.json()["access_token"]
 
-
 def _make_blogger_safe_html(html_body: str) -> str:
     if SITE_URL:
         html_body = html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/')
@@ -1598,26 +1511,22 @@ def _make_blogger_safe_html(html_body: str) -> str:
         html_body = re.sub(r'<img src="\.\./thumbs/[^"]*"[^>]*>', "", html_body)
     return html_body
 
-
 def publish_to_blogger(article: dict, canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
     if not _blogger_configured():
-        print("  → [블로거] 관련 Secrets가 없어 건너뜁니다.")
+        print("  → [블로거] 관련 Secrets가 없어 건너뜁니다 (GitHub Pages만 발행).")
         return
-
     try:
         access_token = _get_blogger_access_token()
         theme = get_theme(article.get("category", "라이프스타일"))
         today = datetime.now().strftime("%Y-%m-%d")
         blogger_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="blogger")
-
         try:
             with open(local_thumb_path, "rb") as f:
                 img_b64 = base64.b64encode(f.read()).decode("ascii")
             img_src = f"data:image/webp;base64,{img_b64}"
         except Exception as e:
-            print(f"  → [블로거] 썸네일 인코딩 실패, 외부 링크로 대체: {e}")
+            print(f"  → [블로거] 썸네일 base64 인코딩 실패, 외부 링크로 대체: {e}")
             img_src = thumb_url
-
         content_html = (
             f'{_translate_widget()}'
             f'<img src="{img_src}" style="max-width:100%;border-radius:8px;" alt="{article["title"]}">'
@@ -1626,89 +1535,32 @@ def publish_to_blogger(article: dict, canonical_url: str, thumb_url: str, local_
             f'{_make_blogger_safe_html(article["html_body"])}'
             f'<script type="application/ld+json">{blogger_json_ld}</script>'
         )
-
         url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/"
         payload = {"title": article["title"], "content": content_html}
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-
         resp = requests.post(url, headers=headers, json=payload, timeout=30)
         resp.raise_for_status()
         result = resp.json()
         print(f"  → [블로거] 발행 완료: {result.get('url', '(URL 확인 불가)')}")
     except Exception as e:
-        print(f"  → [블로거] 발행 실패: {e}")
-
-
-# ---------------------------------------------------------------------
-# 워드프레스(WordPress) 동시 발행
-# ---------------------------------------------------------------------
-
-def _wordpress_configured() -> bool:
-    return bool(WP_SITE_URL and WP_USERNAME and WP_APP_PASSWORD)
-
-
-def publish_to_wordpress(article: dict, canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
-    if not _wordpress_configured():
-        print("  → [워드프레스] 관련 Secrets가 없어 건너뜁니다.")
-        return
-
-    try:
-        auth = (WP_USERNAME, WP_APP_PASSWORD)
-        headers = {"User-Agent": "AutoBlogBot/1.0"}
-        
-        # 1. 썸네일 이미지 미디어 업로드
-        media_url = f"{WP_SITE_URL}/wp-json/wp/v2/media"
-        filename = os.path.basename(local_thumb_path)
-        
-        with open(local_thumb_path, "rb") as f:
-            media_data = f.read()
-            
-        media_headers = headers.copy()
-        media_headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-        media_headers["Content-Type"] = "image/webp"
-
-        media_resp = requests.post(media_url, headers=media_headers, data=media_data, auth=auth, timeout=30)
-        media_resp.raise_for_status()
-        media_id = media_resp.json().get("id")
-
-        # 2. 포스트 생성 및 발행
-        posts_url = f"{WP_SITE_URL}/wp-json/wp/v2/posts"
-        theme = get_theme(article.get("category", "라이프스타일"))
-        today = datetime.now().strftime("%Y-%m-%d")
-        wp_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="wordpress")
-
-        content_html = (
-            f'{_translate_widget()}'
-            f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
-            f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
-            f'{_make_blogger_safe_html(article["html_body"])}'
-            f'<script type="application/ld+json">{wp_json_ld}</script>'
-        )
-
-        post_data = {
-            "title": article["title"],
-            "content": content_html,
-            "status": "publish",
-            "featured_media": media_id 
-        }
-
-        post_resp = requests.post(posts_url, headers=headers, json=post_data, auth=auth, timeout=30)
-        post_resp.raise_for_status()
-        result = post_resp.json()
-        print(f"  → [워드프레스] 발행 완료: {result.get('link', '(URL 확인 불가)')}")
-
-    except Exception as e:
-        print(f"  → [워드프레스] 발행 실패: {e}")
-
+        print(f"  → [블로거] 발행 실패 (GitHub Pages 발행은 정상 진행됨): {e}")
 
 def ensure_nojekyll() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     nojekyll_path = os.path.join(DOCS_DIR, ".nojekyll")
     if not os.path.exists(nojekyll_path):
         open(nojekyll_path, "w").close()
-
+        print("  → [설정] .nojekyll 파일 생성 (Jekyll 가공 비활성화)")
 
 def run():
+    # 명령행 인자에 'refresh'가 포함되어 있으면 트렌드 키워드 수집만 수행
+    if len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh":
+        fetch_and_update_trends_queue()
+        return
+
+    # 일반 실행 (블로그 포스팅 파이프라인)
+    fetch_and_update_trends_queue()
+
     title = get_title_from_args_or_queue()
     print(f"[처리 시작] 제목: {title}")
 
@@ -1723,16 +1575,16 @@ def run():
     article = insert_manual_ads(article)
     article = add_coupang_markup(article)
     article = add_ymyl_disclaimer(article)
+    
     post_meta, json_ld, thumb_url, local_thumb_path, post_url = save_post(article)
     posts = update_index(post_meta)
+    
     update_dashboard(posts)
     update_seo_files(posts)
-    
-    # 동시 발행 실행
     publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
-    publish_to_wordpress(article, post_url, thumb_url, local_thumb_path)
 
     print(f"  → 저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
+    print(f"  → 대시보드/사이트맵 갱신 완료")
 
 
 if __name__ == "__main__":
