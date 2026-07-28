@@ -1090,7 +1090,7 @@ def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [본문 이미지] 생성 실패, 삽입 건너뜀: {e}")
+        print(f"  → [본문 이미지] 생성 실패, 삽입 건너뜁니다: {e}")
         return None
 
 def enhance_tables(html_body: str, accent: str) -> str:
