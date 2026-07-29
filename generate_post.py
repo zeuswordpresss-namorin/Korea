@@ -3,6 +3,7 @@
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
 - 구글 트렌드 자동 수집 + 자동 포스팅 파이프라인 통합
 - UI 개선(표 좌측상단 오류 수정) 및 서론 호기심 유발 프롬프트 적용
+- Pollinations AI 기반 다채로운 썸네일 및 일러스트/아이콘 자동 생성 적용
 """
 
 import base64
@@ -1097,7 +1098,6 @@ def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
 def enhance_tables(html_body: str, accent: str) -> str:
     counter = {"n": 0}
     def _style_cells(raw_table: str, min_width: int) -> str:
-        # 태그 내의 불필요한 공백/속성을 무시하고 안정적으로 변경하기 위해 정규식 패턴 수정
         styled = re.sub(
             r"<table\b[^>]*>",
             f'<table style="width:100%;min-width:{min_width}px;border-collapse:collapse;overflow:hidden;"',
@@ -1123,8 +1123,6 @@ def enhance_tables(html_body: str, accent: str) -> str:
         styled_table = _style_cells(table_html, 460)
         modal_table = _style_cells(table_html, 420)
         
-        # 표를 감싸는 wrapper에 overflow:hidden을 주어 둥근 모서리(border-radius) 밖으로
-        # 헤더 배경색이 삐져나가는 현상 방지
         return (
             f'<div style="overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;margin:1.2em 0 0.4em;'
             f'border-radius:8px;border:1px solid #eee;">{styled_table}</div>'
@@ -1558,12 +1556,10 @@ def ensure_nojekyll() -> None:
         print("  → [설정] .nojekyll 파일 생성 (Jekyll 가공 비활성화)")
 
 def run():
-    # 명령행 인자에 'refresh'가 포함되어 있으면 트렌드 키워드 수집만 수행
     if len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh":
         fetch_and_update_trends_queue()
         return
 
-    # 일반 실행 (블로그 포스팅 파이프라인)
     fetch_and_update_trends_queue()
 
     title = get_title_from_args_or_queue()
@@ -1598,4 +1594,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[오류] {e}")
         sys.exit(1)
-
