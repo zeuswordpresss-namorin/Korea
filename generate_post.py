@@ -1256,7 +1256,7 @@ def _build_related_html(exclude_slug: str) -> str:
         return ""
     with open(POSTS_JSON, "r", encoding="utf-8") as f:
         posts = json.load(f)
-    posts = [p for p in posts if p.get("file"] != exclude_slug][:3]
+    posts = [p for p in posts if p.get("file") != exclude_slug][:3]
     if not posts:
         return ""
     cards = "\n".join(
