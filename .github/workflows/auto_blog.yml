@@ -1,4 +1,4 @@
-Name: 자동 블로그 파이프라인 통합
+name: 자동 블로그 파이프라인 통합
 
 on:
   workflow_dispatch:
