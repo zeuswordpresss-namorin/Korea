@@ -3,6 +3,7 @@
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
 - 구글 트렌드 자동 수집 + 자동 포스팅 파이프라인 통합
 - UI 개선(표 좌측상단 오류 수정) 및 서론 호기심 유발 프롬프트 적용
+- [추가] 로깅 시스템 도입 및 타입 힌트 강화
 """
 
 import base64
@@ -10,6 +11,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import random
 import re
@@ -19,9 +21,20 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from typing import Optional, List, Dict, Any, Tuple
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
+
+# =====================================================================
+# 로깅 설정 (표준 출력으로 로그 출력)
+# =====================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 
 # =====================================================================
 # 구글 트렌드 관련 설정
@@ -35,7 +48,7 @@ REQUEST_TIMEOUT = 15
 QUEUE_FILE = "keywords_queue.json"
 
 # =====================================================================
-# 환경변수로 받는 설정값 (GitHub 저장소 Secrets / Variables에서 자동 주입됨)
+# 환경변수로 받는 설정값
 # =====================================================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 SITE_TITLE = os.environ.get("SITE_TITLE", "내 자동 블로그")
@@ -209,7 +222,7 @@ CATEGORY_THEMES = {
 }
 DEFAULT_THEME = CATEGORY_THEMES["라이프스타일"]
 
-def get_theme(category: str) -> dict:
+def get_theme(category: str) -> Dict[str, Any]:
     return CATEGORY_THEMES.get(category, DEFAULT_THEME)
 
 ILLUSTRATION_PROMPTS = {
@@ -230,7 +243,7 @@ ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black
 # 구글 트렌드 및 큐 관리 함수들
 # =====================================================================
 
-def fetch_top_trends(n: int = TOP_N) -> list[str]:
+def fetch_top_trends(n: int = TOP_N) -> List[str]:
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -261,7 +274,7 @@ def fetch_top_trends(n: int = TOP_N) -> list[str]:
 
     raise RuntimeError(f"모든 트렌드 URL에서 수집에 실패했습니다. (마지막 오류: {last_error})")
 
-def load_queue() -> dict:
+def load_queue() -> Dict[str, List[str]]:
     if not os.path.exists(QUEUE_FILE):
         return {"pending": [], "completed": []}
     try:
@@ -271,22 +284,23 @@ def load_queue() -> dict:
             data.setdefault("completed", [])
             return data
     except (json.JSONDecodeError, IOError) as e:
+        logger.warning(f"큐 파일을 불러오는 데 실패했습니다: {e}")
         return {"pending": [], "completed": []}
 
-def save_queue(queue: dict) -> None:
+def save_queue(queue: Dict[str, List[str]]) -> None:
     with open(QUEUE_FILE, "w", encoding="utf-8") as f:
         json.dump(queue, f, ensure_ascii=False, indent=2)
 
-def fetch_and_update_trends_queue():
+def fetch_and_update_trends_queue() -> None:
     """구글 트렌드에서 인기 검색어를 가져와 큐에 업데이트합니다."""
-    print("=" * 60)
-    print("[구글 트렌드] 대한민국 일일 인기 검색어 수집 시작...")
+    logger.info("=" * 60)
+    logger.info("[구글 트렌드] 대한민국 일일 인기 검색어 수집 시작...")
     try:
         trends = fetch_top_trends(TOP_N)
-        print(f"[수집 완료] 상위 {len(trends)}개 키워드: {trends}")
+        logger.info(f"[수집 완료] 상위 {len(trends)}개 키워드: {trends}")
     except Exception as e:
-        print(f"[경고] 트렌드 수집 실패, 기존 큐를 계속 사용합니다: {e}")
-        print("=" * 60)
+        logger.warning(f"트렌드 수집 실패, 기존 큐를 계속 사용합니다: {e}")
+        logger.info("=" * 60)
         return
 
     queue = load_queue()
@@ -298,16 +312,16 @@ def fetch_and_update_trends_queue():
     queue["pending"].extend(new_keywords)
     save_queue(queue)
 
-    print(f"[처리 완료] 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
-    print(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
-    print("=" * 60)
+    logger.info(f"[처리 완료] 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
+    logger.info(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
+    logger.info("=" * 60)
 
 
 # =====================================================================
 # HTML 및 렌더링 템플릿들
 # =====================================================================
 
-def build_decor_html(theme: dict, seed: str) -> str:
+def build_decor_html(theme: Dict[str, Any], seed: str) -> str:
     rng = random.Random(seed)
     emojis = theme["decor"]
     count = rng.randint(9, 12)
@@ -371,7 +385,7 @@ def _adsense_snippet() -> str:
         f'?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
     )
 
-def build_faq_section_html(article: dict, accent: str = "#4a90d9") -> str:
+def build_faq_section_html(article: Dict[str, Any], accent: str = "#4a90d9") -> str:
     if not article.get("faq_items"):
         return ""
     cards = []
@@ -393,7 +407,7 @@ def build_faq_section_html(article: dict, accent: str = "#4a90d9") -> str:
         + "".join(cards)
     )
 
-def build_json_ld(article: dict, canonical_url: str, thumb_url: str, date: str, platform: str = "github") -> str:
+def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, date: str, platform: str = "github") -> str:
     schema_type = article.get("schema_type", "Article")
     title = article["title"]
     meta_description = article.get("meta_description", "")
@@ -464,7 +478,7 @@ def build_json_ld(article: dict, canonical_url: str, thumb_url: str, date: str, 
     graph_data = {"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}
     return json.dumps(graph_data, ensure_ascii=False, indent=2)
 
-def build_blog_index_json_ld(posts: list) -> str:
+def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
     data = {
         "@context": "[https://schema.org](https://schema.org)",
         "@type": "Blog",
@@ -770,7 +784,7 @@ def get_title_from_args_or_queue() -> str:
 
     return title
 
-def generate_article(title: str) -> dict:
+def generate_article(title: str) -> Dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 비어있습니다. 저장소 Secrets 설정을 확인하세요.")
 
@@ -786,7 +800,7 @@ def generate_article(title: str) -> dict:
             resp = requests.post(url, json=payload, timeout=60)
             if resp.status_code in (429, 503):
                 wait = 15 * attempt
-                print(f"  → 일시적 오류({resp.status_code}), {wait}초 대기 후 재시도 ({attempt}/3)")
+                logger.warning(f"일시적 오류({resp.status_code}), {wait}초 대기 후 재시도 ({attempt}/3)")
                 time.sleep(wait)
                 last_error = f"{resp.status_code} 오류 반복됨"
                 continue
@@ -814,14 +828,14 @@ def generate_article(title: str) -> dict:
 
     raise RuntimeError(f"3번 시도했지만 계속 실패했습니다: {last_error}")
 
-def _load_font(size):
+def _load_font(size: int):
     for path in FONT_CANDIDATES:
         if os.path.exists(path):
             return ImageFont.truetype(path, size)
-    print("[안내] 한글 폰트를 찾지 못해 기본 폰트로 대체합니다 (한글이 깨져 보일 수 있음).")
+    logger.warning("한글 폰트를 찾지 못해 기본 폰트로 대체합니다 (한글이 깨져 보일 수 있음).")
     return ImageFont.load_default()
 
-def _make_gradient_background(size, colors):
+def _make_gradient_background(size: Tuple[int, int], colors: List[Tuple[int, int, int]]):
     w, h = size
     base = Image.new("RGB", size, colors[0])
     top = Image.new("RGB", size, colors[-1])
@@ -833,11 +847,11 @@ def _make_gradient_background(size, colors):
     mid_mask.putdata([int(80 * (1 - abs((x / w + y / h) / 2 - 0.5) * 2)) for y in range(h) for x in range(w)])
     return Image.composite(mid, blended, mid_mask)
 
-def _hex_to_rgb(hex_color: str):
+def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     hex_color = hex_color.lstrip("#")
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
-def _fetch_illustration(category: str, size: tuple, seed: int):
+def _fetch_illustration(category: str, size: Tuple[int, int], seed: int):
     prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"]) + ILLUSTRATION_SUFFIX
     url = (
         f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
@@ -851,10 +865,10 @@ def _fetch_illustration(category: str, size: tuple, seed: int):
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [일러스트] 생성 실패, 그라데이션만 사용: {e}")
+        logger.warning(f"[일러스트] 생성 실패, 그라데이션만 사용: {e}")
         return None
 
-def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> list:
+def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     words = text.split(" ")
     lines = []
     current = ""
@@ -883,7 +897,7 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> list:
         lines.append(current)
     return lines
 
-def generate_thumbnail(title: str, output_path: str, theme: dict, category: str = "라이프스타일") -> None:
+def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "라이프스타일") -> None:
     img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
     illustration = _fetch_illustration(category, THUMB_SIZE, seed)
@@ -982,7 +996,7 @@ def ensure_brand_assets() -> None:
     with Image.open(logo_path) as im:
         im.convert("RGB").resize((64, 64)).save(favicon_path, format="PNG")
 
-def _coupang_deeplink(search_url: str):
+def _coupang_deeplink(search_url: str) -> Optional[str]:
     if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY):
         return None
     domain = "https://api-gateway.coupang.com"
@@ -1005,10 +1019,10 @@ def _coupang_deeplink(search_url: str):
         resp.raise_for_status()
         return resp.json()["data"][0]["shortenUrl"]
     except Exception as e:
-        print(f"  → [쿠팡 딥링크] 발급 실패, 일반 링크로 대체: {e}")
+        logger.warning(f"[쿠팡 딥링크] 발급 실패, 일반 링크로 대체: {e}")
         return None
 
-def add_ymyl_disclaimer(article: dict) -> dict:
+def add_ymyl_disclaimer(article: Dict[str, Any]) -> Dict[str, Any]:
     theme = get_theme(article.get("category", "라이프스타일"))
     if not theme.get("ymyl"):
         return article
@@ -1023,7 +1037,7 @@ def add_ymyl_disclaimer(article: dict) -> dict:
     article["html_body"] += disclaimer
     return article
 
-def _relevance_score(article: dict, candidate: dict) -> float:
+def _relevance_score(article: Dict[str, Any], candidate: Dict[str, Any]) -> float:
     score = 0.0
     if candidate.get("category") == article.get("category", "라이프스타일"):
         score += 3.0
@@ -1033,7 +1047,7 @@ def _relevance_score(article: dict, candidate: dict) -> float:
     score += overlap * 1.5
     return score
 
-def add_internal_link(article: dict) -> dict:
+def add_internal_link(article: Dict[str, Any]) -> Dict[str, Any]:
     if not os.path.exists(POSTS_JSON):
         return article
     with open(POSTS_JSON, "r", encoding="utf-8") as f:
@@ -1065,7 +1079,7 @@ def _manual_ad_unit() -> str:
         '</div>'
     )
 
-def insert_manual_ads(article: dict) -> dict:
+def insert_manual_ads(article: Dict[str, Any]) -> Dict[str, Any]:
     ad_html = _manual_ad_unit()
     if not ad_html:
         return article
@@ -1091,7 +1105,7 @@ def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [본문 이미지] 생성 실패, 삽입 건너뜁니다: {e}")
+        logger.warning(f"[본문 이미지] 생성 실패, 삽입 건너뜁니다: {e}")
         return None
 
 def enhance_tables(html_body: str, accent: str) -> str:
@@ -1143,7 +1157,7 @@ def enhance_tables(html_body: str, accent: str) -> str:
 
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
-def insert_content_image(article: dict, slug: str) -> dict:
+def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     category = article.get("category", "라이프스타일")
     seed = int(hashlib.md5((article["title"] + "-inline").encode("utf-8")).hexdigest(), 16) % 100000
     photo = _fetch_content_photo(category, seed)
@@ -1183,10 +1197,10 @@ def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
             img = img.resize(size)
         return img
     except Exception as e:
-        print(f"  → [상품 아이콘] 생성 실패, 아이콘 없이 표시: {e}")
+        logger.warning(f"[상품 아이콘] 생성 실패, 아이콘 없이 표시: {e}")
         return None
 
-def build_product_list_html(article: dict, slug: str, accent: str) -> str:
+def build_product_list_html(article: Dict[str, Any], slug: str, accent: str) -> str:
     products = article.get("product_list") or []
     if not products:
         return ""
@@ -1212,17 +1226,17 @@ def build_product_list_html(article: dict, slug: str, accent: str) -> str:
         )
     return '<h2 style="margin-top:2em;">한눈에 보는 상품 목록</h2>' + "".join(cards)
 
-def add_coupang_markup(article: dict) -> dict:
+def add_coupang_markup(article: Dict[str, Any]) -> Dict[str, Any]:
     product_keyword = (article.get("product_keyword") or "").strip()
     if not product_keyword:
-        print("  → 마크업 링크: 이 주제는 상품과 관련이 없어 추천 섹션을 생략합니다.")
+        logger.info("마크업 링크: 이 주제는 상품과 관련이 없어 추천 섹션을 생략합니다.")
         return article
     search_url = f"https://www.coupang.com/np/search?q={urllib.parse.quote(product_keyword)}"
     if COUPANG_PARTNER_TAG:
         search_url += f"&lptag={COUPANG_PARTNER_TAG}"
     link = _coupang_deeplink(search_url) or search_url
     link_type = "쿠팡파트너스 딥링크" if link != search_url else "일반 검색 링크"
-    print(f"  → 마크업 링크 방식: {link_type} (검색어: {product_keyword})")
+    logger.info(f"마크업 링크 방식: {link_type} (검색어: {product_keyword})")
     extra_html = (
         f'<h2>관련 추천 상품</h2>'
         f'<p><a href="{link}" target="_blank" rel="nofollow sponsored">{product_keyword} 관련 인기 상품 보러가기</a></p>'
@@ -1266,7 +1280,7 @@ def _build_related_html(exclude_slug: str) -> str:
     )
     return f'<div class="related"><h3>📌 함께 보면 좋은 글</h3><div class="related-grid">{cards}</div></div>'
 
-def save_post(article: dict):
+def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, str]:
     os.makedirs(POSTS_DIR, exist_ok=True)
     os.makedirs(os.path.join(DOCS_DIR, "thumbs"), exist_ok=True)
     category = article.get("category", "라이프스타일")
@@ -1328,7 +1342,7 @@ def save_post(article: dict):
     local_thumb_path = os.path.join(DOCS_DIR, "thumbs", thumb_filename)
     return post_meta, json_ld, thumb_url, local_thumb_path, post_url
 
-def update_index(new_post: dict) -> list:
+def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
     os.makedirs(DOCS_DIR, exist_ok=True)
     posts = []
     if os.path.exists(POSTS_JSON):
@@ -1466,9 +1480,9 @@ def generate_static_pages() -> None:
             continue
         with open(path, "w", encoding="utf-8") as f:
             f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
-        print(f"  → [설정] {filename} 생성됨 (내용은 실제 정보로 직접 수정 권장)")
+        logger.info(f"[설정] {filename} 생성됨 (내용은 실제 정보로 직접 수정 권장)")
 
-def update_dashboard(posts: list) -> None:
+def update_dashboard(posts: List[Dict[str, Any]]) -> None:
     rows = "\n".join(
         f'<tr><td>{p["date"]}</td><td>{p["title"]}</td><td><a href="{p["file"]}">보기</a></td></tr>'
         for p in posts
@@ -1476,9 +1490,9 @@ def update_dashboard(posts: list) -> None:
     with open(os.path.join(DOCS_DIR, "dashboard.html"), "w", encoding="utf-8") as f:
         f.write(DASHBOARD_TEMPLATE.format(site_title=SITE_TITLE, post_count=len(posts), rows=rows))
 
-def update_seo_files(posts: list) -> None:
+def update_seo_files(posts: List[Dict[str, Any]]) -> None:
     if not SITE_URL:
-        print("  → [SEO] SITE_URL이 설정되지 않아 sitemap.xml/robots.txt 생성을 건너뜁니다.")
+        logger.info("[SEO] SITE_URL이 설정되지 않아 sitemap.xml/robots.txt 생성을 건너뜁니다.")
         return
     url_entries = "\n".join(f"<url><loc>{SITE_URL}/{p['file']}</loc></url>" for p in posts)
     with open(os.path.join(DOCS_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
@@ -1513,9 +1527,9 @@ def _make_blogger_safe_html(html_body: str) -> str:
         html_body = re.sub(r'<img src="\.\./thumbs/[^"]*"[^>]*>', "", html_body)
     return html_body
 
-def publish_to_blogger(article: dict, canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
+def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
     if not _blogger_configured():
-        print("  → [블로거] 관련 Secrets가 없어 건너뜁니다 (GitHub Pages만 발행).")
+        logger.info("[블로거] 관련 Secrets가 없어 건너뜁니다 (GitHub Pages만 발행).")
         return
     try:
         access_token = _get_blogger_access_token()
@@ -1527,7 +1541,7 @@ def publish_to_blogger(article: dict, canonical_url: str, thumb_url: str, local_
                 img_b64 = base64.b64encode(f.read()).decode("ascii")
             img_src = f"data:image/webp;base64,{img_b64}"
         except Exception as e:
-            print(f"  → [블로거] 썸네일 base64 인코딩 실패, 외부 링크로 대체: {e}")
+            logger.warning(f"[블로거] 썸네일 base64 인코딩 실패, 외부 링크로 대체: {e}")
             img_src = thumb_url
         content_html = (
             f'{_translate_widget()}'
@@ -1543,18 +1557,18 @@ def publish_to_blogger(article: dict, canonical_url: str, thumb_url: str, local_
         resp = requests.post(url, headers=headers, json=payload, timeout=30)
         resp.raise_for_status()
         result = resp.json()
-        print(f"  → [블로거] 발행 완료: {result.get('url', '(URL 확인 불가)')}")
+        logger.info(f"[블로거] 발행 완료: {result.get('url', '(URL 확인 불가)')}")
     except Exception as e:
-        print(f"  → [블로거] 발행 실패 (GitHub Pages 발행은 정상 진행됨): {e}")
+        logger.error(f"[블로거] 발행 실패 (GitHub Pages 발행은 정상 진행됨): {e}")
 
 def ensure_nojekyll() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     nojekyll_path = os.path.join(DOCS_DIR, ".nojekyll")
     if not os.path.exists(nojekyll_path):
         open(nojekyll_path, "w").close()
-        print("  → [설정] .nojekyll 파일 생성 (Jekyll 가공 비활성화)")
+        logger.info("[설정] .nojekyll 파일 생성 (Jekyll 가공 비활성화)")
 
-def run():
+def run() -> None:
     if len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh":
         fetch_and_update_trends_queue()
         return
@@ -1562,14 +1576,14 @@ def run():
     fetch_and_update_trends_queue()
 
     title = get_title_from_args_or_queue()
-    print(f"[처리 시작] 제목: {title}")
+    logger.info(f"[처리 시작] 제목: {title}")
 
     ensure_nojekyll()
     ensure_brand_assets()
     generate_static_pages()
 
     article = generate_article(title)
-    print(f"  → 글 생성 완료: {article['title']}")
+    logger.info(f"글 생성 완료: {article['title']}")
 
     article = add_internal_link(article)
     article = insert_manual_ads(article)
@@ -1583,14 +1597,14 @@ def run():
     update_seo_files(posts)
     publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
 
-    print(f"  → 저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
-    print(f"  → 대시보드/사이트맵 갱신 완료")
+    logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
+    logger.info("대시보드/사이트맵 갱신 완료")
 
 
 if __name__ == "__main__":
     try:
         run()
     except Exception as e:
-        print(f"[오류] {e}")
+        logger.error(f"스크립트 실행 중 치명적인 오류 발생: {e}")
         sys.exit(1)
 
