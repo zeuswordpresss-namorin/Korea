@@ -44,12 +44,12 @@ jobs:
       - name: 필요 패키지 설치
         run: pip install requests pillow
 
-      - name: 키워드 자동 보충 실행 (스케줄 중 두 번째 혹은 수동 refresh 선택 시)
-        if: (github.event_name == 'schedule' && github.event.schedule == '0 22 * * 0') || (github.event_name == 'workflow_dispatch' && github.event.inputs.action_type == 'refresh')
+      - name: 키워드 자동 보충 실행
+        if: (github.event_name == 'schedule' && github.event.schedule == '0 22 * * 0') || (github.event.inputs.action_type == 'refresh')
         run: python generate_post.py refresh
 
-      - name: 블로그 발행 실행 (일일 스케줄 또는 수동 publish 선택 시)
-        if: (github.event_name == 'schedule' && github.event.schedule == '0 0 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.action_type == 'publish')
+      - name: 블로그 발행 실행
+        if: (github.event_name == 'schedule' && github.event.schedule == '0 0 * * *') || (github.event.name == 'workflow_dispatch' && github.event.inputs.action_type == 'publish')
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SITE_TITLE: ${{ vars.SITE_TITLE }}
