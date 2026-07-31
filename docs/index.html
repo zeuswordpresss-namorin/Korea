@@ -19,6 +19,13 @@
   "blogPost": [
     {
       "@type": "BlogPosting",
+      "headline": "헌법, 대체 왜 난리일까? 실시간 검색어 1위의 놀라운 비밀!",
+      "url": "https://zeuswordpresss-namorin.github.io/my-auto-blog/posts/헌법-2026-07-31.html",
+      "datePublished": "2026-07-31",
+      "image": "https://zeuswordpresss-namorin.github.io/my-auto-blog/thumbs/헌법-2026-07-31.webp"
+    },
+    {
+      "@type": "BlogPosting",
       "headline": "인천 유나이티드 FC, 왜 갑자기 난리일까? 핫이슈 이면의 충격 반전",
       "url": "https://zeuswordpresss-namorin.github.io/my-auto-blog/posts/인천-유나이티드-fc-2026-07-31.html",
       "datePublished": "2026-07-31",
@@ -79,13 +86,6 @@
       "url": "https://zeuswordpresss-namorin.github.io/my-auto-blog/posts/xrp-레저-2026-07-29.html",
       "datePublished": "2026-07-29",
       "image": "https://zeuswordpresss-namorin.github.io/my-auto-blog/thumbs/xrp-레저-2026-07-29.webp"
-    },
-    {
-      "@type": "BlogPosting",
-      "headline": "배우 하지원 드라마 영화 대표작과 다채로운 매력 탐구",
-      "url": "https://zeuswordpresss-namorin.github.io/my-auto-blog/posts/하지원-2026-07-29.html",
-      "datePublished": "2026-07-29",
-      "image": "https://zeuswordpresss-namorin.github.io/my-auto-blog/thumbs/하지원-2026-07-29.webp"
     }
   ]
 }
@@ -157,18 +157,26 @@
 </head>
 <body>
 
-<div style="position:fixed;top:10px;right:10px;z-index:999;">
-  <button onclick="var e=document.getElementById('gt-box');e.style.display=(e.style.display==='none'||!e.style.display)?'block':'none';"
-    style="border:none;border-radius:999px;background:#fff;color:#333;font-weight:700;font-size:12px;
-    padding:9px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.25);cursor:pointer;">번역</button>
-  <div id="gt-box" style="display:none;margin-top:6px;background:#fff;padding:6px 8px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.18);">
-    <div id="google_translate_element"></div>
-  </div>
-</div>
+<div id="google_translate_element" style="position:absolute; top:-9999px; left:-9999px; display:none;"></div>
 <script>
 function googleTranslateElementInit() {
   new google.translate.TranslateElement({pageLanguage: 'ko', autoDisplay: false}, 'google_translate_element');
 }
+(function() {
+  try {
+      var userLang = navigator.language || navigator.userLanguage;
+      if (userLang && !userLang.startsWith('ko')) {
+        var targetLang = userLang.split('-')[0];
+        if(document.cookie.indexOf('googtrans=') === -1) {
+          document.cookie = "googtrans=/ko/" + targetLang + "; path=/";
+          if (document.domain) {
+              document.cookie = "googtrans=/ko/" + targetLang + "; domain=" + document.domain + "; path=/";
+          }
+          window.location.reload();
+        }
+      }
+  } catch(e) {}
+})();
 </script>
 <script src="//[translate.google.com/translate_a/element.js?cb=googleTranslateElementInit](https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit)"></script>
 <div class="masthead">
@@ -185,10 +193,11 @@ function googleTranslateElementInit() {
 </div>
 
 <div class="content-wrap">
-<div class="tier-label">🔥 최신 이야기</div><a class="hero" href="posts/인천-유나이티드-fc-2026-07-31.html"><img src="thumbs/인천-유나이티드-fc-2026-07-31.webp" alt="인천 유나이티드 FC, 왜 갑자기 난리일까? 핫이슈 이면의 충격 반전" loading="eager" fetchpriority="high"><div class="hero-body"><span class="hero-badge" style="background:#4a90d9">✨ 라이프스타일</span><div class="hero-title">인천 유나이티드 FC, 왜 갑자기 난리일까? 핫이슈 이면의 충격 반전</div><div class="date">2026-07-31</div></div></a>
-<div class="tier-label">📖 다음 이야기</div><div class="mid-grid"><a class="mid-card" href="posts/하이닉스-실적-발표-2026-07-31.html"><img src="thumbs/하이닉스-실적-발표-2026-07-31.webp" alt="SK하이닉스 실적 발표 분석: 핵심 지표와 시장 전망" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#11694f">💰 재테크</span><div class="mid-title">SK하이닉스 실적 발표 분석: 핵심 지표와 시장 전망</div><div class="date">2026-07-31</div></div></a>
-<a class="mid-card" href="posts/동탄-2026-07-30.html"><img src="thumbs/동탄-2026-07-30.webp" alt="동탄신도시 생활 가이드: 교통, 학군, 편의시설 핵심 정보 총정리" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#4a90d9">✨ 라이프스타일</span><div class="mid-title">동탄신도시 생활 가이드: 교통, 학군, 편의시설 핵심 정보 총정리</div><div class="date">2026-07-30</div></div></a></div>
-<div class="tier-label">🗂️ 지난 글 모아보기</div><div class="bottom-grid"><a class="bottom-card" href="posts/엘앤에프-2026-07-30.html"><img src="thumbs/엘앤에프-2026-07-30.webp" alt="엘앤에프 기업 분석: 2차전지 양극재 시장 핵심 주자 전망" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#11694f">💰 재테크</span><div class="bottom-title">엘앤에프 기업 분석: 2차전지 양극재 시장 핵심 주자 전망</div></div></a>
+<div class="tier-label">🔥 최신 이야기</div><a class="hero" href="posts/헌법-2026-07-31.html"><img src="thumbs/헌법-2026-07-31.webp" alt="헌법, 대체 왜 난리일까? 실시간 검색어 1위의 놀라운 비밀!" loading="eager" fetchpriority="high"><div class="hero-body"><span class="hero-badge" style="background:#4a90d9">✨ 라이프스타일</span><div class="hero-title">헌법, 대체 왜 난리일까? 실시간 검색어 1위의 놀라운 비밀!</div><div class="date">2026-07-31</div></div></a>
+<div class="tier-label">📖 다음 이야기</div><div class="mid-grid"><a class="mid-card" href="posts/인천-유나이티드-fc-2026-07-31.html"><img src="thumbs/인천-유나이티드-fc-2026-07-31.webp" alt="인천 유나이티드 FC, 왜 갑자기 난리일까? 핫이슈 이면의 충격 반전" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#4a90d9">✨ 라이프스타일</span><div class="mid-title">인천 유나이티드 FC, 왜 갑자기 난리일까? 핫이슈 이면의 충격 반전</div><div class="date">2026-07-31</div></div></a>
+<a class="mid-card" href="posts/하이닉스-실적-발표-2026-07-31.html"><img src="thumbs/하이닉스-실적-발표-2026-07-31.webp" alt="SK하이닉스 실적 발표 분석: 핵심 지표와 시장 전망" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#11694f">💰 재테크</span><div class="mid-title">SK하이닉스 실적 발표 분석: 핵심 지표와 시장 전망</div><div class="date">2026-07-31</div></div></a></div>
+<div class="tier-label">🗂️ 지난 글 모아보기</div><div class="bottom-grid"><a class="bottom-card" href="posts/동탄-2026-07-30.html"><img src="thumbs/동탄-2026-07-30.webp" alt="동탄신도시 생활 가이드: 교통, 학군, 편의시설 핵심 정보 총정리" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#4a90d9">✨ 라이프스타일</span><div class="bottom-title">동탄신도시 생활 가이드: 교통, 학군, 편의시설 핵심 정보 총정리</div></div></a>
+<a class="bottom-card" href="posts/엘앤에프-2026-07-30.html"><img src="thumbs/엘앤에프-2026-07-30.webp" alt="엘앤에프 기업 분석: 2차전지 양극재 시장 핵심 주자 전망" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#11694f">💰 재테크</span><div class="bottom-title">엘앤에프 기업 분석: 2차전지 양극재 시장 핵심 주자 전망</div></div></a>
 <a class="bottom-card" href="posts/교통량-2026-07-30.html"><img src="thumbs/교통량-2026-07-30.webp" alt="교통량 분석과 혼잡 해결을 위한 스마트 전략" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#4a90d9">✨ 라이프스타일</span><div class="bottom-title">교통량 분석과 혼잡 해결을 위한 스마트 전략</div></div></a>
 <a class="bottom-card" href="posts/kf-21-보라매-2026-07-29.html"><img src="thumbs/kf-21-보라매-2026-07-29.webp" alt="KF-21 보라매: 한국형 차세대 전투기 개발 현황과 미래" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#2a5298">💻 테크·IT</span><div class="bottom-title">KF-21 보라매: 한국형 차세대 전투기 개발 현황과 미래</div></div></a>
 <a class="bottom-card" href="posts/운동-2026-07-29.html"><img src="thumbs/운동-2026-07-29.webp" alt="초보자를 위한 효과적인 운동 시작 가이드" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#134e5e">💪 헬스·운동</span><div class="bottom-title">초보자를 위한 효과적인 운동 시작 가이드</div></div></a>
