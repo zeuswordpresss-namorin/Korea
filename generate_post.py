@@ -2,12 +2,7 @@
 """
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
 - 구글 트렌드 자동 수집 + 자동 포스팅 파이프라인 통합
-- UI 개선(표 좌측상단 오류 수정) 및 서론 호기심 유발 프롬프트 적용
-- [추가] 로깅 시스템 도입 및 타입 힌트 강화
-- [수정] 마크다운 자동링크(`[url](url)`) 형태로 깨져있던 모든 URL 문자열을 순수 URL로 복구
-  (GA/애드센스/번역위젯/구글폰트/JSON-LD/사이트맵/대시보드 링크가 전부 렌더링되지 않던 문제)
-- [수정] FAQ 정리 정규식이 본문 뒤쪽 임의의 </table>까지 통째로 삭제하던 문제 → 매칭 범위를 헤더 직후로 제한
-- [수정] 제목 워드랩 시 단어가 max_width보다 길고 현재 줄이 비어있지 않을 때 줄바꿈 없이 그대로 붙던 문제 수정
+- [스토리텔링 강화] 호기심 천국, 세상에 이런 일이 스타일의 흥미진진한 트렌드 원인 분석형 프롬프트 적용
 """
 
 import base64
@@ -86,43 +81,27 @@ GEMINI_URL = (
     "gemini-2.5-flash:generateContent?key={api_key}"
 )
 
-SYSTEM_PROMPT = """당신은 한국어 SEO 블로그 콘텐츠 작가 겸 구조화 데이터(스키마 마크업) 전문가입니다.
+# [수정됨] 프롬프트를 흥미진진한 스토리텔러 톤으로 전면 개편
+SYSTEM_PROMPT = """당신은 사람들의 호기심을 강하게 자극하는 미스터리/정보 큐레이션 전문 스토리텔러이자 한국어 SEO 블로그 작가입니다. 
+TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'의 내레이션처럼 독자의 상상력을 자극하고, 몰랐던 사실을 알아가는 즐거움을 주는 다채로운 톤으로 작성하세요.
+
 아래 규칙을 지켜 작성하세요:
-1. 제목은 검색 의도를 반영하되 과장/낚시성 표현은 피한다. 가능하면 "무직자 비상금 대출 조건 서류"처럼
-   3~4개 단어가 조합된 구체적인 롱테일 키워드형 제목을 쓴다 (단, 입력받은 키워드의 의미를 벗어나지 않는다).
-   제목은 25~40자 내외로, 구글 검색결과에서 잘리지 않게 한다.
-1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 핵심 키워드를 앞부분에 배치하고,
-   클릭을 유도하는 문장으로 100~140자 내외로 작성한다 (너무 짧거나 500자를 넘지 않게 한다).
+1. 제목은 검색 의도를 반영하되 흥미를 유발하도록 작성한다. (예: "OOO, 대체 왜 난리일까? 숨겨진 진짜 이유") 단, 입력받은 키워드의 의미를 벗어나지 않으며 25~40자 내외로 구글 검색결과에서 잘리지 않게 한다.
+1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 핵심 키워드를 앞부분에 배치하고, 클릭을 유도하는 호기심 자극 문장으로 100~140자 내외로 작성한다.
 2. 소제목(H2)을 4~6개 사용해 구조화한다.
-3. 확인되지 않은 구체적 수치·통계·자격요건·금리·지원금액을 지어내지 않는다. 모르면 "기관별로 다를 수 있다" 식으로
-   일반화해서 쓰고, 절대 구체적 숫자를 추측해서 채우지 않는다.
+3. [매우 중요] 단순한 사전적 뜻풀이나 정보 나열은 절대 금지합니다. 대신 "왜 지금 이 단어가 검색어 1위로 급상승했을까?", "이 이슈 이면에 숨겨진 진짜 이유는 무엇일까?"에 초점을 맞춰 비하인드 스토리, 관련 에피소드, 사람들이 몰랐던 놀라운 사실을 파헤치는 흥미진진한 전개를 보여주세요.
 4. 글자 수는 1500~2200자 내외.
-5. [중요] 서론은 방문자의 호기심을 강하게 자극하는 '훅(Hook)'으로 시작한다: 독자가 겪고 있을 만한 고민이나 궁금해할 만한 질문을 던져 깊은 공감을 이끌어내라. 그 후, 이 글을 끝까지 읽으면 어떤 확실한 정보와 해결책을 얻을 수 있는지 매력적으로 제시하여 이탈률을 낮춰라.
-6. 가독성을 위해 본문 중 최소 1곳에 <table> (수치/스펙 비교용 정리표) 또는 <ul>/<ol> 목록을 반드시 포함한다.
-   단, 질문-답변(Q&A) 내용은 절대 <table>로 만들지 않는다 (표 형태는 모바일에서 깨지기 쉬움).
-   FAQPage 타입을 고른 경우, 본문에는 Q&A를 별도로 나열하지 않는다 (faq_items로 충분하며, 화면에는 별도 섹션으로 자동 표시됨).
-7. "product_keyword"에는 이 글 내용과 실제로 관련된, 쿠팡에서 검색했을 때 진짜 상품이 나올 만한
-   쇼핑 키워드(2~4단어)를 넣는다. 예: 육아 관련 글 → "신생아 용품 세트", 게임 패치 소식 → "게이밍 마우스".
-   연예인 뉴스, 시사/정치, 날씨 등 상품과 자연스럽게 연결되지 않는 주제라면 억지로 만들지 말고
-   반드시 빈 문자열("")로 둔다 (빈 문자열이면 상품 추천 섹션 자체가 생략됨).
+5. [중요] 서론(Hook)은 독자에게 충격적이거나 매우 흥미로운 질문을 던지며 시작합니다. (예: "혹시 OOO에 대해 들어보셨나요? 평범해 보이던 이 단어가 오늘 대한민국 인터넷을 발칵 뒤집어 놓았습니다. 과연 그 이면에는 어떤 사연이 숨어 있을까요?")
+6. 가독성을 위해 본문 중 최소 1곳에 <table> (수치/스펙 비교용 정리표) 또는 <ul>/<ol> 목록을 반드시 포함한다. (질문-답변 내용은 표로 만들지 않음)
+7. "product_keyword"에는 이 글 내용과 실제로 관련된, 쿠팡에서 검색했을 때 진짜 상품이 나올 만한 쇼핑 키워드(2~4단어)를 넣는다. 억지로 연결하기 어렵다면 반드시 빈 문자열("")로 둔다.
 8. 콘텐츠 내용을 보고 아래 3가지 중 구글 상위노출에 가장 유리한 스키마 타입을 스스로 판단해서 고른다:
-   - "FAQPage": 자주 묻는 질문/답변 형태로 정리하기 좋은 주제일 때 (예: "~란?", "~ 방법", "~ 차이" 등 질의응답형 검색의도)
-   - "HowTo": 순서가 있는 절차/방법을 안내하는 주제일 때 (예: "~하는 법", "~ 설치 방법")
-   - "Article": 위 둘에 해당하지 않는 일반 정보/추천/리뷰형 글일 때
-9. 고른 스키마 타입에 맞는 데이터를 함께 채운다:
-   - FAQPage를 골랐다면 "faq_items"에 실제 본문 내용과 일치하는 질문/답변 3~5개를 넣는다 (본문에도 자연스럽게 Q&A 형태로 녹여쓴다)
-   - HowTo를 골랐다면 "howto_steps"에 실제 본문 순서와 일치하는 단계 3~6개를 넣는다 (각 step은 name(단계 제목)과 text(설명))
-   - Article이면 faq_items, howto_steps는 빈 배열로 둔다
-10. 제목/키워드를 보고 아래 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다 (디자인 테마 자동 매칭용):
-    ["뷰티패션", "푸드맛집", "여행", "테크IT", "재테크머니", "헬스운동", "홈인테리어", "대출보험", "정부지원금", "라이프스타일"]
-    애매하면 "라이프스타일"을 선택한다.
-11. category가 "대출보험" 또는 "정부지원금"이면 (실제 금융/정책 정보라 신중해야 하므로):
-    - 특정 금융사·상품명을 단정적으로 추천하지 않는다 (일반적인 조건/절차 위주로 설명)
-    - 신청 절차나 자격요건은 "일반적으로"라는 표현을 쓰고, 최신 여부는 공식 기관 확인이 필요하다는 점을 본문에 자연스럽게 언급한다
-12. 이 글이 여러 구체적인 상품·브랜드·모델을 비교하거나 소개하는 성격이면(예: "무선 이어폰 추천",
-    "OO 브랜드 총정리" 등), 그 각각을 "product_list"에 {"name": "상품/브랜드명", "description": "1문장 설명"}
-    형태로 채운다 (최대 6개). 이때 본문(html_body)에는 이 목록을 별도 불릿/표로 다시 나열하지 않는다
-    (product_list로 아이콘과 함께 자동 렌더링됨). 비교·소개형 글이 아니면 빈 배열로 둔다.
+   - "FAQPage": 질문/답변 형태로 정리하기 좋은 주제일 때
+   - "HowTo": 순서가 있는 절차/방법을 안내하는 주제일 때
+   - "Article": 위 둘에 해당하지 않는 스토리텔링, 정보, 이슈형 글일 때
+9. 고른 스키마 타입에 맞는 데이터를 함께 채운다: (FAQPage는 "faq_items", HowTo는 "howto_steps" 채우기, Article은 빈 배열)
+10. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다. ["뷰티패션", "푸드맛집", "여행", "테크IT", "재테크머니", "헬스운동", "홈인테리어", "대출보험", "정부지원금", "라이프스타일"]
+11. category가 "대출보험" 또는 "정부지원금"이면 일반적인 조건 위주로 설명하고 공식 기관 확인이 필요하다는 점을 덧붙인다.
+12. 이 글이 여러 구체적인 대상을 비교/소개하는 성격이면 "product_list"에 1문장 설명과 함께 채운다. (최대 6개). 아니면 빈 배열.
 13. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
 {
   "title": "...",
@@ -138,7 +117,7 @@ SYSTEM_PROMPT = """당신은 한국어 SEO 블로그 콘텐츠 작가 겸 구조
 html_body는 <h2>, <p>, <table>, <ul> 등을 사용한 HTML 조각이어야 한다."""
 
 # =====================================================================
-# 카테고리별 트렌디 테마
+# 카테고리별 트렌디 테마 (기존과 동일)
 # =====================================================================
 CATEGORY_THEMES = {
     "뷰티패션": {
@@ -296,7 +275,6 @@ def save_queue(queue: Dict[str, List[str]]) -> None:
         json.dump(queue, f, ensure_ascii=False, indent=2)
 
 def fetch_and_update_trends_queue() -> None:
-    """구글 트렌드에서 인기 검색어를 가져와 큐에 업데이트합니다."""
     logger.info("=" * 60)
     logger.info("[구글 트렌드] 대한민국 일일 인기 검색어 수집 시작...")
     try:
@@ -320,9 +298,8 @@ def fetch_and_update_trends_queue() -> None:
     logger.info(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
     logger.info("=" * 60)
 
-
 # =====================================================================
-# HTML 및 렌더링 템플릿들
+# HTML 및 렌더링 템플릿들 (기존과 동일)
 # =====================================================================
 
 def build_decor_html(theme: Dict[str, Any], seed: str) -> str:
@@ -352,7 +329,7 @@ def _ga_snippet() -> str:
     if not GA_MEASUREMENT_ID:
         return ""
     return f"""
-<script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>
+<script async src="[https://www.googletagmanager.com/gtag/js?id=](https://www.googletagmanager.com/gtag/js?id=){GA_MEASUREMENT_ID}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){{dataLayer.push(arguments);}}
@@ -379,13 +356,13 @@ function googleTranslateElementInit() {
   new google.translate.TranslateElement({pageLanguage: 'ko', autoDisplay: false}, 'google_translate_element');
 }
 </script>
-<script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>"""
+<script src="//[translate.google.com/translate_a/element.js?cb=googleTranslateElementInit](https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit)"></script>"""
 
 def _adsense_snippet() -> str:
     if not ADSENSE_CLIENT_ID:
         return ""
     return (
-        f'\n<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js'
+        f'\n<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js)'
         f'?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
     )
 
@@ -419,7 +396,7 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
 
     if schema_type == "FAQPage" and article.get("faq_items"):
         data = {
-            "@context": "https://schema.org",
+            "@context": "[https://schema.org](https://schema.org)",
             "@type": "FAQPage",
             "mainEntity": [
                 {
@@ -432,7 +409,7 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
         }
     elif schema_type == "HowTo" and article.get("howto_steps"):
         data = {
-            "@context": "https://schema.org",
+            "@context": "[https://schema.org](https://schema.org)",
             "@type": "HowTo",
             "name": title,
             "description": meta_description,
@@ -444,7 +421,7 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
     else:
         schema_type = article_type
         data = {
-            "@context": "https://schema.org",
+            "@context": "[https://schema.org](https://schema.org)",
             "@type": article_type,
             "headline": title,
             "description": meta_description,
@@ -479,12 +456,12 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
             ],
         })
 
-    graph_data = {"@context": "https://schema.org", "@graph": graph_nodes}
+    graph_data = {"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}
     return json.dumps(graph_data, ensure_ascii=False, indent=2)
 
 def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
     data = {
-        "@context": "https://schema.org",
+        "@context": "[https://schema.org](https://schema.org)",
         "@type": "Blog",
         "name": SITE_TITLE,
         "url": (SITE_URL + "/") if SITE_URL else ".",
@@ -500,7 +477,6 @@ def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
         ],
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
-
 
 POST_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -520,8 +496,8 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <meta name="twitter:title" content="{title}">
 <meta name="twitter:description" content="{meta_description}">
 <meta name="twitter:image" content="{thumb_url}">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family={font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
+<link href="[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
 <script type="application/ld+json">
 {json_ld}
 </script>{ga_snippet}{adsense_snippet}
@@ -595,7 +571,7 @@ ALL_THEME_FONTS = sorted({t["font"] for t in CATEGORY_THEMES.values()})
 
 def _google_fonts_url() -> str:
     families = "&family=".join(ALL_THEME_FONTS)
-    return f"https://fonts.googleapis.com/css2?family={families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
+    return f"[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -606,7 +582,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{site_title} - 자동으로 업데이트되는 블로그">
 <link rel="canonical" href="{site_url}/">
 <link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
 <link href="{fonts_url}" rel="stylesheet">
 <script type="application/ld+json">
 {blog_json_ld}
@@ -718,25 +694,25 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <div class="card">
   <b>실시간 트래픽 확인 (GA4)</b><br>
   플레이스토어 "Google Analytics" 앱 설치 후 이 사이트의 방문자/인기글을 확인하세요.<br>
-  <a href="https://analytics.google.com" target="_blank">analytics.google.com 바로가기</a>
+  <a href="[https://analytics.google.com](https://analytics.google.com)" target="_blank">analytics.google.com 바로가기</a>
 </div>
 
 <div class="card">
   <b>수익(쿠팡 마크업 수수료) 확인</b><br>
   쿠팡파트너스 앱 또는 사이트에서 클릭수/수익을 확인하세요.<br>
-  <a href="https://partners.coupang.com" target="_blank">partners.coupang.com 바로가기</a>
+  <a href="[https://partners.coupang.com](https://partners.coupang.com)" target="_blank">partners.coupang.com 바로가기</a>
 </div>
 
 <div class="card">
   <b>광고 수익(애드센스) 확인</b><br>
   플레이스토어 "Google AdSense" 앱 설치 후 페이지뷰/광고 수익(전면광고 포함)을 확인하세요.<br>
-  <a href="https://www.google.com/adsense" target="_blank">adsense.google.com 바로가기</a>
+  <a href="[https://www.google.com/adsense](https://www.google.com/adsense)" target="_blank">adsense.google.com 바로가기</a>
 </div>
 
 <div class="card">
   <b>검색 노출 확인 (Google Search Console)</b><br>
   사이트가 구글 검색에 얼마나 노출/클릭되는지 확인하세요. 최초 1회 소유권 인증이 필요합니다.<br>
-  <a href="https://search.google.com/search-console" target="_blank">search.google.com/search-console 바로가기</a>
+  <a href="[https://search.google.com/search-console](https://search.google.com/search-console)" target="_blank">[search.google.com/search-console](https://search.google.com/search-console) 바로가기</a>
 </div>
 
 <h2>발행된 글 목록 ({post_count}개)</h2>
@@ -749,7 +725,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 """
 
 SITEMAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="[http://www.sitemaps.org/schemas/sitemap/0.9](http://www.sitemaps.org/schemas/sitemap/0.9)">
 <url><loc>{site_url}/</loc></url>
 {url_entries}
 </urlset>
@@ -788,6 +764,7 @@ def get_title_from_args_or_queue() -> str:
 
     return title
 
+# [수정됨] 프롬프트 텍스트를 스토리텔링 유도형으로 변경
 def generate_article(title: str) -> Dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 비어있습니다. 저장소 Secrets 설정을 확인하세요.")
@@ -795,7 +772,7 @@ def generate_article(title: str) -> Dict[str, Any]:
     url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": f"제목: '{title}' 에 대한 블로그 글을 작성해주세요."}]}],
+        "contents": [{"role": "user", "parts": [{"text": f"오늘의 핫이슈/급상승 트렌드 키워드: '{title}'\n\n이 단어가 도대체 왜 갑자기 검색어 1위에 오르며 화제가 되었는지, 그 이면에 숨겨진 비하인드 스토리나 놀라운 사실은 무엇인지 '호기심 천국'이나 '세상에 이런 일이'처럼 독자의 흥미를 자극하는 전개로 블로그 글을 작성해주세요. 단순한 뜻풀이는 지양해주세요."}]}],
     }
 
     last_error = None
@@ -873,13 +850,6 @@ def _fetch_illustration(category: str, size: Tuple[int, int], seed: int):
         return None
 
 def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
-    """
-    [수정] 기존 코드는 candidate(현재줄+단어)가 max_width를 넘고 current가 비어있지
-    않은 경우, current를 flush하지 않고 그대로 candidate 취급 로직을 타지 못해
-    단어가 그대로 이어붙는 문제가 있었다. 여기서는 candidate가 넘치면
-    항상 먼저 현재 줄을 확정(flush)한 뒤, 단어 자체가 너무 길면 글자 단위로
-    쪼갠다.
-    """
     words = text.split(" ")
     lines: List[str] = []
     current = ""
@@ -894,7 +864,6 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
             current = candidate
             continue
 
-        # 현재 줄에 내용이 있으면 먼저 확정
         if current:
             lines.append(current)
             current = ""
@@ -903,7 +872,6 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
             current = word
             continue
 
-        # 단어 자체가 max_width보다 긴 경우 글자 단위로 분할
         chunk = ""
         for ch in word:
             if width_of(chunk + ch) <= max_width:
@@ -1312,9 +1280,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     post_filename = f"{slug}-{today}.html"
     generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category)
     cleaned_body = article["html_body"]
-    # [수정] 기존에는 "자주 묻는 질문" 헤더 뒤 본문 어디든 처음 나오는 </table>까지
-    # 통째로(.*?, DOTALL) 삭제되어, 헤더 뒤에 무관한 콘텐츠가 있으면 함께 날아갔다.
-    # 헤더 직후 최대 400자 이내에서만 매칭되도록 범위를 제한했다.
+    
     cleaned_body = re.sub(
         r"<h[23]>[^<]*자주\s*묻는\s*질문[^<]*</h[23]>.{0,400}?</table>",
         "", cleaned_body, flags=re.DOTALL | re.IGNORECASE
