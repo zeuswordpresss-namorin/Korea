@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
-- 구글 트렌드 자동 수집 + 자동 포스팅 파이프라인 통합
 - [스토리텔링 강화] 호기심 천국, 세상에 이런 일이 스타일의 흥미진진한 트렌드 원인 분석형 프롬프트 적용
+- [업그레이드] 조회수 5000회 이상 핫이슈 필터링 및 하루 최대 3회 발행 제한
+- [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 """
 
 import base64
@@ -26,7 +27,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 # =====================================================================
-# 로깅 설정 (표준 출력으로 로그 출력)
+# 로깅 설정
 # =====================================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -36,13 +37,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =====================================================================
-# 구글 트렌드 관련 설정
+# 구글 트렌드 관련 설정 (조회수 파싱을 위해 daily RSS만 사용)
 # =====================================================================
-TRENDS_RSS_URLS = [
-    "https://trends.google.com/trending/rss?geo=KR",
-    "https://trends.google.com/trends/trendingsearches/daily/rss?geo=KR",
-]
-TOP_N = 7
+TRENDS_RSS_URL = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=KR"
 REQUEST_TIMEOUT = 15
 QUEUE_FILE = "keywords_queue.json"
 
@@ -81,7 +78,7 @@ GEMINI_URL = (
     "gemini-2.5-flash:generateContent?key={api_key}"
 )
 
-# [수정됨] 프롬프트를 흥미진진한 스토리텔러 톤으로 전면 개편
+# 프롬프트를 흥미진진한 스토리텔러 톤으로 전면 개편
 SYSTEM_PROMPT = """당신은 사람들의 호기심을 강하게 자극하는 미스터리/정보 큐레이션 전문 스토리텔러이자 한국어 SEO 블로그 작가입니다. 
 TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'의 내레이션처럼 독자의 상상력을 자극하고, 몰랐던 사실을 알아가는 즐거움을 주는 다채로운 톤으로 작성하세요.
 
@@ -116,92 +113,17 @@ TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'�
 }
 html_body는 <h2>, <p>, <table>, <ul> 등을 사용한 HTML 조각이어야 한다."""
 
-# =====================================================================
-# 카테고리별 트렌디 테마 (기존과 동일)
-# =====================================================================
 CATEGORY_THEMES = {
-    "뷰티패션": {
-        "gradient": [(255, 107, 157), (255, 154, 158), (250, 208, 196)],
-        "accent": "#ff6b9d",
-        "badge": "💄 뷰티·패션",
-        "label": "BEAUTY",
-        "font": "Gowun+Dodum",
-        "decor": ["💄", "💅", "👗", "👠", "💋", "🎀", "💎", "🌸"],
-    },
-    "푸드맛집": {
-        "gradient": [(255, 107, 53), (247, 147, 30), (255, 210, 63)],
-        "accent": "#ff6b35",
-        "badge": "🍽️ 푸드·맛집",
-        "label": "FOOD",
-        "font": "Jua",
-        "decor": ["🍕", "🍔", "🍰", "🍜", "🍩", "☕", "🍓", "🧁"],
-    },
-    "여행": {
-        "gradient": [(17, 153, 142), (56, 239, 125), (100, 210, 255)],
-        "accent": "#11998e",
-        "badge": "✈️ 여행",
-        "label": "TRAVEL",
-        "font": "Gowun+Dodum",
-        "decor": ["✈️", "🌴", "🗺️", "🧳", "🏖️", "📸", "🚗", "🗼"],
-    },
-    "테크IT": {
-        "gradient": [(30, 60, 114), (42, 82, 152), (0, 198, 255)],
-        "accent": "#2a5298",
-        "badge": "💻 테크·IT",
-        "label": "TECH",
-        "font": "Noto+Sans+KR:wght@700",
-        "decor": ["💻", "⌨️", "🖥️", "📱", "🔌", "🤖", "⚡", "🛰️"],
-    },
-    "재테크머니": {
-        "gradient": [(17, 105, 79), (56, 173, 118), (168, 224, 99)],
-        "accent": "#11694f",
-        "badge": "💰 재테크",
-        "label": "MONEY",
-        "font": "Noto+Sans+KR:wght@700",
-        "decor": ["💰", "💵", "📈", "🪙", "🏦", "💳", "📊", "🐷"],
-    },
-    "헬스운동": {
-        "gradient": [(19, 78, 94), (113, 178, 128), (168, 224, 99)],
-        "accent": "#134e5e",
-        "badge": "💪 헬스·운동",
-        "label": "FITNESS",
-        "font": "Jua",
-        "decor": ["💪", "🏋️", "🥗", "🧘", "🏃", "⏱️", "🚴", "🥑"],
-    },
-    "홈인테리어": {
-        "gradient": [(196, 132, 88), (218, 170, 122), (238, 210, 175)],
-        "accent": "#c48458",
-        "badge": "🏠 홈·인테리어",
-        "label": "HOME",
-        "font": "Gowun+Dodum",
-        "decor": ["🏠", "🪴", "🕯️", "🛋️", "🖼️", "🧺", "🪞", "🛏️"],
-    },
-    "라이프스타일": {
-        "gradient": [(66, 133, 244), (156, 39, 176), (234, 67, 121)],
-        "accent": "#4a90d9",
-        "badge": "✨ 라이프스타일",
-        "label": "LIFESTYLE",
-        "font": "Noto+Sans+KR:wght@700",
-        "decor": ["✨", "🌸", "☕", "📓", "🎧", "🕊️", "🌿", "⭐"],
-    },
-    "대출보험": {
-        "gradient": [(20, 30, 48), (36, 59, 85), (65, 90, 119)],
-        "accent": "#1e3a5f",
-        "badge": "🏦 대출·보험",
-        "label": "FINANCE",
-        "font": "Noto+Sans+KR:wght@700",
-        "decor": ["🏦", "📄", "💳", "🔍", "📞", "✅", "💼", "🧾"],
-        "ymyl": True,
-    },
-    "정부지원금": {
-        "gradient": [(0, 91, 82), (0, 128, 105), (82, 183, 136)],
-        "accent": "#00695c",
-        "badge": "🏛️ 정부지원금",
-        "label": "SUPPORT",
-        "font": "Noto+Sans+KR:wght@700",
-        "decor": ["🏛️", "📋", "🖊️", "📅", "✅", "💌", "🪪", "📢"],
-        "ymyl": True,
-    },
+    "뷰티패션": {"gradient": [(255, 107, 157), (255, 154, 158), (250, 208, 196)], "accent": "#ff6b9d", "badge": "💄 뷰티·패션", "label": "BEAUTY", "font": "Gowun+Dodum", "decor": ["💄", "💅", "👗", "👠", "💋", "🎀", "💎", "🌸"]},
+    "푸드맛집": {"gradient": [(255, 107, 53), (247, 147, 30), (255, 210, 63)], "accent": "#ff6b35", "badge": "🍽️ 푸드·맛집", "label": "FOOD", "font": "Jua", "decor": ["🍕", "🍔", "🍰", "🍜", "🍩", "☕", "🍓", "🧁"]},
+    "여행": {"gradient": [(17, 153, 142), (56, 239, 125), (100, 210, 255)], "accent": "#11998e", "badge": "✈️ 여행", "label": "TRAVEL", "font": "Gowun+Dodum", "decor": ["✈️", "🌴", "🗺️", "🧳", "🏖️", "📸", "🚗", "🗼"]},
+    "테크IT": {"gradient": [(30, 60, 114), (42, 82, 152), (0, 198, 255)], "accent": "#2a5298", "badge": "💻 테크·IT", "label": "TECH", "font": "Noto+Sans+KR:wght@700", "decor": ["💻", "⌨️", "🖥️", "📱", "🔌", "🤖", "⚡", "🛰️"]},
+    "재테크머니": {"gradient": [(17, 105, 79), (56, 173, 118), (168, 224, 99)], "accent": "#11694f", "badge": "💰 재테크", "label": "MONEY", "font": "Noto+Sans+KR:wght@700", "decor": ["💰", "💵", "📈", "🪙", "🏦", "💳", "📊", "🐷"]},
+    "헬스운동": {"gradient": [(19, 78, 94), (113, 178, 128), (168, 224, 99)], "accent": "#134e5e", "badge": "💪 헬스·운동", "label": "FITNESS", "font": "Jua", "decor": ["💪", "🏋️", "🥗", "🧘", "🏃", "⏱️", "🚴", "🥑"]},
+    "홈인테리어": {"gradient": [(196, 132, 88), (218, 170, 122), (238, 210, 175)], "accent": "#c48458", "badge": "🏠 홈·인테리어", "label": "HOME", "font": "Gowun+Dodum", "decor": ["🏠", "🪴", "🕯️", "🛋️", "🖼️", "🧺", "🪞", "🛏️"]},
+    "라이프스타일": {"gradient": [(66, 133, 244), (156, 39, 176), (234, 67, 121)], "accent": "#4a90d9", "badge": "✨ 라이프스타일", "label": "LIFESTYLE", "font": "Noto+Sans+KR:wght@700", "decor": ["✨", "🌸", "☕", "📓", "🎧", "🕊️", "🌿", "⭐"]},
+    "대출보험": {"gradient": [(20, 30, 48), (36, 59, 85), (65, 90, 119)], "accent": "#1e3a5f", "badge": "🏦 대출·보험", "label": "FINANCE", "font": "Noto+Sans+KR:wght@700", "decor": ["🏦", "📄", "💳", "🔍", "📞", "✅", "💼", "🧾"], "ymyl": True},
+    "정부지원금": {"gradient": [(0, 91, 82), (0, 128, 105), (82, 183, 136)], "accent": "#00695c", "badge": "🏛️ 정부지원금", "label": "SUPPORT", "font": "Noto+Sans+KR:wght@700", "decor": ["🏛️", "📋", "🖊️", "📅", "✅", "💌", "🪪", "📢"], "ymyl": True},
 }
 DEFAULT_THEME = CATEGORY_THEMES["라이프스타일"]
 
@@ -222,84 +144,117 @@ ILLUSTRATION_PROMPTS = {
 }
 ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black or monochromatic vector lines, no watermark, no text"
 
+
 # =====================================================================
-# 구글 트렌드 및 큐 관리 함수들
+# 구글 트렌드 파싱 (트래픽 필터 포함) 및 큐/제한 관리 함수들
 # =====================================================================
 
-def fetch_top_trends(n: int = TOP_N) -> List[str]:
+def fetch_high_traffic_trends(min_traffic: int = 5000) -> List[str]:
+    """조회수가 일정 수치 이상인 트렌드 키워드만 파싱하여 반환합니다."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
     }
-    last_error = None
-    for url in TRENDS_RSS_URLS:
-        try:
-            response = requests.get(url, timeout=REQUEST_TIMEOUT, headers=headers)
-            response.raise_for_status()
-            root = ET.fromstring(response.content)
-            titles = []
-            for item in root.iter("item"):
-                title_text = item.findtext("title")
-                if title_text and title_text.strip():
-                    titles.append(title_text.strip())
-            if titles:
-                return titles[:n]
-            last_error = f"{url} - 응답은 성공했으나 추출된 키워드가 없습니다."
-        except requests.RequestException as req_err:
-            last_error = f"{url} - 네트워크/HTTP 요청 실패: {req_err}"
-        except ET.ParseError as xml_err:
-            last_error = f"{url} - XML 파싱 실패: {xml_err}"
-        except Exception as gen_err:
-            last_error = f"{url} - 예기치 못한 오류: {gen_err}"
+    try:
+        response = requests.get(TRENDS_RSS_URL, timeout=REQUEST_TIMEOUT, headers=headers)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        
+        # Google Trends Daily RSS의 namespace 정의
+        ns = {"ht": "[https://trends.google.com/trends/trendingsearches/daily](https://trends.google.com/trends/trendingsearches/daily)"}
+        high_traffic_keywords = []
+        
+        for item in root.iter("item"):
+            title_text = item.findtext("title")
+            traffic_text = item.findtext("ht:approx_traffic", namespaces=ns)
+            
+            if title_text and title_text.strip():
+                traffic = 0
+                if traffic_text:
+                    # '5,000+' 등에서 숫자만 추출
+                    clean_traffic = re.sub(r"[^\d]", "", traffic_text)
+                    if clean_traffic.isdigit():
+                        traffic = int(clean_traffic)
+                
+                if traffic >= min_traffic:
+                    high_traffic_keywords.append(title_text.strip())
+                    
+        return high_traffic_keywords
+    except Exception as e:
+        logger.warning(f"트렌드 조회수 파싱 실패: {e}")
+        return []
 
-    raise RuntimeError(f"모든 트렌드 URL에서 수집에 실패했습니다. (마지막 오류: {last_error})")
-
-def load_queue() -> Dict[str, List[str]]:
+def load_queue() -> Dict[str, Any]:
     if not os.path.exists(QUEUE_FILE):
-        return {"pending": [], "completed": []}
+        return {"pending": [], "completed": [], "daily_stats": {"date": "", "count": 0}}
     try:
         with open(QUEUE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             data.setdefault("pending", [])
             data.setdefault("completed", [])
+            data.setdefault("daily_stats", {"date": "", "count": 0})
             return data
     except (json.JSONDecodeError, IOError) as e:
         logger.warning(f"큐 파일을 불러오는 데 실패했습니다: {e}")
-        return {"pending": [], "completed": []}
+        return {"pending": [], "completed": [], "daily_stats": {"date": "", "count": 0}}
 
-def save_queue(queue: Dict[str, List[str]]) -> None:
+def save_queue(queue: Dict[str, Any]) -> None:
     with open(QUEUE_FILE, "w", encoding="utf-8") as f:
         json.dump(queue, f, ensure_ascii=False, indent=2)
 
 def fetch_and_update_trends_queue() -> None:
     logger.info("=" * 60)
-    logger.info("[구글 트렌드] 대한민국 일일 인기 검색어 수집 시작...")
-    try:
-        trends = fetch_top_trends(TOP_N)
-        logger.info(f"[수집 완료] 상위 {len(trends)}개 키워드: {trends}")
-    except Exception as e:
-        logger.warning(f"트렌드 수집 실패, 기존 큐를 계속 사용합니다: {e}")
+    logger.info("[구글 트렌드] 조회수 5000 이상 인기 검색어 수집 시작...")
+    trends = fetch_high_traffic_trends(min_traffic=5000)
+    
+    if not trends:
+        logger.info("조건(5000회 이상)을 만족하는 신규 핫이슈 트렌드가 없거나 수집에 실패했습니다.")
         logger.info("=" * 60)
         return
 
     queue = load_queue()
     existing_keywords = set(queue.get("pending", [])) | set(queue.get("completed", []))
-
     new_keywords = [t for t in trends if t not in existing_keywords]
     skipped_count = len(trends) - len(new_keywords)
 
     queue["pending"].extend(new_keywords)
     save_queue(queue)
 
-    logger.info(f"[처리 완료] 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
+    logger.info(f"[처리 완료] 5000회 이상 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
     logger.info(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
     logger.info("=" * 60)
 
+def check_daily_limit() -> bool:
+    """하루 3개 포스팅 제한을 체크합니다."""
+    queue = load_queue()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    daily_stats = queue.get("daily_stats", {"date": "", "count": 0})
+    
+    if daily_stats.get("date") != today_str:
+        return True
+    if daily_stats.get("count", 0) >= 3:
+        return False
+    return True
+
+def increment_daily_count() -> None:
+    """포스팅 성공 시 일일 카운트를 증가시킵니다."""
+    queue = load_queue()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    daily_stats = queue.get("daily_stats", {"date": today_str, "count": 0})
+    
+    if daily_stats.get("date") == today_str:
+        daily_stats["count"] = daily_stats.get("count", 0) + 1
+    else:
+        daily_stats = {"date": today_str, "count": 1}
+        
+    queue["daily_stats"] = daily_stats
+    save_queue(queue)
+
+
 # =====================================================================
-# HTML 및 렌더링 템플릿들 (기존과 동일)
+# HTML 및 렌더링 템플릿들
 # =====================================================================
 
 def build_decor_html(theme: Dict[str, Any], seed: str) -> str:
@@ -321,13 +276,11 @@ def build_decor_html(theme: Dict[str, Any], seed: str) -> str:
     return '<div class="decor-layer" aria-hidden="true">' + "".join(items) + "</div>"
 
 def _search_console_meta() -> str:
-    if not GOOGLE_SITE_VERIFICATION:
-        return ""
+    if not GOOGLE_SITE_VERIFICATION: return ""
     return f'\n<meta name="google-site-verification" content="{GOOGLE_SITE_VERIFICATION}">'
 
 def _ga_snippet() -> str:
-    if not GA_MEASUREMENT_ID:
-        return ""
+    if not GA_MEASUREMENT_ID: return ""
     return f"""
 <script async src="[https://www.googletagmanager.com/gtag/js?id=](https://www.googletagmanager.com/gtag/js?id=){GA_MEASUREMENT_ID}"></script>
 <script>
@@ -340,53 +293,51 @@ def _ga_snippet() -> str:
 ENABLE_AUTO_TRANSLATE = os.environ.get("ENABLE_AUTO_TRANSLATE", "true").strip().lower() != "false"
 
 def _translate_widget() -> str:
+    """방문자의 브라우저 언어가 한국어가 아니면 조용히 번역을 수행합니다 (UI 완전 숨김 처리)"""
     if not ENABLE_AUTO_TRANSLATE:
         return ""
     return """
-<div style="position:fixed;top:10px;right:10px;z-index:999;">
-  <button onclick="var e=document.getElementById('gt-box');e.style.display=(e.style.display==='none'||!e.style.display)?'block':'none';"
-    style="border:none;border-radius:999px;background:#fff;color:#333;font-weight:700;font-size:12px;
-    padding:9px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.25);cursor:pointer;">번역</button>
-  <div id="gt-box" style="display:none;margin-top:6px;background:#fff;padding:6px 8px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.18);">
-    <div id="google_translate_element"></div>
-  </div>
-</div>
+<div id="google_translate_element" style="position:absolute; top:-9999px; left:-9999px; display:none;"></div>
 <script>
 function googleTranslateElementInit() {
   new google.translate.TranslateElement({pageLanguage: 'ko', autoDisplay: false}, 'google_translate_element');
 }
+(function() {
+  try {
+      var userLang = navigator.language || navigator.userLanguage;
+      if (userLang && !userLang.startsWith('ko')) {
+        var targetLang = userLang.split('-')[0];
+        if(document.cookie.indexOf('googtrans=') === -1) {
+          document.cookie = "googtrans=/ko/" + targetLang + "; path=/";
+          if (document.domain) {
+              document.cookie = "googtrans=/ko/" + targetLang + "; domain=" + document.domain + "; path=/";
+          }
+          window.location.reload();
+        }
+      }
+  } catch(e) {}
+})();
 </script>
 <script src="//[translate.google.com/translate_a/element.js?cb=googleTranslateElementInit](https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit)"></script>"""
 
 def _adsense_snippet() -> str:
-    if not ADSENSE_CLIENT_ID:
-        return ""
-    return (
-        f'\n<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js)'
-        f'?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
-    )
+    if not ADSENSE_CLIENT_ID: return ""
+    return f'\n<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=){ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
 
 def build_faq_section_html(article: Dict[str, Any], accent: str = "#4a90d9") -> str:
-    if not article.get("faq_items"):
-        return ""
+    if not article.get("faq_items"): return ""
     cards = []
     for i, qa in enumerate(article["faq_items"], 1):
-        question = qa.get("question", "")
-        answer = qa.get("answer", "")
         cards.append(
             f'<details style="margin:14px 0;background:#f7f8fa;border-left:4px solid {accent};'
             'border-radius:8px;padding:2px 18px;" open>'
             '<summary style="cursor:pointer;padding:14px 0;font-family:\'Noto Sans KR\',-apple-system,sans-serif;'
-            f'font-weight:800;font-size:1.08em;color:#111;outline:none;user-select:none;">Q{i}. {question}</summary>'
+            f'font-weight:800;font-size:1.08em;color:#111;outline:none;user-select:none;">Q{i}. {qa.get("question", "")}</summary>'
             '<p style="margin:0;padding:0 0 16px;font-family:\'Noto Sans KR\',-apple-system,sans-serif;'
-            f'font-weight:400;color:#555;line-height:1.75;">A. {answer}</p>'
+            f'font-weight:400;color:#555;line-height:1.75;">A. {qa.get("answer", "")}</p>'
             '</details>'
         )
-    return (
-        '<h2 style="margin-top:2em;">자주 묻는 질문(FAQ) <span style="font-size:0.6em;color:#999;font-weight:400;">'
-        '(탭하면 펼쳐져요)</span></h2>'
-        + "".join(cards)
-    )
+    return '<h2 style="margin-top:2em;">자주 묻는 질문(FAQ) <span style="font-size:0.6em;color:#999;font-weight:400;">(탭하면 펼쳐져요)</span></h2>' + "".join(cards)
 
 def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, date: str, platform: str = "github") -> str:
     schema_type = article.get("schema_type", "Article")
@@ -396,38 +347,19 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
 
     if schema_type == "FAQPage" and article.get("faq_items"):
         data = {
-            "@context": "[https://schema.org](https://schema.org)",
-            "@type": "FAQPage",
-            "mainEntity": [
-                {
-                    "@type": "Question",
-                    "name": qa.get("question", ""),
-                    "acceptedAnswer": {"@type": "Answer", "text": qa.get("answer", "")},
-                }
-                for qa in article["faq_items"]
-            ],
+            "@context": "[https://schema.org](https://schema.org)", "@type": "FAQPage",
+            "mainEntity": [{"@type": "Question", "name": qa.get("question", ""), "acceptedAnswer": {"@type": "Answer", "text": qa.get("answer", "")}} for qa in article["faq_items"]],
         }
     elif schema_type == "HowTo" and article.get("howto_steps"):
         data = {
-            "@context": "[https://schema.org](https://schema.org)",
-            "@type": "HowTo",
-            "name": title,
-            "description": meta_description,
-            "step": [
-                {"@type": "HowToStep", "name": s.get("name", ""), "text": s.get("text", "")}
-                for s in article["howto_steps"]
-            ],
+            "@context": "[https://schema.org](https://schema.org)", "@type": "HowTo", "name": title, "description": meta_description,
+            "step": [{"@type": "HowToStep", "name": s.get("name", ""), "text": s.get("text", "")} for s in article["howto_steps"]],
         }
     else:
         schema_type = article_type
         data = {
-            "@context": "[https://schema.org](https://schema.org)",
-            "@type": article_type,
-            "headline": title,
-            "description": meta_description,
-            "image": thumb_url,
-            "datePublished": date,
-            "author": {"@type": "Organization", "name": SITE_TITLE},
+            "@context": "[https://schema.org](https://schema.org)", "@type": article_type, "headline": title, "description": meta_description,
+            "image": thumb_url, "datePublished": date, "author": {"@type": "Organization", "name": SITE_TITLE},
         }
 
     data.pop("@context", None)
@@ -440,41 +372,17 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
         ],
     }
     graph_nodes = [data, breadcrumb]
-
-    products = article.get("product_list") or []
-    if products:
+    if article.get("product_list"):
         graph_nodes.append({
-            "@type": "ItemList",
-            "name": f"{title} - 소개된 상품 목록",
-            "itemListElement": [
-                {
-                    "@type": "ListItem",
-                    "position": i,
-                    "item": {"@type": "Product", "name": p.get("name", ""), "description": p.get("description", "")},
-                }
-                for i, p in enumerate(products[:6], 1)
-            ],
+            "@type": "ItemList", "name": f"{title} - 소개된 상품 목록",
+            "itemListElement": [{"@type": "ListItem", "position": i, "item": {"@type": "Product", "name": p.get("name", ""), "description": p.get("description", "")}} for i, p in enumerate(article["product_list"][:6], 1)],
         })
-
-    graph_data = {"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}
-    return json.dumps(graph_data, ensure_ascii=False, indent=2)
+    return json.dumps({"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}, ensure_ascii=False, indent=2)
 
 def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
     data = {
-        "@context": "[https://schema.org](https://schema.org)",
-        "@type": "Blog",
-        "name": SITE_TITLE,
-        "url": (SITE_URL + "/") if SITE_URL else ".",
-        "blogPost": [
-            {
-                "@type": "BlogPosting",
-                "headline": p["title"],
-                "url": (f"{SITE_URL}/{p['file']}" if SITE_URL else p["file"]),
-                "datePublished": p["date"],
-                "image": (f"{SITE_URL}/{p['thumb']}" if SITE_URL else p["thumb"]),
-            }
-            for p in posts[:10]
-        ],
+        "@context": "[https://schema.org](https://schema.org)", "@type": "Blog", "name": SITE_TITLE, "url": (SITE_URL + "/") if SITE_URL else ".",
+        "blogPost": [{"@type": "BlogPosting", "headline": p["title"], "url": (f"{SITE_URL}/{p['file']}" if SITE_URL else p["file"]), "datePublished": p["date"], "image": (f"{SITE_URL}/{p['thumb']}" if SITE_URL else p["thumb"])} for p in posts[:10]],
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -568,7 +476,6 @@ POST_TEMPLATE = """<!DOCTYPE html>
 """
 
 ALL_THEME_FONTS = sorted({t["font"] for t in CATEGORY_THEMES.values()})
-
 def _google_fonts_url() -> str:
     families = "&family=".join(ALL_THEME_FONTS)
     return f"[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
@@ -690,31 +597,26 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <body>
 <a class="back" href="index.html">← 블로그로</a>
 <h1>📊 성과 관리 대시보드</h1>
-
 <div class="card">
   <b>실시간 트래픽 확인 (GA4)</b><br>
   플레이스토어 "Google Analytics" 앱 설치 후 이 사이트의 방문자/인기글을 확인하세요.<br>
   <a href="[https://analytics.google.com](https://analytics.google.com)" target="_blank">analytics.google.com 바로가기</a>
 </div>
-
 <div class="card">
   <b>수익(쿠팡 마크업 수수료) 확인</b><br>
   쿠팡파트너스 앱 또는 사이트에서 클릭수/수익을 확인하세요.<br>
   <a href="[https://partners.coupang.com](https://partners.coupang.com)" target="_blank">partners.coupang.com 바로가기</a>
 </div>
-
 <div class="card">
   <b>광고 수익(애드센스) 확인</b><br>
   플레이스토어 "Google AdSense" 앱 설치 후 페이지뷰/광고 수익(전면광고 포함)을 확인하세요.<br>
   <a href="[https://www.google.com/adsense](https://www.google.com/adsense)" target="_blank">adsense.google.com 바로가기</a>
 </div>
-
 <div class="card">
   <b>검색 노출 확인 (Google Search Console)</b><br>
   사이트가 구글 검색에 얼마나 노출/클릭되는지 확인하세요. 최초 1회 소유권 인증이 필요합니다.<br>
   <a href="[https://search.google.com/search-console](https://search.google.com/search-console)" target="_blank">[search.google.com/search-console](https://search.google.com/search-console) 바로가기</a>
 </div>
-
 <h2>발행된 글 목록 ({post_count}개)</h2>
 <table>
 <tr><th>날짜</th><th>제목</th><th>바로가기</th></tr>
@@ -730,13 +632,7 @@ SITEMAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 {url_entries}
 </urlset>
 """
-
-ROBOTS_TXT = """User-agent: *
-Allow: /
-
-Sitemap: {site_url}/sitemap.xml
-"""
-
+ROBOTS_TXT = "User-agent: *\nAllow: /\n\nSitemap: {site_url}/sitemap.xml\n"
 GEMINI_GRADIENT_COLORS = [(66, 133, 244), (156, 39, 176), (234, 67, 121)]
 THUMB_SIZE = (1280, 720)
 
@@ -748,23 +644,6 @@ def slugify(text: str) -> str:
     text = re.sub(r"[^\w\s-]", "", text).strip()
     return re.sub(r"[\s]+", "-", text) or "post"
 
-def get_title_from_args_or_queue() -> str:
-    if len(sys.argv) > 1 and sys.argv[1].strip():
-        return sys.argv[1].strip()
-
-    queue = load_queue()
-    pending = queue.get("pending", [])
-    if not pending:
-        raise RuntimeError("대기 중인 키워드가 없습니다. 큐 파일을 확인해주세요.")
-
-    title = pending.pop(0)
-    queue.setdefault("completed", []).append(title)
-    queue["pending"] = pending
-    save_queue(queue)
-
-    return title
-
-# [수정됨] 프롬프트 텍스트를 스토리텔링 유도형으로 변경
 def generate_article(title: str) -> Dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 비어있습니다. 저장소 Secrets 설정을 확인하세요.")
@@ -834,16 +713,12 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
 
 def _fetch_illustration(category: str, size: Tuple[int, int], seed: int):
     prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"]) + ILLUSTRATION_SUFFIX
-    url = (
-        f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
-        f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
-    )
+    url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     try:
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-        if img.size != size:
-            img = img.resize(size)
+        if img.size != size: img = img.resize(size)
         return img
     except Exception as e:
         logger.warning(f"[일러스트] 생성 실패, 그라데이션만 사용: {e}")
@@ -853,37 +728,28 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     words = text.split(" ")
     lines: List[str] = []
     current = ""
-
-    def width_of(s: str) -> int:
-        bbox = draw.textbbox((0, 0), s, font=font)
-        return bbox[2] - bbox[0]
+    def width_of(s: str) -> int: return draw.textbbox((0, 0), s, font=font)[2] - draw.textbbox((0, 0), s, font=font)[0]
 
     for word in words:
         candidate = f"{current} {word}".strip()
         if width_of(candidate) <= max_width:
             current = candidate
             continue
-
         if current:
             lines.append(current)
             current = ""
-
         if width_of(word) <= max_width:
             current = word
             continue
-
         chunk = ""
         for ch in word:
-            if width_of(chunk + ch) <= max_width:
-                chunk += ch
+            if width_of(chunk + ch) <= max_width: chunk += ch
             else:
-                if chunk:
-                    lines.append(chunk)
+                if chunk: lines.append(chunk)
                 chunk = ch
         current = chunk
 
-    if current:
-        lines.append(current)
+    if current: lines.append(current)
     return lines
 
 def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "라이프스타일") -> None:
@@ -903,10 +769,7 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
     badge_h = (lb[3] - lb[1]) + pad_y * 2
     badge_x = (THUMB_SIZE[0] - badge_w) // 2
     badge_y = 75
-    draw.rounded_rectangle(
-        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
-        radius=badge_h // 2, fill=accent_rgb + (255,),
-    )
+    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=badge_h // 2, fill=accent_rgb + (255,))
     draw.text((badge_x + pad_x, badge_y + pad_y - lb[1]), label_text, font=label_font, fill=(255, 255, 255, 255))
 
     bar_h = 18
@@ -922,14 +785,12 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
         heights = [draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in lines]
         total_h = sum(heights) + (len(lines) - 1) * 16
         full_wrap_count = len(_wrap_by_pixel_width(draw, title, font, max_text_width))
-        if total_h <= max_text_height and full_wrap_count <= 4:
-            break
+        if total_h <= max_text_height and full_wrap_count <= 4: break
         font_size -= 4
 
     if len(_wrap_by_pixel_width(draw, title, font, max_text_width)) > 4:
         last = lines[-1]
-        while draw.textbbox((0, 0), last + "...", font=font)[2] > max_text_width and len(last) > 1:
-            last = last[:-1]
+        while draw.textbbox((0, 0), last + "...", font=font)[2] > max_text_width and len(last) > 1: last = last[:-1]
         lines[-1] = last.rstrip(".,!? ") + "..."
 
     y = (THUMB_SIZE[1] - total_h) / 2 + 50
@@ -986,8 +847,7 @@ def ensure_brand_assets() -> None:
         im.convert("RGB").resize((64, 64)).save(favicon_path, format="PNG")
 
 def _coupang_deeplink(search_url: str) -> Optional[str]:
-    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY):
-        return None
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY): return None
     domain = "https://api-gateway.coupang.com"
     path = "/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink"
     try:
@@ -996,15 +856,8 @@ def _coupang_deeplink(search_url: str) -> Optional[str]:
         datetime_str = time.strftime("%y%m%dT%H%M%SZ", time.gmtime())
         message = datetime_str + "GET" + path_with_query
         signature = hmac.new(COUPANG_SECRET_KEY.encode(), message.encode(), hashlib.sha256).hexdigest()
-        auth_header = (
-            f"CEA algorithm=HmacSHA256, access-key={COUPANG_ACCESS_KEY}, "
-            f"signed-date={datetime_str}, signature={signature}"
-        )
-        resp = requests.get(
-            domain + path_with_query,
-            headers={"Authorization": auth_header, "Content-Type": "application/json"},
-            timeout=8,
-        )
+        auth_header = f"CEA algorithm=HmacSHA256, access-key={COUPANG_ACCESS_KEY}, signed-date={datetime_str}, signature={signature}"
+        resp = requests.get(domain + path_with_query, headers={"Authorization": auth_header, "Content-Type": "application/json"}, timeout=8)
         resp.raise_for_status()
         return resp.json()["data"][0]["shortenUrl"]
     except Exception as e:
@@ -1013,85 +866,62 @@ def _coupang_deeplink(search_url: str) -> Optional[str]:
 
 def add_ymyl_disclaimer(article: Dict[str, Any]) -> Dict[str, Any]:
     theme = get_theme(article.get("category", "라이프스타일"))
-    if not theme.get("ymyl"):
-        return article
+    if not theme.get("ymyl"): return article
     disclaimer = (
         '<div style="background:#fff8e1;border:1px solid #ffe082;border-radius:10px;'
         'padding:14px 18px;margin:24px 0;font-size:0.92em;color:#5d4037;">'
         '⚠️ <b>안내:</b> 이 글은 일반적인 정보 제공 목적으로 작성되었으며, 특정 상품·기관을 보증하지 않습니다. '
-        '금리, 자격 요건, 지원금액, 신청 기간 등은 수시로 바뀔 수 있으니 '
-        '반드시 해당 금융기관 또는 정부24·관할 지자체 등 공식 채널에서 최신 정보를 확인하세요.'
-        '</div>'
+        '금리, 자격 요건, 지원금액, 신청 기간 등은 수시로 바뀔 수 있으니 반드시 공식 채널에서 최신 정보를 확인하세요.</div>'
     )
     article["html_body"] += disclaimer
     return article
 
 def _relevance_score(article: Dict[str, Any], candidate: Dict[str, Any]) -> float:
     score = 0.0
-    if candidate.get("category") == article.get("category", "라이프스타일"):
-        score += 3.0
+    if candidate.get("category") == article.get("category", "라이프스타일"): score += 3.0
     current_words = set(re.findall(r"[\w가-힣]+", (article.get("title", "") + " " + article.get("keyword", ""))))
     candidate_words = set(re.findall(r"[\w가-힣]+", candidate.get("title", "")))
-    overlap = len(current_words & candidate_words)
-    score += overlap * 1.5
+    score += len(current_words & candidate_words) * 1.5
     return score
 
 def add_internal_link(article: Dict[str, Any]) -> Dict[str, Any]:
-    if not os.path.exists(POSTS_JSON):
-        return article
-    with open(POSTS_JSON, "r", encoding="utf-8") as f:
-        posts = json.load(f)
-    if not posts:
-        return article
+    if not os.path.exists(POSTS_JSON): return article
+    with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
+    if not posts: return article
     scored = [(p, _relevance_score(article, p)) for p in posts]
     scored.sort(key=lambda x: x[1], reverse=True)
     top_pool = [p for p, s in scored[:5] if s > 0] or [p for p, s in scored[:5]]
-    if not top_pool:
-        return article
+    if not top_pool: return article
     weights = [max(s, 0.5) for p, s in scored[:len(top_pool)]]
     pick = random.choices(top_pool, weights=weights, k=1)[0]
-    link_html = (
-        f'<p style="margin-top:2em;padding-top:1em;border-top:1px dashed #ddd;">'
-        f'🔗 이 글도 함께 보면 좋아요: <a href="../{pick["file"]}">{pick["title"]}</a></p>'
-    )
-    article["html_body"] += link_html
+    article["html_body"] += f'<p style="margin-top:2em;padding-top:1em;border-top:1px dashed #ddd;">🔗 이 글도 함께 보면 좋아요: <a href="../{pick["file"]}">{pick["title"]}</a></p>'
     return article
 
 def _manual_ad_unit() -> str:
-    if not (ADSENSE_CLIENT_ID and ADSENSE_SLOT_ID):
-        return ""
+    if not (ADSENSE_CLIENT_ID and ADSENSE_SLOT_ID): return ""
     return (
         '<div style="margin:28px 0;text-align:center;">'
         f'<ins class="adsbygoogle" style="display:block" data-ad-client="{ADSENSE_CLIENT_ID}" '
         f'data-ad-slot="{ADSENSE_SLOT_ID}" data-ad-format="auto" data-full-width-responsive="true"></ins>'
-        '<script>(adsbygoogle = window.adsbygoogle || []).push({});</script>'
-        '</div>'
+        '<script>(adsbygoogle = window.adsbygoogle || []).push({});</script></div>'
     )
 
 def insert_manual_ads(article: Dict[str, Any]) -> Dict[str, Any]:
     ad_html = _manual_ad_unit()
-    if not ad_html:
-        return article
+    if not ad_html: return article
     idx = article["html_body"].find("<h2")
-    if idx != -1:
-        article["html_body"] = article["html_body"][:idx] + ad_html + article["html_body"][idx:]
-    else:
-        article["html_body"] += ad_html
+    if idx != -1: article["html_body"] = article["html_body"][:idx] + ad_html + article["html_body"][idx:]
+    else: article["html_body"] += ad_html
     return article
 
 def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
-    base_prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"])
-    prompt = base_prompt.replace("flat vector illustration of", "photo illustration of") + ", high quality, natural lighting"
-    url = (
-        f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
-        f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
-    )
+    prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"]).replace("flat vector illustration of", "photo illustration of") + ", high quality, natural lighting"
+    url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     try:
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        if img.size != size:
-            img = img.resize(size)
+        if img.size != size: img = img.resize(size)
         return img
     except Exception as e:
         logger.warning(f"[본문 이미지] 생성 실패, 삽입 건너뜁니다: {e}")
@@ -1099,21 +929,26 @@ def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
 
 def enhance_tables(html_body: str, accent: str) -> str:
     counter = {"n": 0}
-    def _style_cells(raw_table: str, min_width: int) -> str:
+    def _style_cells(raw_table: str, min_width: int, is_modal: bool = False) -> str:
+        # 1.5x 모달용 폰트 및 패딩 스케일 업 적용
+        font_size = "1.5em" if is_modal else "0.92em"
+        pad_th = "18px 21px" if is_modal else "12px 14px"
+        pad_td = "18px 21px" if is_modal else "12px 14px"
+        
         styled = re.sub(
             r"<table\b[^>]*>",
-            f'<table style="width:100%;min-width:{min_width}px;border-collapse:collapse;overflow:hidden;"',
+            f'<table style="width:100%;min-width:{min_width}px;border-collapse:collapse;overflow:hidden;font-size:{font_size};"',
             raw_table, count=1,
         )
         styled = re.sub(
             r"<th\b[^>]*>",
-            f'<th style="padding:12px 14px;text-align:left;background:{accent}1f;font-weight:800;'
+            f'<th style="padding:{pad_th};text-align:left;background:{accent}1f;font-weight:800;'
             f'color:#111;border-bottom:2px solid {accent}80;white-space:nowrap;">',
             styled,
         )
         styled = re.sub(
             r"<td\b[^>]*>",
-            '<td style="padding:12px 14px;text-align:left;border-bottom:1px solid #ececec;line-height:1.65;vertical-align:top;">',
+            f'<td style="padding:{pad_td};text-align:left;border-bottom:1px solid #ececec;line-height:1.65;vertical-align:top;">',
             styled,
         )
         return styled
@@ -1122,8 +957,9 @@ def enhance_tables(html_body: str, accent: str) -> str:
         counter["n"] += 1
         uid = f"tblzoom{counter['n']}_{random.randint(1000, 9999)}"
         table_html = match.group(0)
-        styled_table = _style_cells(table_html, 460)
-        modal_table = _style_cells(table_html, 420)
+        styled_table = _style_cells(table_html, 460, False)
+        # 모달 내부 표는 1.5배(1.5em 폰트) 커진 상태로 렌더링
+        modal_table = _style_cells(table_html, 630, True)
 
         return (
             f'<div style="overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;margin:1.2em 0 0.4em;'
@@ -1136,10 +972,10 @@ def enhance_tables(html_body: str, accent: str) -> str:
             f'style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.82);'
             f'z-index:1000;align-items:center;justify-content:center;padding:16px;" '
             f'onclick="if(event.target===this){{this.style.display=\'none\';}}">'
-            f'<div style="background:#fff;border-radius:12px;padding:18px;max-width:95vw;max-height:88vh;overflow:auto;">'
+            f'<div style="background:#fff;border-radius:12px;padding:24px;max-width:95vw;max-height:88vh;overflow:auto;">'
             f'<button type="button" onclick="document.getElementById(\'{uid}\').style.display=\'none\';" '
-            f'style="display:block;margin:0 0 10px auto;width:32px;height:32px;border-radius:50%;'
-            f'border:none;background:#f0f0f0;font-size:1em;cursor:pointer;">✕</button>'
+            f'style="display:block;margin:0 0 16px auto;width:36px;height:36px;border-radius:50%;'
+            f'border:none;background:#f0f0f0;font-size:1.2em;cursor:pointer;">✕</button>'
             f'{modal_table}'
             f'</div></div>'
         )
@@ -1150,40 +986,26 @@ def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     category = article.get("category", "라이프스타일")
     seed = int(hashlib.md5((article["title"] + "-inline").encode("utf-8")).hexdigest(), 16) % 100000
     photo = _fetch_content_photo(category, seed)
-    if photo is None:
-        return article
+    if photo is None: return article
     filename = f"{slug}-inline.webp"
     path = os.path.join(DOCS_DIR, "thumbs", filename)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     photo.save(path, format="WEBP", quality=82, method=6)
 
-    img_html = (
-        f'<img src="../thumbs/{filename}" alt="{article["title"]} 관련 이미지" loading="lazy" '
-        'style="width:100%;border-radius:10px;margin:20px 0;">'
-    )
+    img_html = f'<img src="../thumbs/{filename}" alt="{article["title"]} 관련 이미지" loading="lazy" style="width:100%;border-radius:10px;margin:20px 0;">'
     idx = article["html_body"].find("</h2>")
-    if idx != -1:
-        insert_at = idx + len("</h2>")
-        article["html_body"] = article["html_body"][:insert_at] + img_html + article["html_body"][insert_at:]
-    else:
-        article["html_body"] = img_html + article["html_body"]
+    if idx != -1: article["html_body"] = article["html_body"][:idx + 5] + img_html + article["html_body"][idx + 5:]
+    else: article["html_body"] = img_html + article["html_body"]
     return article
 
 def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
-    prompt = (
-        f"minimalist pencil sketch icon of {product_name}, single centered object, "
-        "clean line art, simple outline, white background, no text, no watermark"
-    )
-    url = (
-        f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
-        f"?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
-    )
+    prompt = f"minimalist pencil sketch icon of {product_name}, single centered object, clean line art, simple outline, white background, no text, no watermark"
+    url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     try:
         resp = requests.get(url, timeout=15)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        if img.size != size:
-            img = img.resize(size)
+        if img.size != size: img = img.resize(size)
         return img
     except Exception as e:
         logger.warning(f"[상품 아이콘] 생성 실패, 아이콘 없이 표시: {e}")
@@ -1191,8 +1013,7 @@ def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
 
 def build_product_list_html(article: Dict[str, Any], slug: str, accent: str) -> str:
     products = article.get("product_list") or []
-    if not products:
-        return ""
+    if not products: return ""
     os.makedirs(os.path.join(DOCS_DIR, "thumbs"), exist_ok=True)
     cards = []
     for i, item in enumerate(products[:6], 1):
@@ -1217,20 +1038,14 @@ def build_product_list_html(article: Dict[str, Any], slug: str, accent: str) -> 
 
 def add_coupang_markup(article: Dict[str, Any]) -> Dict[str, Any]:
     product_keyword = (article.get("product_keyword") or "").strip()
-    if not product_keyword:
-        logger.info("마크업 링크: 이 주제는 상품과 관련이 없어 추천 섹션을 생략합니다.")
-        return article
+    if not product_keyword: return article
     search_url = f"https://www.coupang.com/np/search?q={urllib.parse.quote(product_keyword)}"
-    if COUPANG_PARTNER_TAG:
-        search_url += f"&lptag={COUPANG_PARTNER_TAG}"
+    if COUPANG_PARTNER_TAG: search_url += f"&lptag={COUPANG_PARTNER_TAG}"
     link = _coupang_deeplink(search_url) or search_url
-    link_type = "쿠팡파트너스 딥링크" if link != search_url else "일반 검색 링크"
-    logger.info(f"마크업 링크 방식: {link_type} (검색어: {product_keyword})")
     extra_html = (
         f'<h2>관련 추천 상품</h2>'
         f'<p><a href="{link}" target="_blank" rel="nofollow sponsored">{product_keyword} 관련 인기 상품 보러가기</a></p>'
-        '<p style="font-size:0.85em;color:#888;">이 포스팅은 쿠팡 파트너스 활동의 일환으로, '
-        '이에 따른 일정액의 수수료를 제공받습니다.</p>'
+        '<p style="font-size:0.85em;color:#888;">이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</p>'
     )
     article["html_body"] += extra_html
     return article
@@ -1243,29 +1058,23 @@ def _build_post_nav_html() -> str:
     if os.path.exists(POSTS_JSON):
         with open(POSTS_JSON, "r", encoding="utf-8") as f:
             posts = json.load(f)
-        if posts:
-            prev_post = posts[0]
+        if posts: prev_post = posts[0]
     prev_html = (
         f'<a href="../{prev_post["file"]}"><img src="../{prev_post["thumb"]}" alt="이전 게시물">'
         f'<span>← 이전 게시물: {prev_post["title"]}</span></a>'
-        if prev_post else
-        '<a href="../index.html"><span class="nav-icon">🏠</span><span>목록으로</span></a>'
+        if prev_post else '<a href="../index.html"><span class="nav-icon">🏠</span><span>목록으로</span></a>'
     )
     latest_html = '<a href="../index.html"><span class="nav-icon">📰</span><span>최신 게시물 보기</span></a>'
     return f'<div class="post-nav">{prev_html}{latest_html}</div>'
 
 def _build_related_html(exclude_slug: str) -> str:
-    if not os.path.exists(POSTS_JSON):
-        return ""
-    with open(POSTS_JSON, "r", encoding="utf-8") as f:
-        posts = json.load(f)
+    if not os.path.exists(POSTS_JSON): return ""
+    with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
     posts = [p for p in posts if p.get("file") != exclude_slug][:3]
-    if not posts:
-        return ""
+    if not posts: return ""
     cards = "\n".join(
         f'<a class="related-card" href="../{p["file"]}"><img src="../{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
-        f'<span>{p["title"]}</span></a>'
-        for p in posts
+        f'<span>{p["title"]}</span></a>' for p in posts
     )
     return f'<div class="related"><h3>📌 함께 보면 좋은 글</h3><div class="related-grid">{cards}</div></div>'
 
@@ -1279,29 +1088,25 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     thumb_filename = f"{slug}-{today}.webp"
     post_filename = f"{slug}-{today}.html"
     generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category)
-    cleaned_body = article["html_body"]
     
     cleaned_body = re.sub(
         r"<h[23]>[^<]*자주\s*묻는\s*질문[^<]*</h[23]>.{0,400}?</table>",
-        "", cleaned_body, flags=re.DOTALL | re.IGNORECASE
+        "", article["html_body"], flags=re.DOTALL | re.IGNORECASE
     )
     article["html_body"] = cleaned_body
     article["html_body"] = enhance_tables(article["html_body"], theme["accent"])
     article = insert_content_image(article, slug)
     article["html_body"] += build_faq_section_html(article, theme["accent"])
     article["html_body"] += build_product_list_html(article, slug, theme["accent"])
+    
     post_url = f"{SITE_URL}/posts/{post_filename}" if SITE_URL else f"posts/{post_filename}"
     thumb_url = f"{SITE_URL}/thumbs/{thumb_filename}" if SITE_URL else f"../thumbs/{thumb_filename}"
     title = article["title"]
-    meta_description = article.get("meta_description", "")
     json_ld = build_json_ld(article, post_url, thumb_url, today)
-    related_html = _build_related_html(exclude_slug=f"posts/{post_filename}")
-    post_nav = _build_post_nav_html()
-    decor_html = build_decor_html(theme, seed=slug)
-
+    
     html = POST_TEMPLATE.format(
         title=title,
-        meta_description=meta_description,
+        meta_description=article.get("meta_description", ""),
         date=today,
         html_body=article["html_body"],
         thumb_filename=thumb_filename,
@@ -1314,36 +1119,30 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         font_family=_font_family_name(theme["font"]),
         accent=theme["accent"],
         badge=theme["badge"],
-        related_html=related_html,
-        post_nav=post_nav,
-        decor_html=decor_html,
+        related_html=_build_related_html(exclude_slug=f"posts/{post_filename}"),
+        post_nav=_build_post_nav_html(),
+        decor_html=build_decor_html(theme, seed=slug),
         bottom_ad=_manual_ad_unit(),
         search_console_meta=_search_console_meta(),
         translate_widget=_translate_widget(),
     )
     with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
         f.write(html)
+        
     post_meta = {
-        "title": title,
-        "file": f"posts/{post_filename}",
-        "thumb": f"thumbs/{thumb_filename}",
-        "date": today,
-        "category": category,
-        "accent": theme["accent"],
-        "badge": theme["badge"],
+        "title": title, "file": f"posts/{post_filename}", "thumb": f"thumbs/{thumb_filename}",
+        "date": today, "category": category, "accent": theme["accent"], "badge": theme["badge"],
     }
-    local_thumb_path = os.path.join(DOCS_DIR, "thumbs", thumb_filename)
-    return post_meta, json_ld, thumb_url, local_thumb_path, post_url
+    return post_meta, json_ld, thumb_url, os.path.join(DOCS_DIR, "thumbs", thumb_filename), post_url
 
 def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
     os.makedirs(DOCS_DIR, exist_ok=True)
     posts = []
     if os.path.exists(POSTS_JSON):
-        with open(POSTS_JSON, "r", encoding="utf-8") as f:
-            posts = json.load(f)
+        with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
     posts.insert(0, new_post)
-    with open(POSTS_JSON, "w", encoding="utf-8") as f:
-        json.dump(posts, f, ensure_ascii=False, indent=2)
+    with open(POSTS_JSON, "w", encoding="utf-8") as f: json.dump(posts, f, ensure_ascii=False, indent=2)
+
     hero_posts, mid_posts, bottom_posts = posts[:1], posts[1:3], posts[3:]
 
     hero_html = ""
@@ -1352,223 +1151,133 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
         hero_html = (
             '<div class="tier-label">🔥 최신 이야기</div>'
             f'<a class="hero" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="eager" fetchpriority="high">'
-            f'<div class="hero-body"><span class="hero-badge" style="background:{p.get("accent", "#4a90d9")}">'
-            f'{p.get("badge", "✨ 라이프스타일")}</span>'
-            f'<div class="hero-title">{p["title"]}</div>'
-            f'<div class="date">{p["date"]}</div></div></a>'
+            f'<div class="hero-body"><span class="hero-badge" style="background:{p.get("accent", "#4a90d9")}">{p.get("badge", "✨ 라이프스타일")}</span>'
+            f'<div class="hero-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>'
         )
     mid_html = ""
     if mid_posts:
         cards = "\n".join(
             f'<a class="mid-card" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
-            f'<div class="mid-body"><span class="badge-sm" style="background:{p.get("accent", "#4a90d9")}">'
-            f'{p.get("badge", "✨ 라이프스타일")}</span>'
-            f'<div class="mid-title">{p["title"]}</div>'
-            f'<div class="date">{p["date"]}</div></div></a>'
-            for p in mid_posts
+            f'<div class="mid-body"><span class="badge-sm" style="background:{p.get("accent", "#4a90d9")}">{p.get("badge", "✨ 라이프스타일")}</span>'
+            f'<div class="mid-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>' for p in mid_posts
         )
         mid_html = f'<div class="tier-label">📖 다음 이야기</div><div class="mid-grid">{cards}</div>'
     bottom_html = ""
     if bottom_posts:
         cards = "\n".join(
             f'<a class="bottom-card" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
-            f'<div class="bottom-body"><span class="badge-sm" style="background:{p.get("accent", "#4a90d9")}">'
-            f'{p.get("badge", "✨ 라이프스타일")}</span>'
-            f'<div class="bottom-title">{p["title"]}</div></div></a>'
-            for p in bottom_posts
+            f'<div class="bottom-body"><span class="badge-sm" style="background:{p.get("accent", "#4a90d9")}">{p.get("badge", "✨ 라이프스타일")}</span>'
+            f'<div class="bottom-title">{p["title"]}</div></div></a>' for p in bottom_posts
         )
         bottom_html = f'<div class="tier-label">🗂️ 지난 글 모아보기</div><div class="bottom-grid">{cards}</div>'
 
     with open(os.path.join(DOCS_DIR, "index.html"), "w", encoding="utf-8") as f:
-        category_pills = "".join(
-            f'<span class="pill" style="background:{t["accent"]}">{t["badge"]}</span>'
-            for t in CATEGORY_THEMES.values()
-        )
+        category_pills = "".join(f'<span class="pill" style="background:{t["accent"]}">{t["badge"]}</span>' for t in CATEGORY_THEMES.values())
         f.write(INDEX_TEMPLATE.format(
-            site_title=SITE_TITLE,
-            site_tagline=SITE_TAGLINE,
-            site_url=SITE_URL or ".", ga_snippet=_ga_snippet(),
-            adsense_snippet=_adsense_snippet(),
-            fonts_url=_google_fonts_url(),
-            hero_html=hero_html, mid_html=mid_html, bottom_html=bottom_html,
-            blog_json_ld=build_blog_index_json_ld(posts),
-            category_pills=category_pills,
-            search_console_meta=_search_console_meta(),
-            footer_html=build_footer_html(),
+            site_title=SITE_TITLE, site_tagline=SITE_TAGLINE, site_url=SITE_URL or ".", ga_snippet=_ga_snippet(),
+            adsense_snippet=_adsense_snippet(), fonts_url=_google_fonts_url(),
+            hero_html=hero_html, mid_html=mid_html, bottom_html=bottom_html, blog_json_ld=build_blog_index_json_ld(posts),
+            category_pills=category_pills, search_console_meta=_search_console_meta(),
+            footer_html='<div class="site-footer"><a href="about.html">블로그 소개</a>·<a href="privacy.html">개인정보처리방침</a>·<a href="contact.html">문의하기</a>'
+                        f'<div style="margin-top:8px;">© {datetime.now().year} {SITE_TITLE}</div></div>',
             translate_widget=_translate_widget(),
         ))
     return posts
 
-STATIC_PAGE_TEMPLATE = """<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{page_title} - {site_title}</title>
-<link rel="icon" type="image/png" href="favicon.png">{search_console_meta}{ga_snippet}{adsense_snippet}
-<style>
-  body {{ max-width: 680px; margin: 0 auto; padding: 40px 20px 60px; font-family: 'Noto Sans KR', -apple-system, sans-serif; line-height: 1.8; color: #222; }}
-  h1 {{ font-size: 1.6em; }}
-  h2 {{ font-size: 1.15em; margin-top: 1.6em; }}
-  a.back {{ color: #4a90d9; text-decoration: none; display:inline-block; margin-bottom: 20px; }}
-</style>
-</head>
-<body>
-<a class="back" href="index.html">← 홈으로</a>
-<h1>{page_title}</h1>
-{page_body}
-</body>
-</html>
-"""
-
-def build_footer_html() -> str:
-    return (
-        '<div class="site-footer">'
-        '<a href="about.html">블로그 소개</a>·'
-        '<a href="privacy.html">개인정보처리방침</a>·'
-        '<a href="contact.html">문의하기</a>'
-        f'<div style="margin-top:8px;">© {datetime.now().year} {SITE_TITLE}</div>'
-        '</div>'
-    )
-
 def generate_static_pages() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
-    common_kwargs = dict(
-        site_title=SITE_TITLE,
-        search_console_meta=_search_console_meta(),
-        ga_snippet=_ga_snippet(),
-        adsense_snippet=_adsense_snippet(),
-    )
+    common_kwargs = dict(site_title=SITE_TITLE, search_console_meta=_search_console_meta(), ga_snippet=_ga_snippet(), adsense_snippet=_adsense_snippet())
     pages = {
-        "about.html": (
-            "블로그 소개",
-            f"<p>{SITE_TITLE}에 오신 것을 환영합니다.</p>"
-            f"<p>{SITE_TAGLINE}</p>"
-            "<p>이 블로그는 다양한 주제의 정보를 정리해서 소개하며, 콘텐츠 제작 과정 일부에 "
-            "AI 도구를 활용하고 있습니다. 게시된 정보는 참고용이며, 중요한 결정을 내리실 때는 "
-            "반드시 공식 출처를 함께 확인해주세요.</p>",
-        ),
-        "privacy.html": (
-            "개인정보처리방침",
-            "<p>본 블로그는 구글 애널리틱스(GA4) 및 구글 애드센스를 통해 방문자 통계와 광고를 "
-            "제공할 수 있습니다. 이 과정에서 쿠키(Cookie)가 사용될 수 있으며, 쿠키를 통해 "
-            "수집되는 정보에는 개인을 직접 식별할 수 있는 정보는 포함되지 않습니다.</p>"
-            "<h2>쿠키 및 광고</h2>"
-            "<p>구글을 포함한 제3자 광고 공급업체는 쿠키를 사용하여 사용자의 이전 방문 기록을 "
-            "기반으로 광고를 게재합니다. 이용자는 "
-            '<a href="https://adssettings.google.com" target="_blank">구글 광고 설정</a>에서 '
-            "맞춤 광고를 비활성화할 수 있습니다.</p>"
-            "<h2>문의</h2>"
-            "<p>개인정보 관련 문의사항은 문의하기 페이지를 통해 연락 주시기 바랍니다.</p>",
-        ),
-        "contact.html": (
-            "문의하기",
-            "<p>블로그 콘텐츠 관련 문의, 협업 제안, 오류 신고 등은 아래 이메일로 연락 주세요.</p>"
-            "<p><b>이메일:</b> 이 페이지의 문구를 직접 열어 본인의 연락처로 수정해주세요.</p>",
-        ),
+        "about.html": ("블로그 소개", f"<p>{SITE_TITLE}에 오신 것을 환영합니다.</p><p>{SITE_TAGLINE}</p><p>이 블로그는 다양한 주제의 정보를 정리해서 소개하며, 콘텐츠 제작 과정 일부에 AI 도구를 활용하고 있습니다. 게시된 정보는 참고용이며, 중요한 결정을 내리실 때는 반드시 공식 출처를 함께 확인해주세요.</p>"),
+        "privacy.html": ("개인정보처리방침", "<p>본 블로그는 구글 애널리틱스(GA4) 및 구글 애드센스를 통해 방문자 통계와 광고를 제공할 수 있습니다. 이 과정에서 쿠키(Cookie)가 사용될 수 있으며, 쿠키를 통해 수집되는 정보에는 개인을 직접 식별할 수 있는 정보는 포함되지 않습니다.</p><h2>쿠키 및 광고</h2><p>구글을 포함한 제3자 광고 공급업체는 쿠키를 사용하여 사용자의 이전 방문 기록을 기반으로 광고를 게재합니다. 이용자는 <a href=\"https://adssettings.google.com\" target=\"_blank\">구글 광고 설정</a>에서 맞춤 광고를 비활성화할 수 있습니다.</p><h2>문의</h2><p>개인정보 관련 문의사항은 문의하기 페이지를 통해 연락 주시기 바랍니다.</p>"),
+        "contact.html": ("문의하기", "<p>블로그 콘텐츠 관련 문의, 협업 제안, 오류 신고 등은 아래 이메일로 연락 주세요.</p><p><b>이메일:</b> 이 페이지의 문구를 직접 열어 본인의 연락처로 수정해주세요.</p>"),
     }
     for filename, (page_title, page_body) in pages.items():
         path = os.path.join(DOCS_DIR, filename)
-        if os.path.exists(path):
-            continue
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
-        logger.info(f"[설정] {filename} 생성됨 (내용은 실제 정보로 직접 수정 권장)")
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
 
 def update_dashboard(posts: List[Dict[str, Any]]) -> None:
-    rows = "\n".join(
-        f'<tr><td>{p["date"]}</td><td>{p["title"]}</td><td><a href="{p["file"]}">보기</a></td></tr>'
-        for p in posts
-    )
+    rows = "\n".join(f'<tr><td>{p["date"]}</td><td>{p["title"]}</td><td><a href="{p["file"]}">보기</a></td></tr>' for p in posts)
     with open(os.path.join(DOCS_DIR, "dashboard.html"), "w", encoding="utf-8") as f:
         f.write(DASHBOARD_TEMPLATE.format(site_title=SITE_TITLE, post_count=len(posts), rows=rows))
 
 def update_seo_files(posts: List[Dict[str, Any]]) -> None:
-    if not SITE_URL:
-        logger.info("[SEO] SITE_URL이 설정되지 않아 sitemap.xml/robots.txt 생성을 건너뜁니다.")
-        return
+    if not SITE_URL: return
     url_entries = "\n".join(f"<url><loc>{SITE_URL}/{p['file']}</loc></url>" for p in posts)
-    with open(os.path.join(DOCS_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
-        f.write(SITEMAP_TEMPLATE.format(site_url=SITE_URL, url_entries=url_entries))
-    with open(os.path.join(DOCS_DIR, "robots.txt"), "w", encoding="utf-8") as f:
-        f.write(ROBOTS_TXT.format(site_url=SITE_URL))
+    with open(os.path.join(DOCS_DIR, "sitemap.xml"), "w", encoding="utf-8") as f: f.write(SITEMAP_TEMPLATE.format(site_url=SITE_URL, url_entries=url_entries))
+    with open(os.path.join(DOCS_DIR, "robots.txt"), "w", encoding="utf-8") as f: f.write(ROBOTS_TXT.format(site_url=SITE_URL))
 
-def _blogger_configured() -> bool:
-    return bool(BLOGGER_BLOG_ID and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN)
-
+def _blogger_configured() -> bool: return bool(BLOGGER_BLOG_ID and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN)
 def _get_blogger_access_token() -> str:
-    resp = requests.post(
-        "https://oauth2.googleapis.com/token",
-        data={
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "refresh_token": GOOGLE_REFRESH_TOKEN,
-            "grant_type": "refresh_token",
-        },
-        timeout=15,
-    )
+    resp = requests.post("https://oauth2.googleapis.com/token", data={"client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET, "refresh_token": GOOGLE_REFRESH_TOKEN, "grant_type": "refresh_token"}, timeout=15)
     resp.raise_for_status()
     return resp.json()["access_token"]
-
 def _make_blogger_safe_html(html_body: str) -> str:
     if SITE_URL:
-        html_body = html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/')
-        html_body = html_body.replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/')
-        html_body = html_body.replace('src="../thumbs/', f'src="{SITE_URL}/thumbs/')
-    else:
-        html_body = re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body)
-        html_body = re.sub(r'<img src="\.\./thumbs/[^"]*"[^>]*>', "", html_body)
-    return html_body
+        return html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/').replace('src="../thumbs/', f'src="{SITE_URL}/thumbs/')
+    return re.sub(r'<img src="\.\./thumbs/[^"]*"[^>]*>', "", re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body))
 
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
-    if not _blogger_configured():
-        logger.info("[블로거] 관련 Secrets가 없어 건너뜁니다 (GitHub Pages만 발행).")
-        return
+    if not _blogger_configured(): return
     try:
         access_token = _get_blogger_access_token()
         theme = get_theme(article.get("category", "라이프스타일"))
         today = datetime.now().strftime("%Y-%m-%d")
         blogger_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="blogger")
         try:
-            with open(local_thumb_path, "rb") as f:
-                img_b64 = base64.b64encode(f.read()).decode("ascii")
-            img_src = f"data:image/webp;base64,{img_b64}"
-        except Exception as e:
-            logger.warning(f"[블로거] 썸네일 base64 인코딩 실패, 외부 링크로 대체: {e}")
-            img_src = thumb_url
+            with open(local_thumb_path, "rb") as f: img_src = f"data:image/webp;base64,{base64.b64encode(f.read()).decode('ascii')}"
+        except: img_src = thumb_url
         content_html = (
             f'{_translate_widget()}'
             f'<img src="{img_src}" style="max-width:100%;border-radius:8px;" alt="{article["title"]}">'
-            f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
-            f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
-            f'{_make_blogger_safe_html(article["html_body"])}'
-            f'<script type="application/ld+json">{blogger_json_ld}</script>'
+            f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
+            f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
         )
         url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/"
-        payload = {"title": article["title"], "content": content_html}
-        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, json={"title": article["title"], "content": content_html}, timeout=30)
         resp.raise_for_status()
-        result = resp.json()
-        logger.info(f"[블로거] 발행 완료: {result.get('url', '(URL 확인 불가)')}")
+        logger.info(f"[블로거] 발행 완료: {resp.json().get('url', '(URL 확인 불가)')}")
     except Exception as e:
-        logger.error(f"[블로거] 발행 실패 (GitHub Pages 발행은 정상 진행됨): {e}")
+        logger.error(f"[블로거] 발행 실패: {e}")
 
 def ensure_nojekyll() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
-    nojekyll_path = os.path.join(DOCS_DIR, ".nojekyll")
-    if not os.path.exists(nojekyll_path):
-        open(nojekyll_path, "w").close()
-        logger.info("[설정] .nojekyll 파일 생성 (Jekyll 가공 비활성화)")
+    if not os.path.exists(os.path.join(DOCS_DIR, ".nojekyll")):
+        open(os.path.join(DOCS_DIR, ".nojekyll"), "w").close()
 
 def run() -> None:
-    if len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh":
-        fetch_and_update_trends_queue()
+    is_refresh_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh"
+    
+    # 30분 단위 트리거 시 구글 트렌드에서 5000이상 조회수 키워드만 가져와 큐 갱신
+    fetch_and_update_trends_queue()
+    if is_refresh_only:
         return
 
-    fetch_and_update_trends_queue()
+    # 수동 제목 입력 여부 확인
+    manual_title = ""
+    if len(sys.argv) > 1 and sys.argv[1].strip() and sys.argv[1].strip().lower() not in ["publish", "refresh"]:
+        manual_title = sys.argv[1].strip()
 
-    title = get_title_from_args_or_queue()
+    title = ""
+    if manual_title:
+        title = manual_title
+    else:
+        # 수동 발동이 아닌 스케줄러에 의한 실행일 경우 하루 3회 제한 확인
+        if not check_daily_limit():
+            logger.info("오늘의 자동 발행 한도(3회)를 모두 소진하여 포스팅을 생략합니다.")
+            return
+            
+        queue = load_queue()
+        if not queue.get("pending"):
+            logger.info("대기 중인 (5000회 이상) 핫이슈 키워드가 없습니다.")
+            return
+            
+        title = queue["pending"].pop(0)
+        queue.setdefault("completed", []).append(title)
+        save_queue(queue)
+
     logger.info(f"[처리 시작] 제목: {title}")
 
     ensure_nojekyll()
@@ -1590,8 +1299,11 @@ def run() -> None:
     update_seo_files(posts)
     publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
 
+    # 포스팅 발행 프로세스 성공 후 일일 카운트 증가 처리 (자동 생성건에 한함)
+    if not manual_title:
+        increment_daily_count()
+
     logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
-    logger.info("대시보드/사이트맵 갱신 완료")
 
 
 if __name__ == "__main__":
