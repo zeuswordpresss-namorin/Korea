@@ -4,6 +4,10 @@ GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립
 - 구글 트렌드 자동 수집 + 자동 포스팅 파이프라인 통합
 - UI 개선(표 좌측상단 오류 수정) 및 서론 호기심 유발 프롬프트 적용
 - [추가] 로깅 시스템 도입 및 타입 힌트 강화
+- [수정] 마크다운 자동링크(`[url](url)`) 형태로 깨져있던 모든 URL 문자열을 순수 URL로 복구
+  (GA/애드센스/번역위젯/구글폰트/JSON-LD/사이트맵/대시보드 링크가 전부 렌더링되지 않던 문제)
+- [수정] FAQ 정리 정규식이 본문 뒤쪽 임의의 </table>까지 통째로 삭제하던 문제 → 매칭 범위를 헤더 직후로 제한
+- [수정] 제목 워드랩 시 단어가 max_width보다 길고 현재 줄이 비어있지 않을 때 줄바꿈 없이 그대로 붙던 문제 수정
 """
 
 import base64
@@ -53,11 +57,11 @@ QUEUE_FILE = "keywords_queue.json"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 SITE_TITLE = os.environ.get("SITE_TITLE", "내 자동 블로그")
 SITE_TAGLINE = os.environ.get("SITE_TAGLINE", "매일 자동으로 업데이트되는 정보 큐레이션 블로그")
-SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")  
-GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")  
-GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")  
-ADSENSE_CLIENT_ID = os.environ.get("ADSENSE_CLIENT_ID", "")  
-ADSENSE_SLOT_ID = os.environ.get("ADSENSE_SLOT_ID", "")  
+SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
+GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")
+GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")
+ADSENSE_CLIENT_ID = os.environ.get("ADSENSE_CLIENT_ID", "")
+ADSENSE_SLOT_ID = os.environ.get("ADSENSE_SLOT_ID", "")
 
 COUPANG_PARTNER_TAG = os.environ.get("COUPANG_PARTNER_TAG", "")
 COUPANG_ACCESS_KEY = os.environ.get("COUPANG_ACCESS_KEY", "")
@@ -69,8 +73,8 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 
 FONT_CANDIDATES = [
-    "font.ttf",  
-    "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",  
+    "font.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
 ]
 
 DOCS_DIR = "docs"
@@ -348,7 +352,7 @@ def _ga_snippet() -> str:
     if not GA_MEASUREMENT_ID:
         return ""
     return f"""
-<script async src="[https://www.googletagmanager.com/gtag/js?id=](https://www.googletagmanager.com/gtag/js?id=){GA_MEASUREMENT_ID}"></script>
+<script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){{dataLayer.push(arguments);}}
@@ -375,13 +379,13 @@ function googleTranslateElementInit() {
   new google.translate.TranslateElement({pageLanguage: 'ko', autoDisplay: false}, 'google_translate_element');
 }
 </script>
-<script src="//[translate.google.com/translate_a/element.js?cb=googleTranslateElementInit](https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit)"></script>"""
+<script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>"""
 
 def _adsense_snippet() -> str:
     if not ADSENSE_CLIENT_ID:
         return ""
     return (
-        f'\n<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js)'
+        f'\n<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js'
         f'?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
     )
 
@@ -415,7 +419,7 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
 
     if schema_type == "FAQPage" and article.get("faq_items"):
         data = {
-            "@context": "[https://schema.org](https://schema.org)",
+            "@context": "https://schema.org",
             "@type": "FAQPage",
             "mainEntity": [
                 {
@@ -428,7 +432,7 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
         }
     elif schema_type == "HowTo" and article.get("howto_steps"):
         data = {
-            "@context": "[https://schema.org](https://schema.org)",
+            "@context": "https://schema.org",
             "@type": "HowTo",
             "name": title,
             "description": meta_description,
@@ -440,7 +444,7 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
     else:
         schema_type = article_type
         data = {
-            "@context": "[https://schema.org](https://schema.org)",
+            "@context": "https://schema.org",
             "@type": article_type,
             "headline": title,
             "description": meta_description,
@@ -475,12 +479,12 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
             ],
         })
 
-    graph_data = {"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}
+    graph_data = {"@context": "https://schema.org", "@graph": graph_nodes}
     return json.dumps(graph_data, ensure_ascii=False, indent=2)
 
 def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
     data = {
-        "@context": "[https://schema.org](https://schema.org)",
+        "@context": "https://schema.org",
         "@type": "Blog",
         "name": SITE_TITLE,
         "url": (SITE_URL + "/") if SITE_URL else ".",
@@ -516,8 +520,8 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <meta name="twitter:title" content="{title}">
 <meta name="twitter:description" content="{meta_description}">
 <meta name="twitter:image" content="{thumb_url}">
-<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
-<link href="[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family={font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
 <script type="application/ld+json">
 {json_ld}
 </script>{ga_snippet}{adsense_snippet}
@@ -591,7 +595,7 @@ ALL_THEME_FONTS = sorted({t["font"] for t in CATEGORY_THEMES.values()})
 
 def _google_fonts_url() -> str:
     families = "&family=".join(ALL_THEME_FONTS)
-    return f"[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
+    return f"https://fonts.googleapis.com/css2?family={families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -602,7 +606,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{site_title} - 자동으로 업데이트되는 블로그">
 <link rel="canonical" href="{site_url}/">
 <link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
-<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="{fonts_url}" rel="stylesheet">
 <script type="application/ld+json">
 {blog_json_ld}
@@ -627,7 +631,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .tier-label:first-of-type {{ margin-top: 10px; }}
 
   .hero {{ display:block; text-decoration:none; color:#1a1a1a; background:#fff; border-radius:20px; overflow:hidden; box-shadow: 0 6px 24px rgba(0,0,0,0.10); }}
-  .hero img {{ width:100%; aspect-ratio: 21/9; object-fit:cover; display:block; }}
+  .hero img {{ width:100%; aspect-ratio: 16/9; object-fit:cover; display:block; }}
   .hero-body {{ padding: clamp(16px, 4vw, 22px) clamp(18px, 5vw, 26px) 28px; }}
   .hero-badge {{ display:inline-block; font-size:0.8em; font-weight:700; color:#fff; padding:5px 14px; border-radius:999px; margin-bottom:12px; }}
   .hero-title {{ font-size: clamp(1.25em, 4.5vw, 1.7em); font-weight:800; line-height:1.35; word-break: keep-all; }}
@@ -714,25 +718,25 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <div class="card">
   <b>실시간 트래픽 확인 (GA4)</b><br>
   플레이스토어 "Google Analytics" 앱 설치 후 이 사이트의 방문자/인기글을 확인하세요.<br>
-  <a href="[https://analytics.google.com](https://analytics.google.com)" target="_blank">analytics.google.com 바로가기</a>
+  <a href="https://analytics.google.com" target="_blank">analytics.google.com 바로가기</a>
 </div>
 
 <div class="card">
   <b>수익(쿠팡 마크업 수수료) 확인</b><br>
   쿠팡파트너스 앱 또는 사이트에서 클릭수/수익을 확인하세요.<br>
-  <a href="[https://partners.coupang.com](https://partners.coupang.com)" target="_blank">partners.coupang.com 바로가기</a>
+  <a href="https://partners.coupang.com" target="_blank">partners.coupang.com 바로가기</a>
 </div>
 
 <div class="card">
   <b>광고 수익(애드센스) 확인</b><br>
   플레이스토어 "Google AdSense" 앱 설치 후 페이지뷰/광고 수익(전면광고 포함)을 확인하세요.<br>
-  <a href="[https://www.google.com/adsense](https://www.google.com/adsense)" target="_blank">adsense.google.com 바로가기</a>
+  <a href="https://www.google.com/adsense" target="_blank">adsense.google.com 바로가기</a>
 </div>
 
 <div class="card">
   <b>검색 노출 확인 (Google Search Console)</b><br>
   사이트가 구글 검색에 얼마나 노출/클릭되는지 확인하세요. 최초 1회 소유권 인증이 필요합니다.<br>
-  <a href="[https://search.google.com/search-console](https://search.google.com/search-console)" target="_blank">[search.google.com/search-console](https://search.google.com/search-console) 바로가기</a>
+  <a href="https://search.google.com/search-console" target="_blank">search.google.com/search-console 바로가기</a>
 </div>
 
 <h2>발행된 글 목록 ({post_count}개)</h2>
@@ -745,7 +749,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 """
 
 SITEMAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="[http://www.sitemaps.org/schemas/sitemap/0.9](http://www.sitemaps.org/schemas/sitemap/0.9)">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 <url><loc>{site_url}/</loc></url>
 {url_entries}
 </urlset>
@@ -869,30 +873,47 @@ def _fetch_illustration(category: str, size: Tuple[int, int], seed: int):
         return None
 
 def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
+    """
+    [수정] 기존 코드는 candidate(현재줄+단어)가 max_width를 넘고 current가 비어있지
+    않은 경우, current를 flush하지 않고 그대로 candidate 취급 로직을 타지 못해
+    단어가 그대로 이어붙는 문제가 있었다. 여기서는 candidate가 넘치면
+    항상 먼저 현재 줄을 확정(flush)한 뒤, 단어 자체가 너무 길면 글자 단위로
+    쪼갠다.
+    """
     words = text.split(" ")
-    lines = []
+    lines: List[str] = []
     current = ""
-    def width_of(s):
+
+    def width_of(s: str) -> int:
         bbox = draw.textbbox((0, 0), s, font=font)
         return bbox[2] - bbox[0]
+
     for word in words:
         candidate = f"{current} {word}".strip()
-        if width_of(candidate) <= max_width or not current:
-            if width_of(candidate) <= max_width:
-                current = candidate
-                continue
-            chunk = ""
-            for ch in word:
-                if width_of(chunk + ch) <= max_width:
-                    chunk += ch
-                else:
-                    if chunk:
-                        lines.append(chunk)
-                    chunk = ch
-            current = chunk
-        else:
+        if width_of(candidate) <= max_width:
+            current = candidate
+            continue
+
+        # 현재 줄에 내용이 있으면 먼저 확정
+        if current:
             lines.append(current)
+            current = ""
+
+        if width_of(word) <= max_width:
             current = word
+            continue
+
+        # 단어 자체가 max_width보다 긴 경우 글자 단위로 분할
+        chunk = ""
+        for ch in word:
+            if width_of(chunk + ch) <= max_width:
+                chunk += ch
+            else:
+                if chunk:
+                    lines.append(chunk)
+                chunk = ch
+        current = chunk
+
     if current:
         lines.append(current)
     return lines
@@ -954,7 +975,7 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
     img.convert("RGB").save(output_path, format="WEBP", quality=82, method=6)
 
 BRAND_GRADIENT = [(15, 23, 42), (30, 41, 59), (51, 65, 85)]
-BRAND_ACCENT = (250, 204, 21) 
+BRAND_ACCENT = (250, 204, 21)
 LOGO_SIZE = (512, 512)
 BANNER_SIZE = (1600, 420)
 
@@ -1135,7 +1156,7 @@ def enhance_tables(html_body: str, accent: str) -> str:
         table_html = match.group(0)
         styled_table = _style_cells(table_html, 460)
         modal_table = _style_cells(table_html, 420)
-        
+
         return (
             f'<div style="overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;margin:1.2em 0 0.4em;'
             f'border-radius:8px;border:1px solid #eee;">{styled_table}</div>'
@@ -1291,7 +1312,13 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     post_filename = f"{slug}-{today}.html"
     generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category)
     cleaned_body = article["html_body"]
-    cleaned_body = re.sub(r"<h[23]>자주\s*묻는\s*질문.*?</table>", "", cleaned_body, flags=re.DOTALL | re.IGNORECASE)
+    # [수정] 기존에는 "자주 묻는 질문" 헤더 뒤 본문 어디든 처음 나오는 </table>까지
+    # 통째로(.*?, DOTALL) 삭제되어, 헤더 뒤에 무관한 콘텐츠가 있으면 함께 날아갔다.
+    # 헤더 직후 최대 400자 이내에서만 매칭되도록 범위를 제한했다.
+    cleaned_body = re.sub(
+        r"<h[23]>[^<]*자주\s*묻는\s*질문[^<]*</h[23]>.{0,400}?</table>",
+        "", cleaned_body, flags=re.DOTALL | re.IGNORECASE
+    )
     article["html_body"] = cleaned_body
     article["html_body"] = enhance_tables(article["html_body"], theme["accent"])
     article = insert_content_image(article, slug)
@@ -1589,10 +1616,10 @@ def run() -> None:
     article = insert_manual_ads(article)
     article = add_coupang_markup(article)
     article = add_ymyl_disclaimer(article)
-    
+
     post_meta, json_ld, thumb_url, local_thumb_path, post_url = save_post(article)
     posts = update_index(post_meta)
-    
+
     update_dashboard(posts)
     update_seo_files(posts)
     publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
