@@ -753,8 +753,13 @@ def generate_article(title: str) -> Dict[str, Any]:
 
 def _load_font(size: int):
     for path in FONT_CANDIDATES:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception as e:
+                # [FIX] 다운로드가 중간에 끊겨 0바이트/손상된 폰트 파일이 생겨도
+                # 여기서 죽지 않고 다음 후보 폰트로 넘어가도록 방어
+                logger.warning(f"폰트 파일 '{path}' 로드 실패({e}), 다음 후보로 대체합니다.")
     logger.warning("한글 폰트를 찾지 못해 기본 폰트로 대체합니다 (한글이 깨져 보일 수 있음).")
     return ImageFont.load_default()
 
@@ -1349,7 +1354,14 @@ def _wordpress_configured() -> bool:
     return bool(WORDPRESS_URL and WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD)
 
 def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
-    if not _wordpress_configured(): return
+    if not _wordpress_configured():
+        missing = [name for name, val in [
+            ("WORDPRESS_URL", WORDPRESS_URL),
+            ("WORDPRESS_USERNAME", WORDPRESS_USERNAME),
+            ("WORDPRESS_APP_PASSWORD", WORDPRESS_APP_PASSWORD),
+        ] if not val]
+        logger.info(f"[워드프레스] 미설정으로 건너뜁니다. (비어있는 값: {', '.join(missing)})")
+        return
     try:
         auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
         auth_header = f"Basic {auth_token}"
