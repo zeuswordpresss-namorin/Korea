@@ -65,11 +65,16 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 
 # --- [NEW] 워드프레스 동시 자동 발행 관련 환경변수 ---
-# 워드프레스 관리자 계정에서 "사용자 > 프로필 > Application Passwords"로 발급받은
-# 애플리케이션 비밀번호를 사용합니다(REST API 기본 인증, Basic Auth).
-WORDPRESS_URL = os.environ.get("WORDPRESS_URL", "").rstrip("/")          # 예: https://myblog.com
-WORDPRESS_USERNAME = os.environ.get("WORDPRESS_USERNAME", "")            # 워드프레스 관리자 아이디
-WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD", "")    # Application Password
+# [FIX] *.wordpress.com 호스팅 블로그(예: kresonate.wordpress.com)는 자체 호스팅 워드프레스와
+# 완전히 다른 API(public-api.wordpress.com)를 쓰고, Basic Auth(Application Password)가 아니라
+# OAuth2만 지원합니다. 그래서 WORDPRESS_CLIENT_ID/SECRET이 설정되면 워드프레스닷컴 OAuth2 방식을,
+# 없으면 자체 호스팅용 Basic Auth 방식(wp-json/wp/v2)을 자동으로 사용합니다.
+WORDPRESS_URL = os.environ.get("WORDPRESS_URL", "").rstrip("/")          # 예: kresonate.wordpress.com 또는 https://myblog.com
+WORDPRESS_USERNAME = os.environ.get("WORDPRESS_USERNAME", "")            # 워드프레스 로그인 아이디
+WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD", "")    # Application Password (워드프레스닷컴은 계정보안>2단계인증 페이지에서 발급)
+# 워드프레스닷컴 전용: https://developer.wordpress.com/apps/new/ 에서 앱 등록 후 발급되는 값
+WORDPRESS_CLIENT_ID = os.environ.get("WORDPRESS_CLIENT_ID", "")
+WORDPRESS_CLIENT_SECRET = os.environ.get("WORDPRESS_CLIENT_SECRET", "")
 
 # --- [NEW] 네이버 블로그 자동 발행 관련 환경변수 ---
 # 주의: 네이버 '글쓰기 오픈API'(writePost)는 2020-05-06자로 공식 종료되어 더 이상 사용할 수 없습니다.
@@ -77,6 +82,10 @@ WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD", "")    # Appli
 FONT_CANDIDATES = [
     "font.ttf",
     "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothic-Bold.ttf",
+    # [FIX] 나눔고딕 설치가 실패할 경우를 대비한 2차 후보 (Noto Sans CJK, 한글 지원)
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
 ]
 
 DOCS_DIR = "docs"
@@ -1344,14 +1353,119 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         logger.error(f"[블로거] 발행 실패: {e}")
 
 # =====================================================================
-# [NEW] 워드프레스 동시 자동 발행
-# - 워드프레스 REST API(wp-json/wp/v2)를 Application Password(기본 인증)로 호출합니다.
-# - 준비물: 워드프레스 관리자 계정 > 사용자 > 프로필 > "Application Passwords"에서
-#   이름(임의)을 입력해 발급받은 비밀번호(공백 포함 24자리 형태)를 그대로 사용합니다.
-# - 미설정 시 조용히 건너뛰며, 실패해도 다른 발행 채널(GitHub Pages/Blogger)에는 영향 없습니다.
+# [NEW] 워드프레스 동시 자동 발행 (워드프레스닷컴/Jetpack용 OAuth2 + 자체호스팅용 Basic Auth 자동 분기)
+# - [FIX] *.wordpress.com 호스팅 사이트(예: kresonate.wordpress.com)는 자체 호스팅 워드프레스와 전혀
+#   다른 API(public-api.wordpress.com)를 쓰고 Basic Auth(Application Password)를 지원하지 않습니다.
+#   OAuth2만 가능합니다. 그래서 WORDPRESS_CLIENT_ID/SECRET이 설정되어 있으면 워드프레스닷컴 OAuth2
+#   "password grant" 방식을 쓰고, 없으면 기존 자체호스팅용 Basic Auth 방식으로 동작합니다.
+# - [워드프레스닷컴 준비물]
+#   1) https://developer.wordpress.com/apps/new/ 에서 앱 등록 → Client ID / Client Secret 발급
+#      (Redirect URI는 password grant에는 쓰이지 않으므로 아무 값이나 입력 가능, 예: https://localhost)
+#   2) 워드프레스닷컴 계정 보안 설정(2단계 인증 활성화 후 my.wordpress.com/me/security)에서
+#      Application Password 발급 → WORDPRESS_APP_PASSWORD 로 사용
+#   3) WORDPRESS_URL에는 사이트 주소(예: kresonate.wordpress.com)를 입력
+# - 미설정 시 조용히 건너뛰며(로그로 사유 표시), 실패해도 다른 발행 채널에는 영향 없습니다.
 # =====================================================================
 def _wordpress_configured() -> bool:
     return bool(WORDPRESS_URL and WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD)
+
+def _wordpress_is_com_mode() -> bool:
+    # Client ID/Secret이 있으면 워드프레스닷컴(OAuth2) 모드로 판단
+    return bool(WORDPRESS_CLIENT_ID and WORDPRESS_CLIENT_SECRET)
+
+def _get_wordpress_com_access_token() -> str:
+    resp = requests.post(
+        "https://public-api.wordpress.com/oauth2/token",
+        data={
+            "client_id": WORDPRESS_CLIENT_ID,
+            "client_secret": WORDPRESS_CLIENT_SECRET,
+            "grant_type": "password",
+            "username": WORDPRESS_USERNAME,
+            "password": WORDPRESS_APP_PASSWORD,
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if "access_token" not in data:
+        raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패: {data}")
+    return data["access_token"]
+
+def _publish_to_wordpress_com(article: Dict[str, Any], canonical_url: str, thumb_url: str) -> None:
+    access_token = _get_wordpress_com_access_token()
+    theme = get_theme(article.get("category", "라이프스타일"))
+    site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
+
+    content_html = (
+        f'<img src="{thumb_url}" alt="{article["title"]}" /><br>'
+        f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
+        f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
+        f'{article["html_body"]}'
+        f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
+    )
+    payload = {
+        "title": article["title"],
+        "content": content_html,
+        "status": "publish",
+        "excerpt": article.get("meta_description", ""),
+    }
+    resp = requests.post(
+        f"https://public-api.wordpress.com/rest/v1.1/sites/{site}/posts/new",
+        headers={"Authorization": f"Bearer {access_token}"},
+        data=payload,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    logger.info(f"[워드프레스] 발행 완료(워드프레스닷컴): {resp.json().get('URL', '(URL 확인 불가)')}")
+
+def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
+    auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
+    auth_header = f"Basic {auth_token}"
+    theme = get_theme(article.get("category", "라이프스타일"))
+
+    # 대표이미지(썸네일) 업로드 (실패해도 본문 발행은 계속 진행)
+    featured_media_id = None
+    try:
+        with open(local_thumb_path, "rb") as f:
+            img_bytes = f.read()
+        media_resp = requests.post(
+            f"{WORDPRESS_URL}/wp-json/wp/v2/media",
+            headers={
+                "Authorization": auth_header,
+                "Content-Disposition": f'attachment; filename="{os.path.basename(local_thumb_path)}"',
+                "Content-Type": "image/webp",
+            },
+            data=img_bytes,
+            timeout=30,
+        )
+        media_resp.raise_for_status()
+        featured_media_id = media_resp.json().get("id")
+    except Exception as e:
+        logger.warning(f"[워드프레스] 대표이미지 업로드 실패, 이미지 없이 발행합니다: {e}")
+
+    content_html = (
+        f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
+        f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
+        f'{article["html_body"]}'
+        f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
+    )
+    payload = {
+        "title": article["title"],
+        "content": content_html,
+        "status": "publish",
+        "excerpt": article.get("meta_description", ""),
+    }
+    if featured_media_id:
+        payload["featured_media"] = featured_media_id
+
+    resp = requests.post(
+        f"{WORDPRESS_URL}/wp-json/wp/v2/posts",
+        headers={"Authorization": auth_header, "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    logger.info(f"[워드프레스] 발행 완료(자체호스팅): {resp.json().get('link', '(URL 확인 불가)')}")
 
 def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
     if not _wordpress_configured():
@@ -1363,53 +1477,15 @@ def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url:
         logger.info(f"[워드프레스] 미설정으로 건너뜁니다. (비어있는 값: {', '.join(missing)})")
         return
     try:
-        auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
-        auth_header = f"Basic {auth_token}"
-        theme = get_theme(article.get("category", "라이프스타일"))
-
-        # 1) 대표이미지(썸네일) 업로드 (실패해도 본문 발행은 계속 진행)
-        featured_media_id = None
-        try:
-            with open(local_thumb_path, "rb") as f:
-                img_bytes = f.read()
-            media_resp = requests.post(
-                f"{WORDPRESS_URL}/wp-json/wp/v2/media",
-                headers={
-                    "Authorization": auth_header,
-                    "Content-Disposition": f'attachment; filename="{os.path.basename(local_thumb_path)}"',
-                    "Content-Type": "image/webp",
-                },
-                data=img_bytes,
-                timeout=30,
+        if _wordpress_is_com_mode():
+            _publish_to_wordpress_com(article, canonical_url, thumb_url)
+        else:
+            logger.warning(
+                "[워드프레스] WORDPRESS_CLIENT_ID/SECRET이 없어 자체호스팅용 Basic Auth 방식을 시도합니다. "
+                "워드프레스닷컴(*.wordpress.com) 사이트라면 이 방식은 항상 실패합니다 — "
+                "https://developer.wordpress.com/apps/new/ 에서 앱을 등록하세요."
             )
-            media_resp.raise_for_status()
-            featured_media_id = media_resp.json().get("id")
-        except Exception as e:
-            logger.warning(f"[워드프레스] 대표이미지 업로드 실패, 이미지 없이 발행합니다: {e}")
-
-        content_html = (
-            f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
-            f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
-            f'{article["html_body"]}'
-            f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
-        )
-        payload = {
-            "title": article["title"],
-            "content": content_html,
-            "status": "publish",
-            "excerpt": article.get("meta_description", ""),
-        }
-        if featured_media_id:
-            payload["featured_media"] = featured_media_id
-
-        resp = requests.post(
-            f"{WORDPRESS_URL}/wp-json/wp/v2/posts",
-            headers={"Authorization": auth_header, "Content-Type": "application/json"},
-            json=payload,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        logger.info(f"[워드프레스] 발행 완료: {resp.json().get('link', '(URL 확인 불가)')}")
+            _publish_to_wordpress_self_hosted(article, canonical_url, local_thumb_path)
     except Exception as e:
         logger.error(f"[워드프레스] 발행 실패: {e}")
 
