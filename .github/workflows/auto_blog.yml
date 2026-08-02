@@ -37,7 +37,7 @@ jobs:
       - name: 무료 한글 폰트 다운로드 (나눔고딕)
         run: |
           curl -fsSL -o font.ttf \
-            "https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf" \
+            "[https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf](https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf)" \
             --max-time 30 || echo "폰트 다운로드 실패, 기본 폰트로 대체됩니다."
 
       - name: 필요 패키지 설치
@@ -61,11 +61,9 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          # --- [NEW] 워드프레스 동시 자동 발행 ---
           WORDPRESS_URL: ${{ vars.WORDPRESS_URL }}
           WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
-          # --- [NEW] 썸네일용 무료 스톡 이미지(Pexels, 출처 표기) ---
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "refresh" ]; then
