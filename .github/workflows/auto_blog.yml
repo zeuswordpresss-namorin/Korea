@@ -38,7 +38,8 @@ jobs:
         run: |
           # [FIX] curl 다운로드가 네트워크 상황에 따라 조용히 실패해 썸네일 한글이 깨지는 문제가
           # 있었습니다. Ubuntu 저장소의 fonts-nanum 패키지를 1순위로 사용해 안정성을 높입니다.
-          sudo apt-get update -qq && sudo apt-get install -y fonts-nanum || echo "apt 폰트 설치 실패, curl로 백업 시도"
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-nanum fonts-noto-cjk || echo "apt 폰트 설치 실패, curl로 백업 시도"
           if [ ! -f /usr/share/fonts/truetype/nanum/NanumGothicBold.ttf ]; then
             curl -fsSL -o font.ttf \
               "https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf" \
@@ -73,9 +74,13 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           # --- [NEW] 워드프레스 동시 자동 발행 ---
+          # WORDPRESS_CLIENT_ID/SECRET이 있으면 워드프레스닷컴(*.wordpress.com) OAuth2 방식,
+          # 없으면 자체호스팅 워드프레스용 Basic Auth 방식으로 자동 분기합니다.
           WORDPRESS_URL: ${{ vars.WORDPRESS_URL }}
           WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
+          WORDPRESS_CLIENT_ID: ${{ secrets.WORDPRESS_CLIENT_ID }}
+          WORDPRESS_CLIENT_SECRET: ${{ secrets.WORDPRESS_CLIENT_SECRET }}
           # --- [NEW] 썸네일용 무료 스톡 이미지(Pexels, 출처 표기) ---
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
