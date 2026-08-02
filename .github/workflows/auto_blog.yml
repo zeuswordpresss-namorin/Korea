@@ -12,11 +12,11 @@ on:
           - publish
           - refresh
       title:
-        description: "블로그 제목 (비워두면 5000회 이상 조회수 큐에서 자동 발췌)"
+        description: "블로그 제목 (비워두면 10000회 이상 조회수 큐에서 자동 발췌)"
         required: false
         default: ""
   schedule:
-    - cron: "*/30 * * * *"   # 30분 간격으로 써치 및 포스팅 (일일 최대 3회로 스크립트 내부 제어됨)
+    - cron: "*/30 * * * *"   # 30분 간격으로 써치 및 포스팅 (일일 최대 5회로 스크립트 내부 제어됨)
 
 permissions:
   contents: write
@@ -61,6 +61,12 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          # --- [NEW] 워드프레스 동시 자동 발행 ---
+          WORDPRESS_URL: ${{ vars.WORDPRESS_URL }}
+          WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
+          WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
+          # --- [NEW] 썸네일용 무료 스톡 이미지(Pexels, 출처 표기) ---
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "refresh" ]; then
             python generate_post.py refresh
