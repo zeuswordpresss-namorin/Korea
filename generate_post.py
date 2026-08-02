@@ -2,7 +2,7 @@
 """
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
 - [스토리텔링 강화] 호기심 천국, 세상에 이런 일이 스타일의 흥미진진한 트렌드 원인 분석형 프롬프트 적용
-- [업그레이드] 조회수 5000회 이상 핫이슈 필터링 및 하루 최대 3회 발행 제한
+- [업그레이드] 조회수 10000회(1만) 이상 핫이슈 필터링 및 하루 최대 5회 발행 제한
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 """
 
@@ -64,6 +64,16 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 
+# --- [NEW] 워드프레스 동시 자동 발행 관련 환경변수 ---
+# 워드프레스 관리자 계정에서 "사용자 > 프로필 > Application Passwords"로 발급받은
+# 애플리케이션 비밀번호를 사용합니다(REST API 기본 인증, Basic Auth).
+WORDPRESS_URL = os.environ.get("WORDPRESS_URL", "").rstrip("/")          # 예: https://myblog.com
+WORDPRESS_USERNAME = os.environ.get("WORDPRESS_USERNAME", "")            # 워드프레스 관리자 아이디
+WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD", "")    # Application Password
+
+# --- [NEW] 네이버 블로그 자동 발행 관련 환경변수 ---
+# 주의: 네이버 '글쓰기 오픈API'(writePost)는 2020-05-06자로 공식 종료되어 더 이상 사용할 수 없습니다.
+# 따라서 아래는 Playwright 브라우저 자동화(로그인 → 글쓰기 화면 조작) 방식을 사용합니다.
 FONT_CANDIDATES = [
     "font.ttf",
     "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
@@ -144,12 +154,30 @@ ILLUSTRATION_PROMPTS = {
 }
 ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black or monochromatic vector lines, no watermark, no text"
 
+# --- [NEW] 썸네일용 무료 스톡 이미지(출처 표기) 검색 설정 ---
+# 기존 "AI로 썸네일 이미지 생성" 방식을 없애고, Pexels 무료 이미지 API에서 실제 사진을 검색해
+# 저작권 출처(작가명/링크)를 함께 표기하는 방식으로 변경합니다.
+# 준비물: https://www.pexels.com/api/ 에서 무료로 발급받는 API 키를 PEXELS_API_KEY 환경변수로 전달.
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+STOCK_SEARCH_TERMS = {
+    "뷰티패션": "cosmetics makeup fashion",
+    "푸드맛집": "food restaurant dish",
+    "여행": "travel landscape destination",
+    "테크IT": "laptop computer technology",
+    "재테크머니": "money finance coins",
+    "헬스운동": "fitness workout gym",
+    "홈인테리어": "home interior cozy",
+    "대출보험": "bank finance document",
+    "정부지원금": "government building document",
+    "라이프스타일": "lifestyle coffee cozy",
+}
+
 
 # =====================================================================
 # 구글 트렌드 파싱 (트래픽 필터 포함) 및 큐/제한 관리 함수들
 # =====================================================================
 
-def fetch_high_traffic_trends(min_traffic: int = 5000) -> List[str]:
+def fetch_high_traffic_trends(min_traffic: int = 10000) -> List[str]:
     """조회수가 일정 수치 이상인 트렌드 키워드만 파싱하여 반환합니다."""
     headers = {
         "User-Agent": (
@@ -163,7 +191,7 @@ def fetch_high_traffic_trends(min_traffic: int = 5000) -> List[str]:
         root = ET.fromstring(response.content)
         
         # Google Trends Daily RSS의 namespace 정의
-        ns = {"ht": "[https://trends.google.com/trends/trendingsearches/daily](https://trends.google.com/trends/trendingsearches/daily)"}
+        ns = {"ht": "https://trends.google.com/trends/trendingsearches/daily"}
         high_traffic_keywords = []
         
         for item in root.iter("item"):
@@ -206,11 +234,11 @@ def save_queue(queue: Dict[str, Any]) -> None:
 
 def fetch_and_update_trends_queue() -> None:
     logger.info("=" * 60)
-    logger.info("[구글 트렌드] 조회수 5000 이상 인기 검색어 수집 시작...")
-    trends = fetch_high_traffic_trends(min_traffic=5000)
+    logger.info("[구글 트렌드] 조회수 10000(1만) 이상 인기 검색어 수집 시작...")
+    trends = fetch_high_traffic_trends(min_traffic=10000)
     
     if not trends:
-        logger.info("조건(5000회 이상)을 만족하는 신규 핫이슈 트렌드가 없거나 수집에 실패했습니다.")
+        logger.info("조건(10000회 이상)을 만족하는 신규 핫이슈 트렌드가 없거나 수집에 실패했습니다.")
         logger.info("=" * 60)
         return
 
@@ -222,19 +250,19 @@ def fetch_and_update_trends_queue() -> None:
     queue["pending"].extend(new_keywords)
     save_queue(queue)
 
-    logger.info(f"[처리 완료] 5000회 이상 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
+    logger.info(f"[처리 완료] 10000회 이상 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
     logger.info(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
     logger.info("=" * 60)
 
 def check_daily_limit() -> bool:
-    """하루 3개 포스팅 제한을 체크합니다."""
+    """하루 5개 포스팅 제한을 체크합니다."""
     queue = load_queue()
     today_str = datetime.now().strftime("%Y-%m-%d")
     daily_stats = queue.get("daily_stats", {"date": "", "count": 0})
     
     if daily_stats.get("date") != today_str:
         return True
-    if daily_stats.get("count", 0) >= 3:
+    if daily_stats.get("count", 0) >= 5:
         return False
     return True
 
@@ -282,7 +310,7 @@ def _search_console_meta() -> str:
 def _ga_snippet() -> str:
     if not GA_MEASUREMENT_ID: return ""
     return f"""
-<script async src="[https://www.googletagmanager.com/gtag/js?id=](https://www.googletagmanager.com/gtag/js?id=){GA_MEASUREMENT_ID}"></script>
+<script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){{dataLayer.push(arguments);}}
@@ -318,11 +346,11 @@ function googleTranslateElementInit() {
   } catch(e) {}
 })();
 </script>
-<script src="//[translate.google.com/translate_a/element.js?cb=googleTranslateElementInit](https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit)"></script>"""
+<script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>"""
 
 def _adsense_snippet() -> str:
     if not ADSENSE_CLIENT_ID: return ""
-    return f'\n<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=){ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
+    return f'\n<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
 
 def build_faq_section_html(article: Dict[str, Any], accent: str = "#4a90d9") -> str:
     if not article.get("faq_items"): return ""
@@ -347,18 +375,18 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
 
     if schema_type == "FAQPage" and article.get("faq_items"):
         data = {
-            "@context": "[https://schema.org](https://schema.org)", "@type": "FAQPage",
+            "@context": "https://schema.org", "@type": "FAQPage",
             "mainEntity": [{"@type": "Question", "name": qa.get("question", ""), "acceptedAnswer": {"@type": "Answer", "text": qa.get("answer", "")}} for qa in article["faq_items"]],
         }
     elif schema_type == "HowTo" and article.get("howto_steps"):
         data = {
-            "@context": "[https://schema.org](https://schema.org)", "@type": "HowTo", "name": title, "description": meta_description,
+            "@context": "https://schema.org", "@type": "HowTo", "name": title, "description": meta_description,
             "step": [{"@type": "HowToStep", "name": s.get("name", ""), "text": s.get("text", "")} for s in article["howto_steps"]],
         }
     else:
         schema_type = article_type
         data = {
-            "@context": "[https://schema.org](https://schema.org)", "@type": article_type, "headline": title, "description": meta_description,
+            "@context": "https://schema.org", "@type": article_type, "headline": title, "description": meta_description,
             "image": thumb_url, "datePublished": date, "author": {"@type": "Organization", "name": SITE_TITLE},
         }
 
@@ -377,11 +405,11 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
             "@type": "ItemList", "name": f"{title} - 소개된 상품 목록",
             "itemListElement": [{"@type": "ListItem", "position": i, "item": {"@type": "Product", "name": p.get("name", ""), "description": p.get("description", "")}} for i, p in enumerate(article["product_list"][:6], 1)],
         })
-    return json.dumps({"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}, ensure_ascii=False, indent=2)
+    return json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False, indent=2)
 
 def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
     data = {
-        "@context": "[https://schema.org](https://schema.org)", "@type": "Blog", "name": SITE_TITLE, "url": (SITE_URL + "/") if SITE_URL else ".",
+        "@context": "https://schema.org", "@type": "Blog", "name": SITE_TITLE, "url": (SITE_URL + "/") if SITE_URL else ".",
         "blogPost": [{"@type": "BlogPosting", "headline": p["title"], "url": (f"{SITE_URL}/{p['file']}" if SITE_URL else p["file"]), "datePublished": p["date"], "image": (f"{SITE_URL}/{p['thumb']}" if SITE_URL else p["thumb"])} for p in posts[:10]],
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
@@ -404,8 +432,8 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <meta name="twitter:title" content="{title}">
 <meta name="twitter:description" content="{meta_description}">
 <meta name="twitter:image" content="{thumb_url}">
-<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
-<link href="[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family={font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
 <script type="application/ld+json">
 {json_ld}
 </script>{ga_snippet}{adsense_snippet}
@@ -466,6 +494,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <span class="badge">{badge}</span>
 <h1>{title}</h1>
 <p class="meta">{date}</p>
+{photo_credit_html}
 {html_body}
 {post_nav}
 {related_html}
@@ -478,7 +507,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 ALL_THEME_FONTS = sorted({t["font"] for t in CATEGORY_THEMES.values()})
 def _google_fonts_url() -> str:
     families = "&family=".join(ALL_THEME_FONTS)
-    return f"[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
+    return f"https://fonts.googleapis.com/css2?family={families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -489,7 +518,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{site_title} - 자동으로 업데이트되는 블로그">
 <link rel="canonical" href="{site_url}/">
 <link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
-<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="{fonts_url}" rel="stylesheet">
 <script type="application/ld+json">
 {blog_json_ld}
@@ -600,22 +629,22 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <div class="card">
   <b>실시간 트래픽 확인 (GA4)</b><br>
   플레이스토어 "Google Analytics" 앱 설치 후 이 사이트의 방문자/인기글을 확인하세요.<br>
-  <a href="[https://analytics.google.com](https://analytics.google.com)" target="_blank">analytics.google.com 바로가기</a>
+  <a href="https://analytics.google.com" target="_blank">analytics.google.com 바로가기</a>
 </div>
 <div class="card">
   <b>수익(쿠팡 마크업 수수료) 확인</b><br>
   쿠팡파트너스 앱 또는 사이트에서 클릭수/수익을 확인하세요.<br>
-  <a href="[https://partners.coupang.com](https://partners.coupang.com)" target="_blank">partners.coupang.com 바로가기</a>
+  <a href="https://partners.coupang.com" target="_blank">partners.coupang.com 바로가기</a>
 </div>
 <div class="card">
   <b>광고 수익(애드센스) 확인</b><br>
   플레이스토어 "Google AdSense" 앱 설치 후 페이지뷰/광고 수익(전면광고 포함)을 확인하세요.<br>
-  <a href="[https://www.google.com/adsense](https://www.google.com/adsense)" target="_blank">adsense.google.com 바로가기</a>
+  <a href="https://www.google.com/adsense" target="_blank">adsense.google.com 바로가기</a>
 </div>
 <div class="card">
   <b>검색 노출 확인 (Google Search Console)</b><br>
   사이트가 구글 검색에 얼마나 노출/클릭되는지 확인하세요. 최초 1회 소유권 인증이 필요합니다.<br>
-  <a href="[https://search.google.com/search-console](https://search.google.com/search-console)" target="_blank">[search.google.com/search-console](https://search.google.com/search-console) 바로가기</a>
+  <a href="https://search.google.com/search-console" target="_blank">search.google.com/search-console 바로가기</a>
 </div>
 <h2>발행된 글 목록 ({post_count}개)</h2>
 <table>
@@ -627,7 +656,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 """
 
 SITEMAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="[http://www.sitemaps.org/schemas/sitemap/0.9](http://www.sitemaps.org/schemas/sitemap/0.9)">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 <url><loc>{site_url}/</loc></url>
 {url_entries}
 </urlset>
@@ -711,18 +740,53 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     hex_color = hex_color.lstrip("#")
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
-def _fetch_illustration(category: str, size: Tuple[int, int], seed: int):
-    prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"]) + ILLUSTRATION_SUFFIX
-    url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
+def _fetch_stock_photo(category: str, size: Tuple[int, int], seed: int) -> Tuple[Optional[Image.Image], Optional[Dict[str, str]]]:
+    """Pexels에서 카테고리에 맞는 무료 사진을 검색해 (이미지, 출처정보)를 반환합니다.
+    API 키 미설정/요청 실패 시 (None, None)을 반환하며, 호출부에서 그라데이션으로 대체합니다."""
+    if not PEXELS_API_KEY:
+        return None, None
+    query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["라이프스타일"])
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(
+            "https://api.pexels.com/v1/search",
+            headers={"Authorization": PEXELS_API_KEY},
+            params={"query": query, "orientation": "landscape", "per_page": 15, "size": "large"},
+            timeout=15,
+        )
         resp.raise_for_status()
-        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-        if img.size != size: img = img.resize(size)
-        return img
+        photos = resp.json().get("photos", [])
+        if not photos:
+            return None, None
+        photo = photos[seed % len(photos)]
+        img_url = photo["src"].get("large2x") or photo["src"].get("large") or photo["src"]["original"]
+        img_resp = requests.get(img_url, timeout=20)
+        img_resp.raise_for_status()
+        img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
+
+        # 비율 유지 크롭 후 리사이즈 (center-crop)
+        target_ratio = size[0] / size[1]
+        w, h = img.size
+        cur_ratio = w / h
+        if cur_ratio > target_ratio:
+            new_w = int(h * target_ratio)
+            left = (w - new_w) // 2
+            img = img.crop((left, 0, left + new_w, h))
+        else:
+            new_h = int(w / target_ratio)
+            top = (h - new_h) // 2
+            img = img.crop((0, top, w, top + new_h))
+        img = img.resize(size)
+
+        credit = {
+            "name": photo.get("photographer", "Unknown"),
+            "photographer_url": photo.get("photographer_url", "https://www.pexels.com"),
+            "photo_url": photo.get("url", "https://www.pexels.com"),
+            "source": "Pexels",
+        }
+        return img, credit
     except Exception as e:
-        logger.warning(f"[일러스트] 생성 실패, 그라데이션만 사용: {e}")
-        return None
+        logger.warning(f"[무료 이미지] Pexels 검색/다운로드 실패, 그라데이션으로 대체: {e}")
+        return None, None
 
 def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     words = text.split(" ")
@@ -752,56 +816,46 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     if current: lines.append(current)
     return lines
 
-def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "라이프스타일") -> None:
-    img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
+def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "라이프스타일") -> Optional[Dict[str, str]]:
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
-    illustration = _fetch_illustration(category, THUMB_SIZE, seed)
-    if illustration is not None:
-        img = Image.blend(img, illustration, alpha=0.10)
+    photo, credit = _fetch_stock_photo(category, THUMB_SIZE, seed)
+
+    if photo is not None:
+        img = photo.convert("RGBA")
+    else:
+        # 무료 이미지 확보 실패 시에만 기존 그라데이션 배경으로 대체 (파이프라인 중단 방지용 폴백)
+        img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
+
     draw = ImageDraw.Draw(img)
     accent_rgb = _hex_to_rgb(theme["accent"])
 
-    label_font = _load_font(32)
+    # 카테고리 배지 (브랜드 일관성 유지용, 사진 위 작은 라벨만 표시하고 큰 제목 텍스트는 그리지 않음)
+    label_font = _load_font(30)
     label_text = theme["label"]
     lb = draw.textbbox((0, 0), label_text, font=label_font)
-    pad_x, pad_y = 22, 10
+    pad_x, pad_y = 18, 8
     badge_w = (lb[2] - lb[0]) + pad_x * 2
     badge_h = (lb[3] - lb[1]) + pad_y * 2
-    badge_x = (THUMB_SIZE[0] - badge_w) // 2
-    badge_y = 75
-    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=badge_h // 2, fill=accent_rgb + (255,))
+    badge_x, badge_y = 24, 24
+    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=badge_h // 2, fill=accent_rgb + (230,))
     draw.text((badge_x + pad_x, badge_y + pad_y - lb[1]), label_text, font=label_font, fill=(255, 255, 255, 255))
 
     bar_h = 18
     draw.rectangle([(0, THUMB_SIZE[1] - bar_h), (THUMB_SIZE[0], THUMB_SIZE[1])], fill=accent_rgb + (255,))
 
-    max_text_width = 620
-    max_text_height = int(THUMB_SIZE[1] * 0.65)
-    font_size = 64
-    lines, font = [], None
-    while font_size >= 24:
-        font = _load_font(font_size)
-        lines = _wrap_by_pixel_width(draw, title, font, max_text_width)[:4]
-        heights = [draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in lines]
-        total_h = sum(heights) + (len(lines) - 1) * 16
-        full_wrap_count = len(_wrap_by_pixel_width(draw, title, font, max_text_width))
-        if total_h <= max_text_height and full_wrap_count <= 4: break
-        font_size -= 4
+    # 출처 표기 (무료 이미지를 실제로 가져온 경우에만) — 저작권 크레딧을 사진 위에 작게 각인
+    if credit:
+        credit_font = _load_font(20)
+        credit_text = f'Photo by {credit["name"]} on {credit["source"]}'
+        cb = draw.textbbox((0, 0), credit_text, font=credit_font)
+        cw, ch = cb[2] - cb[0], cb[3] - cb[1]
+        cx = THUMB_SIZE[0] - cw - 16
+        cy = THUMB_SIZE[1] - bar_h - ch - 14
+        draw.rectangle([cx - 8, cy - 4, cx + cw + 8, cy + ch + 8], fill=(0, 0, 0, 110))
+        draw.text((cx, cy - cb[1]), credit_text, font=credit_font, fill=(255, 255, 255, 235))
 
-    if len(_wrap_by_pixel_width(draw, title, font, max_text_width)) > 4:
-        last = lines[-1]
-        while draw.textbbox((0, 0), last + "...", font=font)[2] > max_text_width and len(last) > 1: last = last[:-1]
-        lines[-1] = last.rstrip(".,!? ") + "..."
-
-    y = (THUMB_SIZE[1] - total_h) / 2 + 50
-    for line, lh in zip(lines, heights):
-        bbox = draw.textbbox((0, 0), line, font=font)
-        x = (THUMB_SIZE[0] - (bbox[2] - bbox[0])) / 2
-        draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 160))
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-        y += lh + 16
-
-    img.convert("RGB").save(output_path, format="WEBP", quality=82, method=6)
+    img.convert("RGB").save(output_path, format="WEBP", quality=85, method=6)
+    return credit
 
 BRAND_GRADIENT = [(15, 23, 42), (30, 41, 59), (51, 65, 85)]
 BRAND_ACCENT = (250, 204, 21)
@@ -1087,7 +1141,14 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     today = datetime.now().strftime("%Y-%m-%d")
     thumb_filename = f"{slug}-{today}.webp"
     post_filename = f"{slug}-{today}.html"
-    generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category)
+    photo_credit = generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category)
+    photo_credit_html = ""
+    if photo_credit:
+        photo_credit_html = (
+            f'<p style="margin:6px 0 0;font-size:0.78em;color:#aaa;">'
+            f'사진: <a href="{photo_credit["photo_url"]}" target="_blank" rel="nofollow noopener">'
+            f'{photo_credit["name"]}</a> / {photo_credit["source"]} (무료 이미지, 출처 표기)</p>'
+        )
     
     cleaned_body = re.sub(
         r"<h[23]>[^<]*자주\s*묻는\s*질문[^<]*</h[23]>.{0,400}?</table>",
@@ -1125,6 +1186,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         bottom_ad=_manual_ad_unit(),
         search_console_meta=_search_console_meta(),
         translate_widget=_translate_widget(),
+        photo_credit_html=photo_credit_html,
     )
     with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
         f.write(html)
@@ -1242,6 +1304,69 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
     except Exception as e:
         logger.error(f"[블로거] 발행 실패: {e}")
 
+# =====================================================================
+# [NEW] 워드프레스 동시 자동 발행
+# - 워드프레스 REST API(wp-json/wp/v2)를 Application Password(기본 인증)로 호출합니다.
+# - 준비물: 워드프레스 관리자 계정 > 사용자 > 프로필 > "Application Passwords"에서
+#   이름(임의)을 입력해 발급받은 비밀번호(공백 포함 24자리 형태)를 그대로 사용합니다.
+# - 미설정 시 조용히 건너뛰며, 실패해도 다른 발행 채널(GitHub Pages/Blogger)에는 영향 없습니다.
+# =====================================================================
+def _wordpress_configured() -> bool:
+    return bool(WORDPRESS_URL and WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD)
+
+def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
+    if not _wordpress_configured(): return
+    try:
+        auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
+        auth_header = f"Basic {auth_token}"
+        theme = get_theme(article.get("category", "라이프스타일"))
+
+        # 1) 대표이미지(썸네일) 업로드 (실패해도 본문 발행은 계속 진행)
+        featured_media_id = None
+        try:
+            with open(local_thumb_path, "rb") as f:
+                img_bytes = f.read()
+            media_resp = requests.post(
+                f"{WORDPRESS_URL}/wp-json/wp/v2/media",
+                headers={
+                    "Authorization": auth_header,
+                    "Content-Disposition": f'attachment; filename="{os.path.basename(local_thumb_path)}"',
+                    "Content-Type": "image/webp",
+                },
+                data=img_bytes,
+                timeout=30,
+            )
+            media_resp.raise_for_status()
+            featured_media_id = media_resp.json().get("id")
+        except Exception as e:
+            logger.warning(f"[워드프레스] 대표이미지 업로드 실패, 이미지 없이 발행합니다: {e}")
+
+        content_html = (
+            f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
+            f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
+            f'{article["html_body"]}'
+            f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
+        )
+        payload = {
+            "title": article["title"],
+            "content": content_html,
+            "status": "publish",
+            "excerpt": article.get("meta_description", ""),
+        }
+        if featured_media_id:
+            payload["featured_media"] = featured_media_id
+
+        resp = requests.post(
+            f"{WORDPRESS_URL}/wp-json/wp/v2/posts",
+            headers={"Authorization": auth_header, "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        logger.info(f"[워드프레스] 발행 완료: {resp.json().get('link', '(URL 확인 불가)')}")
+    except Exception as e:
+        logger.error(f"[워드프레스] 발행 실패: {e}")
+
 def ensure_nojekyll() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     if not os.path.exists(os.path.join(DOCS_DIR, ".nojekyll")):
@@ -1250,7 +1375,7 @@ def ensure_nojekyll() -> None:
 def run() -> None:
     is_refresh_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh"
     
-    # 30분 단위 트리거 시 구글 트렌드에서 5000이상 조회수 키워드만 가져와 큐 갱신
+    # 30분 단위 트리거 시 구글 트렌드에서 10000(1만)이상 조회수 키워드만 가져와 큐 갱신
     fetch_and_update_trends_queue()
     if is_refresh_only:
         return
@@ -1264,14 +1389,14 @@ def run() -> None:
     if manual_title:
         title = manual_title
     else:
-        # 수동 발동이 아닌 스케줄러에 의한 실행일 경우 하루 3회 제한 확인
+        # 수동 발동이 아닌 스케줄러에 의한 실행일 경우 하루 5회 제한 확인
         if not check_daily_limit():
-            logger.info("오늘의 자동 발행 한도(3회)를 모두 소진하여 포스팅을 생략합니다.")
+            logger.info("오늘의 자동 발행 한도(5회)를 모두 소진하여 포스팅을 생략합니다.")
             return
             
         queue = load_queue()
         if not queue.get("pending"):
-            logger.info("대기 중인 (5000회 이상) 핫이슈 키워드가 없습니다.")
+            logger.info("대기 중인 (10000회 이상) 핫이슈 키워드가 없습니다.")
             return
             
         title = queue["pending"].pop(0)
@@ -1298,6 +1423,7 @@ def run() -> None:
     update_dashboard(posts)
     update_seo_files(posts)
     publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
+    publish_to_wordpress(article, post_url, thumb_url, local_thumb_path)  # [NEW] 동일 조건으로 워드프레스에도 동시 발행
 
     # 포스팅 발행 프로세스 성공 후 일일 카운트 증가 처리 (자동 생성건에 한함)
     if not manual_title:
@@ -1312,4 +1438,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"스크립트 실행 중 치명적인 오류 발생: {e}")
         sys.exit(1)
-
