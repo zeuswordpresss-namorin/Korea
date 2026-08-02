@@ -34,11 +34,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 무료 한글 폰트 다운로드 (나눔고딕)
+      - name: 한글 폰트 확보 (나눔고딕 — apt 우선, 실패 시 curl 백업)
         run: |
-          curl -fsSL -o font.ttf \
-            "[https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf](https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf)" \
-            --max-time 30 || echo "폰트 다운로드 실패, 기본 폰트로 대체됩니다."
+          # [FIX] curl 다운로드가 네트워크 상황에 따라 조용히 실패해 썸네일 한글이 깨지는 문제가
+          # 있었습니다. Ubuntu 저장소의 fonts-nanum 패키지를 1순위로 사용해 안정성을 높입니다.
+          sudo apt-get update -qq && sudo apt-get install -y fonts-nanum || echo "apt 폰트 설치 실패, curl로 백업 시도"
+          if [ ! -f /usr/share/fonts/truetype/nanum/NanumGothicBold.ttf ]; then
+            curl -fsSL -o font.ttf \
+              "https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Bold.ttf" \
+              --max-time 30 || echo "curl 백업 다운로드도 실패, 스크립트 내부 기본 폰트로 대체됩니다."
+          fi
+          # 최종 확보 여부 확인 (실패해도 빌드는 계속 진행 — 스크립트 자체에도 폴백 로직 있음)
+          if [ -f /usr/share/fonts/truetype/nanum/NanumGothicBold.ttf ] || { [ -f font.ttf ] && [ -s font.ttf ]; }; then
+            echo "한글 폰트 확보 완료"
+          else
+            echo "::warning::한글 폰트 확보 실패 - 썸네일 한글이 깨져 보일 수 있습니다"
+          fi
 
       - name: 필요 패키지 설치
         run: pip install requests pillow
@@ -61,9 +72,11 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          # --- [NEW] 워드프레스 동시 자동 발행 ---
           WORDPRESS_URL: ${{ vars.WORDPRESS_URL }}
           WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
+          # --- [NEW] 썸네일용 무료 스톡 이미지(Pexels, 출처 표기) ---
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "refresh" ]; then
