@@ -76,7 +76,9 @@ jobs:
           # --- [NEW] 워드프레스 동시 자동 발행 ---
           # WORDPRESS_CLIENT_ID/SECRET이 있으면 워드프레스닷컴(*.wordpress.com) OAuth2 방식,
           # 없으면 자체호스팅 워드프레스용 Basic Auth 방식으로 자동 분기합니다.
-          WORDPRESS_URL: ${{ vars.WORDPRESS_URL }}
+          # WORDPRESS_URL: Variables 또는 Secrets 어느 쪽에 등록해도 인식되도록 폴백 처리
+          # (Secrets/Variables 탭 혼동으로 인한 "미설정" 오인식 방지)
+          WORDPRESS_URL: ${{ vars.WORDPRESS_URL || secrets.WORDPRESS_URL }}
           WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
           WORDPRESS_CLIENT_ID: ${{ secrets.WORDPRESS_CLIENT_ID }}
