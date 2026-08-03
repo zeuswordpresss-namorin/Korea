@@ -2,7 +2,7 @@
 """
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
 - [스토리텔링 강화] 호기심 천국, 세상에 이런 일이 스타일의 흥미진진한 트렌드 원인 분석형 프롬프트 적용
-- [업그레이드] 조회수 10000회(1만) 이상 핫이슈 필터링 및 하루 최대 5회 발행 제한
+- [업그레이드] 조회수 10000회(1만) 이상 핫이슈만 감지 시 발행 (일일 발행 횟수 상한 없음)
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 """
 
@@ -102,7 +102,11 @@ SYSTEM_PROMPT = """당신은 사람들의 호기심을 강하게 자극하는 �
 TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'의 내레이션처럼 독자의 상상력을 자극하고, 몰랐던 사실을 알아가는 즐거움을 주는 다채로운 톤으로 작성하세요.
 
 아래 규칙을 지켜 작성하세요:
-1. 제목은 검색 의도를 반영하되 흥미를 유발하도록 작성한다. (예: "OOO, 대체 왜 난리일까? 숨겨진 진짜 이유") 단, 입력받은 키워드의 의미를 벗어나지 않으며 25~40자 내외로 구글 검색결과에서 잘리지 않게 한다.
+1. 제목은 검색 의도를 반영하되 흥미를 유발하도록 작성한다. 아래 9가지 후킹(hook) 기법 중 이 주제에 가장 잘 맞는 것을 1~2개 골라 제목과 도입부에 녹여낸다:
+   ① 호기심 갭(정보의 틈을 열어 궁금하게) ② 구체성/숫자(정확한 수치로 신뢰감) ③ 손실회피(놓치면 손해라는 프레이밍)
+   ④ 정체성/소속(나와 같은 부류가 하는 행동) ⑤ 대조(vs, 어느 쪽이 맞는지) ⑥ Before-After(변화의 폭을 자극)
+   ⑦ 사회적 증거(다수의 선택을 근거로) ⑧ 의외성(예상을 살짝 배신하는 반전) ⑨ 낮은 진입장벽(나도 할 수 있겠다는 안도감)
+   (예: "OOO, 대체 왜 난리일까? 숨겨진 진짜 이유") 단, 입력받은 키워드의 의미를 벗어나지 않으며 25~40자 내외로 구글 검색결과에서 잘리지 않게 한다.
 1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 핵심 키워드를 앞부분에 배치하고, 클릭을 유도하는 호기심 자극 문장으로 100~140자 내외로 작성한다.
 2. 소제목(H2)을 4~6개 사용해 구조화한다.
 3. [매우 중요] 단순한 사전적 뜻풀이나 정보 나열은 절대 금지합니다. 대신 "왜 지금 이 단어가 검색어 1위로 급상승했을까?", "이 이슈 이면에 숨겨진 진짜 이유는 무엇일까?"에 초점을 맞춰 비하인드 스토리, 관련 에피소드, 사람들이 몰랐던 놀라운 사실을 파헤치는 흥미진진한 전개를 보여주세요.
@@ -263,31 +267,10 @@ def fetch_and_update_trends_queue() -> None:
     logger.info(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
     logger.info("=" * 60)
 
-def check_daily_limit() -> bool:
-    """하루 5개 포스팅 제한을 체크합니다."""
-    queue = load_queue()
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    daily_stats = queue.get("daily_stats", {"date": "", "count": 0})
-    
-    if daily_stats.get("date") != today_str:
-        return True
-    if daily_stats.get("count", 0) >= 5:
-        return False
-    return True
-
-def increment_daily_count() -> None:
-    """포스팅 성공 시 일일 카운트를 증가시킵니다."""
-    queue = load_queue()
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    daily_stats = queue.get("daily_stats", {"date": today_str, "count": 0})
-    
-    if daily_stats.get("date") == today_str:
-        daily_stats["count"] = daily_stats.get("count", 0) + 1
-    else:
-        daily_stats = {"date": today_str, "count": 1}
-        
-    queue["daily_stats"] = daily_stats
-    save_queue(queue)
+# [REMOVED] check_daily_limit() / increment_daily_count()
+# 사용자 요청으로 하루 발행 횟수 상한을 제거했습니다. 대신 fetch_high_traffic_trends()의
+# min_traffic=10000 기준이 유일한 게이트입니다 — 조회수 1만 이상 트렌드가 감지된 경우에만
+# 큐에 들어가고, 큐에 있는 것만 발행되므로 "품질 기준을 넘을 때만 발행"은 그대로 유지됩니다.
 
 
 # =====================================================================
@@ -1511,11 +1494,7 @@ def run() -> None:
     if manual_title:
         title = manual_title
     else:
-        # 수동 발동이 아닌 스케줄러에 의한 실행일 경우 하루 5회 제한 확인
-        if not check_daily_limit():
-            logger.info("오늘의 자동 발행 한도(5회)를 모두 소진하여 포스팅을 생략합니다.")
-            return
-            
+        # [REMOVED] 발행 한도 제거 — 조회수 10000(1만) 이상 큐에 쌓인 것만 순서대로 발행
         queue = load_queue()
         if not queue.get("pending"):
             logger.info("대기 중인 (10000회 이상) 핫이슈 키워드가 없습니다.")
@@ -1546,10 +1525,6 @@ def run() -> None:
     update_seo_files(posts)
     publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
     publish_to_wordpress(article, post_url, thumb_url, local_thumb_path)  # [NEW] 동일 조건으로 워드프레스에도 동시 발행
-
-    # 포스팅 발행 프로세스 성공 후 일일 카운트 증가 처리 (자동 생성건에 한함)
-    if not manual_title:
-        increment_daily_count()
 
     logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
 
