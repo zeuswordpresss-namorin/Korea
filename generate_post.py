@@ -122,6 +122,11 @@ TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'�
 10. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다. ["뷰티패션", "푸드맛집", "여행", "테크IT", "재테크머니", "헬스운동", "홈인테리어", "대출보험", "정부지원금", "라이프스타일"]
 11. category가 "대출보험" 또는 "정부지원금"이면 일반적인 조건 위주로 설명하고 공식 기관 확인이 필요하다는 점을 덧붙인다.
 12. 이 글이 여러 구체적인 대상을 비교/소개하는 성격이면 "product_list"에 1문장 설명과 함께 채운다. (최대 6개). 아니면 빈 배열.
+12-1. "image_keywords"에는 이 글의 썸네일/본문 이미지로 쓸 무료 스톡사진을 검색하기 위한 영어 키워드 2~4단어를 넣는다.
+   [매우 중요] 키워드를 그대로 번역하지 말 것. 스톡사진 사이트에는 한국 밈/특정 인물/드라마 대사 같은 고유명사 사진이 없으므로,
+   글의 핵심 "장면/분위기/사물"을 일반적인 영어로 묘사한다. (예: 키워드가 "그래 이혼하자"라는 드라마 대사 밈이면
+   "couple emotional conversation" 처럼 실제 촬영 가능한 보편적 장면으로, 키워드가 "아이온큐"라는 양자컴퓨터 기업이면
+   "quantum computer technology"처럼 그 산업/사물을 나타내는 명사로 변환한다.)
 13. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
 {
   "title": "...",
@@ -132,7 +137,8 @@ TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'�
   "howto_steps": [{"name": "...", "text": "..."}],
   "category": "위 10개 중 하나",
   "product_keyword": "쇼핑 키워드 또는 빈 문자열",
-  "product_list": [{"name": "...", "description": "..."}]
+  "product_list": [{"name": "...", "description": "..."}],
+  "image_keywords": "영어 스톡사진 검색어 2~4단어"
 }
 html_body는 <h2>, <p>, <table>, <ul> 등을 사용한 HTML 조각이어야 한다."""
 
@@ -665,6 +671,34 @@ def slugify(text: str) -> str:
     text = re.sub(r"[^\w\s-]", "", text).strip()
     return re.sub(r"[\s]+", "-", text) or "post"
 
+# --- [NEW] AI의 "글자 수 세기" 오류 자동 교정 ---
+# LLM은 종종 텍스트의 글자 수를 잘못 셉니다(예: "그래 이혼하자"는 실제 6글자인데 "다섯 글자"라고
+# 서술). AI 판단에 맡기지 않고, Python이 키워드의 실제 길이를 정확히 세어 본문에서 언급된
+# "OO 글자" 표현을 강제로 바로잡습니다.
+KOREAN_COUNT_WORDS = {
+    1: "한", 2: "두", 3: "세", 4: "네", 5: "다섯", 6: "여섯", 7: "일곱", 8: "여덟",
+    9: "아홉", 10: "열", 11: "열한", 12: "열두", 13: "열세", 14: "열네", 15: "열다섯",
+    16: "열여섯", 17: "열일곱", 18: "열여덟", 19: "열아홉", 20: "스무",
+}
+_COUNT_WORD_PATTERN = re.compile(
+    "(" + "|".join(re.escape(w) for w in sorted(KOREAN_COUNT_WORDS.values(), key=len, reverse=True)) + r")\s?(글자|자)\b"
+)
+
+def fix_character_count_claims(article: Dict[str, Any]) -> Dict[str, Any]:
+    keyword = article.get("keyword", "")
+    correct_len = len(re.sub(r"\s+", "", keyword))
+    if correct_len not in KOREAN_COUNT_WORDS:
+        return article  # 지원 범위(1~20글자) 밖이면 손대지 않음
+    correct_word = KOREAN_COUNT_WORDS[correct_len]
+
+    def _replace(m: "re.Match") -> str:
+        return f"{correct_word} {m.group(2)}"
+
+    for field in ("title", "html_body", "meta_description"):
+        if article.get(field):
+            article[field] = _COUNT_WORD_PATTERN.sub(_replace, article[field])
+    return article
+
 def generate_article(title: str) -> Dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 비어있습니다. 저장소 Secrets 설정을 확인하세요.")
@@ -771,53 +805,65 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     hex_color = hex_color.lstrip("#")
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
-def _fetch_stock_photo(category: str, size: Tuple[int, int], seed: int) -> Tuple[Optional[Image.Image], Optional[Dict[str, str]]]:
-    """Pexels에서 카테고리에 맞는 무료 사진을 검색해 (이미지, 출처정보)를 반환합니다.
-    API 키 미설정/요청 실패 시 (None, None)을 반환하며, 호출부에서 그라데이션으로 대체합니다."""
+_pexels_unconfigured_logged = False
+
+def _fetch_stock_photo(query: str, fallback_query: str, size: Tuple[int, int], seed: int) -> Tuple[Optional[Image.Image], Optional[Dict[str, str]]]:
+    """Pexels에서 사진을 검색해 (이미지, 출처정보)를 반환합니다. 1순위 검색어(query, 보통 기사
+    주제에 맞는 AI 추출 영어 키워드)로 먼저 찾고, 결과가 없으면 2순위(fallback_query, 카테고리
+    일반 키워드)로 재검색합니다. API 키 미설정/요청 전부 실패 시 (None, None)을 반환하며,
+    호출부에서 그라데이션으로 대체합니다."""
+    global _pexels_unconfigured_logged
     if not PEXELS_API_KEY:
+        if not _pexels_unconfigured_logged:
+            logger.info("[무료 이미지] PEXELS_API_KEY 미설정으로 건너뜁니다. (그라데이션 배경으로 대체됩니다)")
+            _pexels_unconfigured_logged = True
         return None, None
-    query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["라이프스타일"])
-    try:
-        resp = requests.get(
-            "https://api.pexels.com/v1/search",
-            headers={"Authorization": PEXELS_API_KEY},
-            params={"query": query, "orientation": "landscape", "per_page": 15, "size": "large"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        photos = resp.json().get("photos", [])
-        if not photos:
-            return None, None
-        photo = photos[seed % len(photos)]
-        img_url = photo["src"].get("large2x") or photo["src"].get("large") or photo["src"]["original"]
-        img_resp = requests.get(img_url, timeout=20)
-        img_resp.raise_for_status()
-        img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
 
-        # 비율 유지 크롭 후 리사이즈 (center-crop)
-        target_ratio = size[0] / size[1]
-        w, h = img.size
-        cur_ratio = w / h
-        if cur_ratio > target_ratio:
-            new_w = int(h * target_ratio)
-            left = (w - new_w) // 2
-            img = img.crop((left, 0, left + new_w, h))
-        else:
-            new_h = int(w / target_ratio)
-            top = (h - new_h) // 2
-            img = img.crop((0, top, w, top + new_h))
-        img = img.resize(size)
+    for attempt_query in [q for q in (query, fallback_query) if q]:
+        try:
+            resp = requests.get(
+                "https://api.pexels.com/v1/search",
+                headers={"Authorization": PEXELS_API_KEY},
+                params={"query": attempt_query, "orientation": "landscape", "per_page": 15, "size": "large"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            photos = resp.json().get("photos", [])
+            if not photos:
+                continue  # 이 검색어로는 결과 없음 → 다음 후보 검색어로 재시도
+            photo = photos[seed % len(photos)]
+            img_url = photo["src"].get("large2x") or photo["src"].get("large") or photo["src"]["original"]
+            img_resp = requests.get(img_url, timeout=20)
+            img_resp.raise_for_status()
+            img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
 
-        credit = {
-            "name": photo.get("photographer", "Unknown"),
-            "photographer_url": photo.get("photographer_url", "https://www.pexels.com"),
-            "photo_url": photo.get("url", "https://www.pexels.com"),
-            "source": "Pexels",
-        }
-        return img, credit
-    except Exception as e:
-        logger.warning(f"[무료 이미지] Pexels 검색/다운로드 실패, 그라데이션으로 대체: {e}")
-        return None, None
+            # 비율 유지 크롭 후 리사이즈 (center-crop)
+            target_ratio = size[0] / size[1]
+            w, h = img.size
+            cur_ratio = w / h
+            if cur_ratio > target_ratio:
+                new_w = int(h * target_ratio)
+                left = (w - new_w) // 2
+                img = img.crop((left, 0, left + new_w, h))
+            else:
+                new_h = int(w / target_ratio)
+                top = (h - new_h) // 2
+                img = img.crop((0, top, w, top + new_h))
+            img = img.resize(size)
+
+            credit = {
+                "name": photo.get("photographer", "Unknown"),
+                "photographer_url": photo.get("photographer_url", "https://www.pexels.com"),
+                "photo_url": photo.get("url", "https://www.pexels.com"),
+                "source": "Pexels",
+            }
+            return img, credit
+        except Exception as e:
+            logger.warning(f"[무료 이미지] Pexels 검색/다운로드 실패('{attempt_query}'): {e}")
+            continue
+
+    logger.warning("[무료 이미지] 모든 검색어로 실패해 그라데이션으로 대체합니다.")
+    return None, None
 
 def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     words = text.split(" ")
@@ -847,9 +893,10 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     if current: lines.append(current)
     return lines
 
-def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "라이프스타일") -> Optional[Dict[str, str]]:
+def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "라이프스타일", image_keywords: str = "") -> Optional[Dict[str, str]]:
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
-    photo, credit = _fetch_stock_photo(category, THUMB_SIZE, seed)
+    fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["라이프스타일"])
+    photo, credit = _fetch_stock_photo(image_keywords, fallback_query, THUMB_SIZE, seed)
 
     if photo is not None:
         img = photo.convert("RGBA")
@@ -999,18 +1046,12 @@ def insert_manual_ads(article: Dict[str, Any]) -> Dict[str, Any]:
     else: article["html_body"] += ad_html
     return article
 
-def _fetch_content_photo(category: str, seed: int, size=(1000, 560)):
-    prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["라이프스타일"]).replace("flat vector illustration of", "photo illustration of") + ", high quality, natural lighting"
-    url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
-    try:
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        if img.size != size: img = img.resize(size)
-        return img
-    except Exception as e:
-        logger.warning(f"[본문 이미지] 생성 실패, 삽입 건너뜁니다: {e}")
-        return None
+def _fetch_content_photo(image_keywords: str, category: str, seed: int, size=(1000, 560)):
+    # [FIX] 카테고리 대분류 프롬프트로만 AI 일러스트를 생성하던 방식(pollinations.ai)을 제거하고,
+    # 기사 주제에 맞는 AI 추출 검색어(image_keywords)로 실제 사진을 찾아 연관성을 높였습니다.
+    fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["라이프스타일"])
+    photo, _credit = _fetch_stock_photo(image_keywords, fallback_query, size, seed)
+    return photo
 
 def enhance_tables(html_body: str, accent: str) -> str:
     counter = {"n": 0}
@@ -1070,7 +1111,7 @@ def enhance_tables(html_body: str, accent: str) -> str:
 def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     category = article.get("category", "라이프스타일")
     seed = int(hashlib.md5((article["title"] + "-inline").encode("utf-8")).hexdigest(), 16) % 100000
-    photo = _fetch_content_photo(category, seed)
+    photo = _fetch_content_photo(article.get("image_keywords", ""), category, seed)
     if photo is None: return article
     filename = f"{slug}-inline.webp"
     path = os.path.join(DOCS_DIR, "thumbs", filename)
@@ -1172,7 +1213,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     today = datetime.now().strftime("%Y-%m-%d")
     thumb_filename = f"{slug}-{today}.webp"
     post_filename = f"{slug}-{today}.html"
-    photo_credit = generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category)
+    photo_credit = generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category, article.get("image_keywords", ""))
     photo_credit_html = ""
     if photo_credit:
         photo_credit_html = (
@@ -1368,7 +1409,10 @@ def _get_wordpress_com_access_token() -> str:
         },
         timeout=15,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        # [FIX] resp.raise_for_status()만 쓰면 "400 Client Error"만 남고 정작 왜 실패했는지
+        # (invalid_client/invalid_grant/invalid_request 등) 알 수 없었음 → 응답 본문을 그대로 노출
+        raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패 (HTTP {resp.status_code}): {resp.text[:500]}")
     data = resp.json()
     if "access_token" not in data:
         raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패: {data}")
@@ -1398,7 +1442,8 @@ def _publish_to_wordpress_com(article: Dict[str, Any], canonical_url: str, thumb
         data=payload,
         timeout=30,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(f"워드프레스닷컴 글 발행 실패 (HTTP {resp.status_code}, site={site}): {resp.text[:500]}")
     logger.info(f"[워드프레스] 발행 완료(워드프레스닷컴): {resp.json().get('URL', '(URL 확인 불가)')}")
 
 def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
@@ -1511,6 +1556,7 @@ def run() -> None:
     generate_static_pages()
 
     article = generate_article(title)
+    article = fix_character_count_claims(article)  # [NEW] AI의 글자 수 오기재를 Python이 강제 교정
     logger.info(f"글 생성 완료: {article['title']}")
 
     article = add_internal_link(article)
