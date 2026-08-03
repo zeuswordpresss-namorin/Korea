@@ -1373,8 +1373,8 @@ def _make_blogger_safe_html(html_body: str) -> str:
         return html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/')
     return re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body)
 
-def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
-    if not _blogger_configured(): return
+def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
+    if not _blogger_configured(): return None
     try:
         access_token = _get_blogger_access_token()
         theme = get_theme(article.get("category", "라이프스타일"))
@@ -1392,9 +1392,12 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/"
         resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, json={"title": article["title"], "content": content_html}, timeout=30)
         resp.raise_for_status()
-        logger.info(f"[블로거] 발행 완료: {resp.json().get('url', '(URL 확인 불가)')}")
+        blogger_url = resp.json().get("url")
+        logger.info(f"[블로거] 발행 완료: {blogger_url or '(URL 확인 불가)'}")
+        return blogger_url
     except Exception as e:
         logger.error(f"[블로거] 발행 실패: {e}")
+        return None
 
 # =====================================================================
 # [NEW] 워드프레스 동시 자동 발행 (워드프레스닷컴/Jetpack용 OAuth2 + 자체호스팅용 Basic Auth 자동 분기)
@@ -1438,27 +1441,57 @@ def _get_wordpress_com_access_token() -> str:
         raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패: {data}")
     return data["access_token"]
 
-def _publish_to_wordpress_com(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
+def _upload_media_to_wordpress_com(site: str, access_token: str, local_path: str) -> Optional[str]:
+    """워드프레스닷컴 미디어 라이브러리에 로컬 이미지를 업로드하고, 실제 호스팅되는 공개 URL을 반환합니다.
+    [FIX] base64 data URI는 워드프레스닷컴 콘텐츠 정제(sanitizer)가 보안상 걸러내어 이미지가
+    통째로 깨지는 원인이었습니다. 대신 정식 미디어 업로드 API로 실제 URL을 발급받아 사용합니다."""
+    try:
+        with open(local_path, "rb") as f:
+            files = {"media[]": (os.path.basename(local_path), f, "image/webp")}
+            resp = requests.post(
+                f"https://public-api.wordpress.com/rest/v1.1/sites/{site}/media/new",
+                headers={"Authorization": f"Bearer {access_token}"},
+                files=files,
+                timeout=30,
+            )
+        if not resp.ok:
+            logger.warning(f"[워드프레스] 미디어 업로드 실패 (HTTP {resp.status_code}): {resp.text[:300]}")
+            return None
+        media_list = resp.json().get("media", [])
+        return media_list[0]["URL"] if media_list else None
+    except Exception as e:
+        logger.warning(f"[워드프레스] 미디어 업로드 실패 '{local_path}': {e}")
+        return None
+
+def _replace_thumbs_with_wordpress_media(html_body: str, site: str, access_token: str) -> str:
+    """본문 속 '../thumbs/파일명' 상대경로 이미지를 워드프레스 미디어 라이브러리에 업로드한 뒤
+    실제 URL로 치환합니다. 같은 파일이 여러 번 나와도 한 번만 업로드하도록 캐싱합니다."""
+    uploaded_cache: Dict[str, Optional[str]] = {}
+
+    def _replace(m: "re.Match") -> str:
+        filename = m.group(1)
+        if filename not in uploaded_cache:
+            local_path = os.path.join(DOCS_DIR, "thumbs", filename)
+            uploaded_cache[filename] = _upload_media_to_wordpress_com(site, access_token, local_path)
+        hosted_url = uploaded_cache[filename]
+        return f'src="{hosted_url}"' if hosted_url else m.group(0)
+
+    return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
+
+def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_thumb_path: str) -> None:
     access_token = _get_wordpress_com_access_token()
     theme = get_theme(article.get("category", "라이프스타일"))
     site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
 
-    # [FIX] 썸네일/본문 이미지 모두 base64로 직접 embed (GitHub Pages 배포 타이밍에 의존하지 않도록)
-    try:
-        with open(local_thumb_path, "rb") as f:
-            thumb_b64 = base64.b64encode(f.read()).decode("ascii")
-        thumb_src = f"data:image/webp;base64,{thumb_b64}"
-    except Exception as e:
-        logger.warning(f"[워드프레스] 썸네일 base64 변환 실패: {e}")
-        thumb_src = ""
-    safe_body = _embed_local_thumbs_as_base64(article["html_body"])
+    thumb_hosted_url = _upload_media_to_wordpress_com(site, access_token, local_thumb_path)
+    safe_body = _replace_thumbs_with_wordpress_media(article["html_body"], site, access_token)
 
     content_html = (
-        (f'<img src="{thumb_src}" alt="{article["title"]}" /><br>' if thumb_src else "")
+        (f'<img src="{thumb_hosted_url}" alt="{article["title"]}" /><br>' if thumb_hosted_url else "")
         + f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
         f'{safe_body}'
-        f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
+        + (f'<p style="color:#999;font-size:12px;">원문: <a href="{source_url}" target="_blank" rel="noopener">{source_url}</a></p>' if source_url else "")
     )
     payload = {
         "title": article["title"],
@@ -1526,7 +1559,7 @@ def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: st
     resp.raise_for_status()
     logger.info(f"[워드프레스] 발행 완료(자체호스팅): {resp.json().get('link', '(URL 확인 불가)')}")
 
-def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
+def publish_to_wordpress(article: Dict[str, Any], source_url: str, thumb_url: str, local_thumb_path: str) -> None:
     if not _wordpress_configured():
         missing = [name for name, val in [
             ("WORDPRESS_URL", WORDPRESS_URL),
@@ -1537,14 +1570,14 @@ def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url:
         return
     try:
         if _wordpress_is_com_mode():
-            _publish_to_wordpress_com(article, canonical_url, local_thumb_path)
+            _publish_to_wordpress_com(article, source_url, local_thumb_path)
         else:
             logger.warning(
                 "[워드프레스] WORDPRESS_CLIENT_ID/SECRET이 없어 자체호스팅용 Basic Auth 방식을 시도합니다. "
                 "워드프레스닷컴(*.wordpress.com) 사이트라면 이 방식은 항상 실패합니다 — "
                 "https://developer.wordpress.com/apps/new/ 에서 앱을 등록하세요."
             )
-            _publish_to_wordpress_self_hosted(article, canonical_url, local_thumb_path)
+            _publish_to_wordpress_self_hosted(article, source_url, local_thumb_path)
     except Exception as e:
         logger.error(f"[워드프레스] 발행 실패: {e}")
 
@@ -1600,8 +1633,9 @@ def run() -> None:
 
     update_dashboard(posts)
     update_seo_files(posts)
-    publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
-    publish_to_wordpress(article, post_url, thumb_url, local_thumb_path)  # [NEW] 동일 조건으로 워드프레스에도 동시 발행
+    blogger_url = publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
+    # [FIX] 워드프레스 "원문" 링크를 GitHub Pages 대신 Blogger 글 주소로 변경 (Blogger 발행 실패 시 GitHub Pages로 폴백)
+    publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
 
     logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
 
