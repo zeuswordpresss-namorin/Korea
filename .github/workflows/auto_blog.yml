@@ -16,7 +16,7 @@ on:
         required: false
         default: ""
   schedule:
-    - cron: "*/30 * * * *"   # 30분 간격으로 써치 및 포스팅 (일일 최대 5회로 스크립트 내부 제어됨)
+    - cron: "*/30 * * * *"   # 30분마다 트렌드 확인, 조회수 10000(1만) 이상 감지될 때만 발행 (일일 횟수 상한 없음)
 
 permissions:
   contents: write
