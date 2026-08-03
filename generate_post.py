@@ -1348,10 +1348,30 @@ def _get_blogger_access_token() -> str:
     resp = requests.post("https://oauth2.googleapis.com/token", data={"client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET, "refresh_token": GOOGLE_REFRESH_TOKEN, "grant_type": "refresh_token"}, timeout=15)
     resp.raise_for_status()
     return resp.json()["access_token"]
+def _embed_local_thumbs_as_base64(html_body: str) -> str:
+    """[FIX] 블로거/워드프레스처럼 외부 플랫폼에 발행할 때, 본문 속 '../thumbs/...' 상대경로 이미지가
+    아직 GitHub Pages에 배포(git push)되지 않은 시점에 참조되어 깨져 보이는 문제를 방지합니다.
+    파이썬 스크립트 실행 시점엔 로컬 디스크에 파일이 이미 존재하므로, 이를 base64로 직접 본문에
+    박아 넣어 외부 배포 타이밍에 의존하지 않게 만듭니다. (썸네일 히어로 이미지는 이미 이 방식을 씀)"""
+    def _replace(m: "re.Match") -> str:
+        filename = m.group(1)
+        local_path = os.path.join(DOCS_DIR, "thumbs", filename)
+        try:
+            with open(local_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            ext = os.path.splitext(filename)[1].lstrip(".").lower() or "webp"
+            mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+            return f'src="data:{mime};base64,{b64}"'
+        except Exception as e:
+            logger.warning(f"[이미지 embed] '{filename}' base64 변환 실패, 상대경로 유지: {e}")
+            return m.group(0)
+    return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
+
 def _make_blogger_safe_html(html_body: str) -> str:
+    html_body = _embed_local_thumbs_as_base64(html_body)  # [FIX] 본문 이미지 깨짐 방지
     if SITE_URL:
-        return html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/').replace('src="../thumbs/', f'src="{SITE_URL}/thumbs/')
-    return re.sub(r'<img src="\.\./thumbs/[^"]*"[^>]*>', "", re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body))
+        return html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/')
+    return re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body)
 
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> None:
     if not _blogger_configured(): return
@@ -1418,16 +1438,26 @@ def _get_wordpress_com_access_token() -> str:
         raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패: {data}")
     return data["access_token"]
 
-def _publish_to_wordpress_com(article: Dict[str, Any], canonical_url: str, thumb_url: str) -> None:
+def _publish_to_wordpress_com(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
     access_token = _get_wordpress_com_access_token()
     theme = get_theme(article.get("category", "라이프스타일"))
     site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
 
+    # [FIX] 썸네일/본문 이미지 모두 base64로 직접 embed (GitHub Pages 배포 타이밍에 의존하지 않도록)
+    try:
+        with open(local_thumb_path, "rb") as f:
+            thumb_b64 = base64.b64encode(f.read()).decode("ascii")
+        thumb_src = f"data:image/webp;base64,{thumb_b64}"
+    except Exception as e:
+        logger.warning(f"[워드프레스] 썸네일 base64 변환 실패: {e}")
+        thumb_src = ""
+    safe_body = _embed_local_thumbs_as_base64(article["html_body"])
+
     content_html = (
-        f'<img src="{thumb_url}" alt="{article["title"]}" /><br>'
-        f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
+        (f'<img src="{thumb_src}" alt="{article["title"]}" /><br>' if thumb_src else "")
+        + f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
-        f'{article["html_body"]}'
+        f'{safe_body}'
         f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
     )
     payload = {
@@ -1471,10 +1501,11 @@ def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: st
     except Exception as e:
         logger.warning(f"[워드프레스] 대표이미지 업로드 실패, 이미지 없이 발행합니다: {e}")
 
+    safe_body = _embed_local_thumbs_as_base64(article["html_body"])
     content_html = (
         f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
-        f'{article["html_body"]}'
+        f'{safe_body}'
         f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
     )
     payload = {
@@ -1506,7 +1537,7 @@ def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url:
         return
     try:
         if _wordpress_is_com_mode():
-            _publish_to_wordpress_com(article, canonical_url, thumb_url)
+            _publish_to_wordpress_com(article, canonical_url, local_thumb_path)
         else:
             logger.warning(
                 "[워드프레스] WORDPRESS_CLIENT_ID/SECRET이 없어 자체호스팅용 Basic Auth 방식을 시도합니다. "
