@@ -1373,13 +1373,16 @@ def strip_interactive_widgets(html_body: str) -> str:
     return html_body
 
 def build_wordpress_gutenberg_content(html_body: str) -> str:
-    """[FIX-재수정] wp:html 전체감싸기, wp:table 분리변환 두 방식 모두 실패로 확인됨
-    (에디터에서 "지원되지 않음" 또는 표 블록이 빈 "새 표 만들기" UI로 잘못 인식됨 — 우리가
-    만든 표 HTML이 Gutenberg의 엄격한 블록 검증 구조와 안 맞았기 때문).
-    블록 코멘트를 아예 넣지 않는 것으로 전략을 바꿉니다. 블록 마커가 없는 콘텐츠는 워드프레스가
-    자동으로 "클래식(레거시) freeform 블록"으로 인식해 원문 HTML을 그대로 저장/렌더링하며,
-    이 경로는 표를 포함한 임의의 HTML 구조를 있는 그대로 보존합니다."""
-    return strip_interactive_widgets(html_body)
+    """[FIX-3차·최종 원인 확정] 스크린샷으로 확정: <table style="..."> 여는 태그 자체가 텍스트로
+    그대로 노출되고 이후 표 내용이 태그 없이 뭉쳐 나타남. 워드프레스닷컴은 계정 등급과 무관하게
+    unfiltered_html 권한을 항상 차단하는 플랫폼 정책이 있어, 콘텐츠 저장 시 wp_kses 보안필터가
+    인라인 style 속성이 붙은 태그를 정상 파싱하지 못하고 태그를 깨뜨려 텍스트로 노출시키는 것이
+    최종 원인입니다. 표를 포함한 전체 콘텐츠에서 인라인 style 속성을 모두 제거해 구조(표/문단/
+    이미지)만 순수 HTML로 남깁니다 — 색상/둥근모서리 같은 꾸밈은 워드프레스에서만 사라지지만
+    구조는 보존됩니다."""
+    html_body = strip_interactive_widgets(html_body)
+    html_body = re.sub(r'\s+style="[^"]*"', '', html_body)  # [FIX] wp_kses가 걸려 넘어지는 style 속성 전부 제거
+    return html_body
 
 def _make_blogger_safe_html(html_body: str) -> str:
     html_body = strip_interactive_widgets(html_body)  # [FIX] 표 확대 모달 등 인라인 JS 제거
