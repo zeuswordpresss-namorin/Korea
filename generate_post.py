@@ -1373,28 +1373,13 @@ def strip_interactive_widgets(html_body: str) -> str:
     return html_body
 
 def build_wordpress_gutenberg_content(html_body: str) -> str:
-    """[FIX] 본문 전체를 하나의 <!-- wp:html --> 블록으로 통째로 감싸는 방식이 표가 깨지거나
-    앱에서 "지원되지 않음"으로 뜨는 원인 중 하나였습니다. 표만 워드프레스가 1급으로 지원하는
-    네이티브 core/table 블록으로 따로 변환하고, 나머지 글은 여전히 Custom HTML 블록으로 감싸
-    최상위 블록들을 순서대로 나열합니다(블록 안에 블록을 중첩하지 않도록 함)."""
-    html_body = strip_interactive_widgets(html_body)
-    table_pattern = re.compile(r'<div style="overflow-x:auto[^"]*"[^>]*><table\b.*?</table></div>', re.DOTALL)
-
-    parts: List[str] = []
-    last_end = 0
-    for m in table_pattern.finditer(html_body):
-        before = html_body[last_end:m.start()]
-        if before.strip():
-            parts.append(f"<!-- wp:html -->\n{before}\n<!-- /wp:html -->")
-        table_match = re.search(r'<table\b.*?</table>', m.group(0), re.DOTALL)
-        table_html = re.sub(r'\s+style="[^"]*"', '', table_match.group(0))  # Gutenberg 표는 자체 스타일 사용
-        parts.append(f'<!-- wp:table -->\n<figure class="wp-block-table">{table_html}</figure>\n<!-- /wp:table -->')
-        last_end = m.end()
-    tail = html_body[last_end:]
-    if tail.strip():
-        parts.append(f"<!-- wp:html -->\n{tail}\n<!-- /wp:html -->")
-
-    return "\n".join(parts) if parts else f"<!-- wp:html -->\n{html_body}\n<!-- /wp:html -->"
+    """[FIX-재수정] wp:html 전체감싸기, wp:table 분리변환 두 방식 모두 실패로 확인됨
+    (에디터에서 "지원되지 않음" 또는 표 블록이 빈 "새 표 만들기" UI로 잘못 인식됨 — 우리가
+    만든 표 HTML이 Gutenberg의 엄격한 블록 검증 구조와 안 맞았기 때문).
+    블록 코멘트를 아예 넣지 않는 것으로 전략을 바꿉니다. 블록 마커가 없는 콘텐츠는 워드프레스가
+    자동으로 "클래식(레거시) freeform 블록"으로 인식해 원문 HTML을 그대로 저장/렌더링하며,
+    이 경로는 표를 포함한 임의의 HTML 구조를 있는 그대로 보존합니다."""
+    return strip_interactive_widgets(html_body)
 
 def _make_blogger_safe_html(html_body: str) -> str:
     html_body = strip_interactive_widgets(html_body)  # [FIX] 표 확대 모달 등 인라인 JS 제거
