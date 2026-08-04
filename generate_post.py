@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import re
+import subprocess
 import sys
 import textwrap
 import time
@@ -99,7 +100,8 @@ GEMINI_URL = (
 
 # 프롬프트를 흥미진진한 스토리텔러 톤으로 전면 개편
 SYSTEM_PROMPT = """당신은 사람들의 호기심을 강하게 자극하는 미스터리/정보 큐레이션 전문 스토리텔러이자 한국어 SEO 블로그 작가입니다. 
-TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'의 내레이션처럼 독자의 상상력을 자극하고, 몰랐던 사실을 알아가는 즐거움을 주는 다채로운 톤으로 작성하세요.
+TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'의 내레이션처럼 독자의 상상력을 자극하고, 몰랐던 사실을 알아가는 즐거움을 주는 톤으로 작성하되,
+사람이 직접 쓴 것처럼 자연스럽고 담백해야 합니다. 광고 카피처럼 과장되거나 기계적으로 반복되는 말투는 피하세요.
 
 아래 규칙을 지켜 작성하세요:
 1. 제목은 검색 의도를 반영하되 흥미를 유발하도록 작성한다. 아래 9가지 후킹(hook) 기법 중 이 주제에 가장 잘 맞는 것을 1~2개 골라 제목과 도입부에 녹여낸다:
@@ -110,6 +112,14 @@ TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'�
 1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 핵심 키워드를 앞부분에 배치하고, 클릭을 유도하는 호기심 자극 문장으로 100~140자 내외로 작성한다.
 2. 소제목(H2)을 4~6개 사용해 구조화한다.
 3. [매우 중요] 단순한 사전적 뜻풀이나 정보 나열은 절대 금지합니다. 대신 "왜 지금 이 단어가 검색어 1위로 급상승했을까?", "이 이슈 이면에 숨겨진 진짜 이유는 무엇일까?"에 초점을 맞춰 비하인드 스토리, 관련 에피소드, 사람들이 몰랐던 놀라운 사실을 파헤치는 흥미진진한 전개를 보여주세요.
+3-1. [문체/가독성 — 매우 중요] 다음 AI 특유의 어색한 말투를 피한다:
+   - 모든 문단을 "~일까요?", "~습니다!" 같은 같은 패턴으로 끝맺지 말고 평서문/의문문/짧은 문장을 자연스럽게 섞는다.
+   - 같은 내용을 표현만 바꿔 반복하지 않는다(패딩 금지). 한 문단에서 한 이야기를 하면 다음 문단은 반드시 새로운 정보로 넘어간다.
+   - "정말", "충격적인", "놀라운", "발칵" 같은 과장 수식어는 글 전체에서 2~3회 이하로 아껴 쓴다.
+   - 문단은 2~4문장으로 짧게 끊어 모바일 가독성을 높인다.
+   - 사람이 친구에게 설명하듯 구체적 사실·숫자·사례 위주로 쓰고, 막연한 감탄이나 분위기 묘사로 문단을 채우지 않는다.
+3-2. [콘텐츠 품질 — 매우 중요] 이 글은 시간이 지나도 유효한(에버그린) 정보 가치를 지녀야 합니다. 검색엔진용으로 양산된 듯한 글, 이미 알려진 사실의 재탕, 알맹이 없이 분량만 채운 글은 금지합니다.
+   독자가 실제로 "도움이 됐다"고 느낄 구체적 정보(배경, 맥락, 숫자, 비교, 실용적 시사점)를 반드시 포함해 독창적이고 유용한 콘텐츠를 작성하세요.
 4. 글자 수는 1500~2200자 내외.
 5. [중요] 서론(Hook)은 독자에게 충격적이거나 매우 흥미로운 질문을 던지며 시작합니다. (예: "혹시 OOO에 대해 들어보셨나요? 평범해 보이던 이 단어가 오늘 대한민국 인터넷을 발칵 뒤집어 놓았습니다. 과연 그 이면에는 어떤 사연이 숨어 있을까요?")
 6. 가독성을 위해 본문 중 최소 1곳에 <table> (수치/스펙 비교용 정리표) 또는 <ul>/<ol> 목록을 반드시 포함한다. (질문-답변 내용은 표로 만들지 않음)
@@ -1362,31 +1372,41 @@ def strip_interactive_widgets(html_body: str) -> str:
     html_body = re.sub(r'\s*onclick="[^"]*"', '', html_body)
     return html_body
 
-def _embed_local_thumbs_as_base64(html_body: str) -> str:
-    """[FIX] 블로거/워드프레스처럼 외부 플랫폼에 발행할 때, 본문 속 '../thumbs/...' 상대경로 이미지가
-    아직 GitHub Pages에 배포(git push)되지 않은 시점에 참조되어 깨져 보이는 문제를 방지합니다.
-    파이썬 스크립트 실행 시점엔 로컬 디스크에 파일이 이미 존재하므로, 이를 base64로 직접 본문에
-    박아 넣어 외부 배포 타이밍에 의존하지 않게 만듭니다. (썸네일 히어로 이미지는 이미 이 방식을 씀)"""
-    def _replace(m: "re.Match") -> str:
-        filename = m.group(1)
-        local_path = os.path.join(DOCS_DIR, "thumbs", filename)
-        try:
-            with open(local_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
-            ext = os.path.splitext(filename)[1].lstrip(".").lower() or "webp"
-            mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
-            return f'src="data:{mime};base64,{b64}"'
-        except Exception as e:
-            logger.warning(f"[이미지 embed] '{filename}' base64 변환 실패, 상대경로 유지: {e}")
-            return m.group(0)
-    return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
+def build_wordpress_gutenberg_content(html_body: str) -> str:
+    """[FIX] 본문 전체를 하나의 <!-- wp:html --> 블록으로 통째로 감싸는 방식이 표가 깨지거나
+    앱에서 "지원되지 않음"으로 뜨는 원인 중 하나였습니다. 표만 워드프레스가 1급으로 지원하는
+    네이티브 core/table 블록으로 따로 변환하고, 나머지 글은 여전히 Custom HTML 블록으로 감싸
+    최상위 블록들을 순서대로 나열합니다(블록 안에 블록을 중첩하지 않도록 함)."""
+    html_body = strip_interactive_widgets(html_body)
+    table_pattern = re.compile(r'<div style="overflow-x:auto[^"]*"[^>]*><table\b.*?</table></div>', re.DOTALL)
+
+    parts: List[str] = []
+    last_end = 0
+    for m in table_pattern.finditer(html_body):
+        before = html_body[last_end:m.start()]
+        if before.strip():
+            parts.append(f"<!-- wp:html -->\n{before}\n<!-- /wp:html -->")
+        table_match = re.search(r'<table\b.*?</table>', m.group(0), re.DOTALL)
+        table_html = re.sub(r'\s+style="[^"]*"', '', table_match.group(0))  # Gutenberg 표는 자체 스타일 사용
+        parts.append(f'<!-- wp:table -->\n<figure class="wp-block-table">{table_html}</figure>\n<!-- /wp:table -->')
+        last_end = m.end()
+    tail = html_body[last_end:]
+    if tail.strip():
+        parts.append(f"<!-- wp:html -->\n{tail}\n<!-- /wp:html -->")
+
+    return "\n".join(parts) if parts else f"<!-- wp:html -->\n{html_body}\n<!-- /wp:html -->"
 
 def _make_blogger_safe_html(html_body: str) -> str:
     html_body = strip_interactive_widgets(html_body)  # [FIX] 표 확대 모달 등 인라인 JS 제거
-    html_body = _embed_local_thumbs_as_base64(html_body)  # [FIX] 본문 이미지 깨짐 방지
+    # [FIX] base64는 Blogger의 목록/요약(snippet) 자동 생성 로직에서 글자수 제한에 걸려
+    # 이미지가 아예 안 뜨는 부작용이 있었음. 이제 run()에서 외부 발행 전 사전 push를 보장하므로
+    # 실제 GitHub Pages 절대경로 URL을 그대로 사용해도 안전함.
     if SITE_URL:
-        return html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/')
-    return re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body)
+        html_body = html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/').replace('src="../thumbs/', f'src="{SITE_URL}/thumbs/')
+    else:
+        html_body = re.sub(r'<img src="\.\./thumbs/[^"]*"[^>]*>', "", html_body)
+        html_body = re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body)
+    return html_body
 
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
     if not _blogger_configured(): return None
@@ -1395,12 +1415,11 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         theme = get_theme(article.get("category", "라이프스타일"))
         today = datetime.now().strftime("%Y-%m-%d")
         blogger_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="blogger")
-        try:
-            with open(local_thumb_path, "rb") as f: img_src = f"data:image/webp;base64,{base64.b64encode(f.read()).decode('ascii')}"
-        except: img_src = thumb_url
+        # [FIX] base64는 요약 스니펫 글자수 제한 안에서 이미지가 아예 안 뜨는 원인이었음.
+        # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
         content_html = (
             f'{_translate_widget()}'
-            f'<img src="{img_src}" style="max-width:100%;border-radius:8px;" alt="{article["title"]}">'
+            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;" alt="{article["title"]}">'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
             f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
         )
@@ -1499,19 +1518,16 @@ def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_th
     site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
 
     thumb_hosted_url = _upload_media_to_wordpress_com(site, access_token, local_thumb_path)
-    safe_body = strip_interactive_widgets(article["html_body"])  # [FIX] 표 확대 모달 등 인라인 JS 제거
-    safe_body = _replace_thumbs_with_wordpress_media(safe_body, site, access_token)
+    safe_body = _replace_thumbs_with_wordpress_media(article["html_body"], site, access_token)
 
-    content_html = (
-        (f'<img src="{thumb_hosted_url}" alt="{article["title"]}" /><br>' if thumb_hosted_url else "")
+    hero_html = (
+        (f'<img src="{thumb_hosted_url}" alt="{article["title"]}" style="max-width:100%;height:auto;border-radius:8px;" /><br>' if thumb_hosted_url else "")
         + f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
-        f'{safe_body}'
     )
-    # [FIX] wp:html 블록으로 감싸지 않으면 워드프레스의 자동 문단삽입 필터(wpautop)가 <table> 등
-    # 태그 사이에 <p>/<br>을 끼워 넣어 구조를 깨뜨림(에디터에 태그가 텍스트로 노출되는 원인).
-    # Custom HTML 블록으로 명시하면 원문 그대로 렌더링됨.
-    content_html = f"<!-- wp:html -->\n{content_html}\n<!-- /wp:html -->"
+    # [FIX] 표만 워드프레스 네이티브 core/table 블록으로 변환하고 나머지는 HTML 블록으로 감쌈
+    # (본문 전체를 하나의 Custom HTML 블록으로 통째로 감싸는 방식이 표 깨짐/앱 미리보기 불가의 원인이었음)
+    content_html = build_wordpress_gutenberg_content(hero_html + safe_body)
     payload = {
         "title": article["title"],
         "content": content_html,
@@ -1577,15 +1593,13 @@ def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: st
 
     # [FIX] base64 data URI는 워드프레스 콘텐츠 정제 필터가 걸러낼 수 있어(워드프레스닷컴에서 실제로 발생),
     # 자체호스팅에서도 동일 위험을 피하기 위해 실제 미디어 업로드 방식으로 통일
-    safe_body = strip_interactive_widgets(article["html_body"])  # [FIX] 표 확대 모달 등 인라인 JS 제거
-    safe_body = _replace_thumbs_with_wordpress_self_hosted_media(safe_body, auth_header)
-    content_html = (
+    safe_body = _replace_thumbs_with_wordpress_self_hosted_media(article["html_body"], auth_header)
+    hero_html = (
         f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
-        f'{safe_body}'
     )
-    # [FIX] wpautop이 <table> 구조를 깨뜨리는 것을 막기 위해 Custom HTML 블록으로 명시
-    content_html = f"<!-- wp:html -->\n{content_html}\n<!-- /wp:html -->"
+    # [FIX] 표만 네이티브 core/table 블록으로 변환, 나머지는 HTML 블록으로 감쌈
+    content_html = build_wordpress_gutenberg_content(hero_html + safe_body)
     payload = {
         "title": article["title"],
         "content": content_html,
@@ -1630,6 +1644,35 @@ def ensure_nojekyll() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     if not os.path.exists(os.path.join(DOCS_DIR, ".nojekyll")):
         open(os.path.join(DOCS_DIR, ".nojekyll"), "w").close()
+
+# =====================================================================
+# [NEW] 외부 발행(Blogger/워드프레스) 전에 GitHub Pages로 먼저 push
+# - [FIX] 기존에는 git 커밋/푸시가 워크플로의 더 나중 단계(별도 셸 스텝)에서 실행되어,
+#   Blogger/워드프레스가 이미지 URL을 참조하는 시점엔 그 파일이 아직 GitHub Pages에
+#   존재하지 않는 타이밍 버그가 있었습니다(base64로 임시 땜질했던 이유이기도 함).
+# - 이제 파이썬 스크립트 안에서 외부 발행 직전에 먼저 커밋+푸시를 완료시켜, 이후
+#   Blogger/워드프레스가 참조하는 GitHub Pages 이미지 URL이 항상 실제로 존재하도록 보장합니다.
+# - 실패해도 예외를 던지지 않고 False만 반환합니다 (git push 실패가 전체 파이프라인을
+#   중단시키지 않도록 하기 위함; 워크플로의 마지막 커밋 스텝이 안전망으로 남아있음).
+# =====================================================================
+def commit_and_push_changes() -> bool:
+    try:
+        subprocess.run(["git", "config", "user.name", "auto-blog-bot"], check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "auto-blog-bot@users.noreply.github.com"], check=True, capture_output=True)
+        subprocess.run(["git", "add", "docs", "keywords_queue.json"], check=True, capture_output=True)
+        diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
+        if diff_check.returncode == 0:
+            logger.info("[git] 변경사항 없음, 사전 push 생략")
+            return True
+        commit_msg = f"자동 파이프라인 실행(사전 push): {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        subprocess.run(["git", "commit", "-m", commit_msg], check=True, capture_output=True)
+        subprocess.run(["git", "push"], check=True, capture_output=True)
+        logger.info("[git] GitHub Pages 사전 push 완료 (외부 발행 시 이미지 URL이 실제로 존재함을 보장)")
+        return True
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else str(e)
+        logger.warning(f"[git] 사전 push 실패, 외부 발행 시 이미지가 일시적으로 깨질 수 있습니다: {stderr[:300]}")
+        return False
 
 def run() -> None:
     is_refresh_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh"
@@ -1678,6 +1721,9 @@ def run() -> None:
 
     update_dashboard(posts)
     update_seo_files(posts)
+
+    commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
+
     blogger_url = publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
     # [FIX] 워드프레스/블로거 본문 하단 "원문" 링크는 요청에 따라 완전히 제거함.
     # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
