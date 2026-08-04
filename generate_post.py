@@ -1348,6 +1348,20 @@ def _get_blogger_access_token() -> str:
     resp = requests.post("https://oauth2.googleapis.com/token", data={"client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET, "refresh_token": GOOGLE_REFRESH_TOKEN, "grant_type": "refresh_token"}, timeout=15)
     resp.raise_for_status()
     return resp.json()["access_token"]
+
+def strip_interactive_widgets(html_body: str) -> str:
+    """[FIX] 자체 사이트 전용 "표 크게 보기" 버튼/모달에 onclick 같은 인라인 JS가 들어있는데,
+    Blogger/워드프레스 모두 보안상 이런 인라인 스크립트를 걸러내면서 태그 구조가 깨져 표가
+    텍스트로 그대로 노출되는 원인이 되었습니다. 외부 플랫폼에는 이 인터랙티브 위젯을 제거하고
+    정적인(스크롤 가능한) 표만 남깁니다."""
+    # "🔍 표 크게 보기" 버튼 div
+    html_body = re.sub(r'<div style="text-align:right;margin:0 0 1\.2em;">.*?</div>', '', html_body, flags=re.DOTALL)
+    # 확대 모달 (바깥/안쪽 div 두 겹)
+    html_body = re.sub(r'<div id="tblzoom[^"]*"[^>]*>.*?</div>\s*</div>', '', html_body, flags=re.DOTALL)
+    # 혹시 남아있는 onclick 속성 전체 제거 (안전망)
+    html_body = re.sub(r'\s*onclick="[^"]*"', '', html_body)
+    return html_body
+
 def _embed_local_thumbs_as_base64(html_body: str) -> str:
     """[FIX] 블로거/워드프레스처럼 외부 플랫폼에 발행할 때, 본문 속 '../thumbs/...' 상대경로 이미지가
     아직 GitHub Pages에 배포(git push)되지 않은 시점에 참조되어 깨져 보이는 문제를 방지합니다.
@@ -1368,6 +1382,7 @@ def _embed_local_thumbs_as_base64(html_body: str) -> str:
     return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
 
 def _make_blogger_safe_html(html_body: str) -> str:
+    html_body = strip_interactive_widgets(html_body)  # [FIX] 표 확대 모달 등 인라인 JS 제거
     html_body = _embed_local_thumbs_as_base64(html_body)  # [FIX] 본문 이미지 깨짐 방지
     if SITE_URL:
         return html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/')
@@ -1484,15 +1499,19 @@ def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_th
     site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
 
     thumb_hosted_url = _upload_media_to_wordpress_com(site, access_token, local_thumb_path)
-    safe_body = _replace_thumbs_with_wordpress_media(article["html_body"], site, access_token)
+    safe_body = strip_interactive_widgets(article["html_body"])  # [FIX] 표 확대 모달 등 인라인 JS 제거
+    safe_body = _replace_thumbs_with_wordpress_media(safe_body, site, access_token)
 
     content_html = (
         (f'<img src="{thumb_hosted_url}" alt="{article["title"]}" /><br>' if thumb_hosted_url else "")
         + f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
         f'{safe_body}'
-        + (f'<p style="color:#999;font-size:12px;">원문: <a href="{source_url}" target="_blank" rel="noopener">{source_url}</a></p>' if source_url else "")
     )
+    # [FIX] wp:html 블록으로 감싸지 않으면 워드프레스의 자동 문단삽입 필터(wpautop)가 <table> 등
+    # 태그 사이에 <p>/<br>을 끼워 넣어 구조를 깨뜨림(에디터에 태그가 텍스트로 노출되는 원인).
+    # Custom HTML 블록으로 명시하면 원문 그대로 렌더링됨.
+    content_html = f"<!-- wp:html -->\n{content_html}\n<!-- /wp:html -->"
     payload = {
         "title": article["title"],
         "content": content_html,
@@ -1509,6 +1528,42 @@ def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_th
         raise RuntimeError(f"워드프레스닷컴 글 발행 실패 (HTTP {resp.status_code}, site={site}): {resp.text[:500]}")
     logger.info(f"[워드프레스] 발행 완료(워드프레스닷컴): {resp.json().get('URL', '(URL 확인 불가)')}")
 
+def _upload_media_to_wordpress_self_hosted(auth_header: str, local_path: str) -> Optional[Dict[str, Any]]:
+    """자체호스팅 워드프레스 미디어 라이브러리에 업로드하고 {id, url}을 반환합니다."""
+    try:
+        with open(local_path, "rb") as f:
+            img_bytes = f.read()
+        resp = requests.post(
+            f"{WORDPRESS_URL}/wp-json/wp/v2/media",
+            headers={
+                "Authorization": auth_header,
+                "Content-Disposition": f'attachment; filename="{os.path.basename(local_path)}"',
+                "Content-Type": "image/webp",
+            },
+            data=img_bytes,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {"id": data.get("id"), "url": data.get("source_url")}
+    except Exception as e:
+        logger.warning(f"[워드프레스] 미디어 업로드 실패 '{local_path}': {e}")
+        return None
+
+def _replace_thumbs_with_wordpress_self_hosted_media(html_body: str, auth_header: str) -> str:
+    uploaded_cache: Dict[str, Optional[str]] = {}
+
+    def _replace(m: "re.Match") -> str:
+        filename = m.group(1)
+        if filename not in uploaded_cache:
+            local_path = os.path.join(DOCS_DIR, "thumbs", filename)
+            media = _upload_media_to_wordpress_self_hosted(auth_header, local_path)
+            uploaded_cache[filename] = media["url"] if media else None
+        hosted_url = uploaded_cache[filename]
+        return f'src="{hosted_url}"' if hosted_url else m.group(0)
+
+    return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
+
 def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
     auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
     auth_header = f"Basic {auth_token}"
@@ -1516,31 +1571,21 @@ def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: st
 
     # 대표이미지(썸네일) 업로드 (실패해도 본문 발행은 계속 진행)
     featured_media_id = None
-    try:
-        with open(local_thumb_path, "rb") as f:
-            img_bytes = f.read()
-        media_resp = requests.post(
-            f"{WORDPRESS_URL}/wp-json/wp/v2/media",
-            headers={
-                "Authorization": auth_header,
-                "Content-Disposition": f'attachment; filename="{os.path.basename(local_thumb_path)}"',
-                "Content-Type": "image/webp",
-            },
-            data=img_bytes,
-            timeout=30,
-        )
-        media_resp.raise_for_status()
-        featured_media_id = media_resp.json().get("id")
-    except Exception as e:
-        logger.warning(f"[워드프레스] 대표이미지 업로드 실패, 이미지 없이 발행합니다: {e}")
+    thumb_media = _upload_media_to_wordpress_self_hosted(auth_header, local_thumb_path)
+    if thumb_media:
+        featured_media_id = thumb_media.get("id")
 
-    safe_body = _embed_local_thumbs_as_base64(article["html_body"])
+    # [FIX] base64 data URI는 워드프레스 콘텐츠 정제 필터가 걸러낼 수 있어(워드프레스닷컴에서 실제로 발생),
+    # 자체호스팅에서도 동일 위험을 피하기 위해 실제 미디어 업로드 방식으로 통일
+    safe_body = strip_interactive_widgets(article["html_body"])  # [FIX] 표 확대 모달 등 인라인 JS 제거
+    safe_body = _replace_thumbs_with_wordpress_self_hosted_media(safe_body, auth_header)
     content_html = (
         f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
         f'{safe_body}'
-        f'<p style="color:#999;font-size:12px;">원문: <a href="{canonical_url}" target="_blank" rel="noopener">{canonical_url}</a></p>'
     )
+    # [FIX] wpautop이 <table> 구조를 깨뜨리는 것을 막기 위해 Custom HTML 블록으로 명시
+    content_html = f"<!-- wp:html -->\n{content_html}\n<!-- /wp:html -->"
     payload = {
         "title": article["title"],
         "content": content_html,
@@ -1634,7 +1679,8 @@ def run() -> None:
     update_dashboard(posts)
     update_seo_files(posts)
     blogger_url = publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
-    # [FIX] 워드프레스 "원문" 링크를 GitHub Pages 대신 Blogger 글 주소로 변경 (Blogger 발행 실패 시 GitHub Pages로 폴백)
+    # [FIX] 워드프레스/블로거 본문 하단 "원문" 링크는 요청에 따라 완전히 제거함.
+    # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
     publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
 
     logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
