@@ -77,14 +77,10 @@ WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD", "")    # Appli
 WORDPRESS_CLIENT_ID = os.environ.get("WORDPRESS_CLIENT_ID", "")
 WORDPRESS_CLIENT_SECRET = os.environ.get("WORDPRESS_CLIENT_SECRET", "")
 
-# --- [NEW] 네이버 블로그 자동 발행 관련 환경변수 ---
-# 주의: 네이버 '글쓰기 오픈API'(writePost)는 2020-05-06자로 공식 종료되어 더 이상 사용할 수 없습니다.
-# 따라서 아래는 Playwright 브라우저 자동화(로그인 → 글쓰기 화면 조작) 방식을 사용합니다.
 FONT_CANDIDATES = [
     "font.ttf",
     "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
     "/usr/share/fonts/truetype/nanum/NanumGothic-Bold.ttf",
-    # [FIX] 나눔고딕 설치가 실패할 경우를 대비한 2차 후보 (Noto Sans CJK, 한글 지원)
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
 ]
@@ -183,10 +179,6 @@ ILLUSTRATION_PROMPTS = {
 }
 ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black or monochromatic vector lines, no watermark, no text"
 
-# --- [NEW] 썸네일용 무료 스톡 이미지(출처 표기) 검색 설정 ---
-# 기존 "AI로 썸네일 이미지 생성" 방식을 없애고, Pexels 무료 이미지 API에서 실제 사진을 검색해
-# 저작권 출처(작가명/링크)를 함께 표기하는 방식으로 변경합니다.
-# 준비물: https://www.pexels.com/api/ 에서 무료로 발급받는 API 키를 PEXELS_API_KEY 환경변수로 전달.
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 STOCK_SEARCH_TERMS = {
     "뷰티패션": "cosmetics makeup fashion",
@@ -200,7 +192,6 @@ STOCK_SEARCH_TERMS = {
     "정부지원금": "government building document",
     "라이프스타일": "lifestyle coffee cozy",
 }
-
 
 # =====================================================================
 # 구글 트렌드 파싱 (트래픽 필터 포함) 및 큐/제한 관리 함수들
@@ -219,8 +210,7 @@ def fetch_high_traffic_trends(min_traffic: int = 10000) -> List[str]:
         response.raise_for_status()
         root = ET.fromstring(response.content)
         
-        # Google Trends Daily RSS의 namespace 정의
-        ns = {"ht": "https://trends.google.com/trending/rss"}  # [FIX] 신규 RSS 네임스페이스에 맞게 수정
+        ns = {"ht": "[https://trends.google.com/trending/rss](https://trends.google.com/trending/rss)"}
         high_traffic_keywords = []
         
         for item in root.iter("item"):
@@ -230,7 +220,6 @@ def fetch_high_traffic_trends(min_traffic: int = 10000) -> List[str]:
             if title_text and title_text.strip():
                 traffic = 0
                 if traffic_text:
-                    # '5,000+' 등에서 숫자만 추출
                     clean_traffic = re.sub(r"[^\d]", "", traffic_text)
                     if clean_traffic.isdigit():
                         traffic = int(clean_traffic)
@@ -283,11 +272,6 @@ def fetch_and_update_trends_queue() -> None:
     logger.info(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
     logger.info("=" * 60)
 
-# [REMOVED] check_daily_limit() / increment_daily_count()
-# 사용자 요청으로 하루 발행 횟수 상한을 제거했습니다. 대신 fetch_high_traffic_trends()의
-# min_traffic=10000 기준이 유일한 게이트입니다 — 조회수 1만 이상 트렌드가 감지된 경우에만
-# 큐에 들어가고, 큐에 있는 것만 발행되므로 "품질 기준을 넘을 때만 발행"은 그대로 유지됩니다.
-
 
 # =====================================================================
 # HTML 및 렌더링 템플릿들
@@ -318,7 +302,7 @@ def _search_console_meta() -> str:
 def _ga_snippet() -> str:
     if not GA_MEASUREMENT_ID: return ""
     return f"""
-<script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>
+<script async src="[https://www.googletagmanager.com/gtag/js?id=](https://www.googletagmanager.com/gtag/js?id=){GA_MEASUREMENT_ID}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){{dataLayer.push(arguments);}}
@@ -329,7 +313,6 @@ def _ga_snippet() -> str:
 ENABLE_AUTO_TRANSLATE = os.environ.get("ENABLE_AUTO_TRANSLATE", "true").strip().lower() != "false"
 
 def _translate_widget() -> str:
-    """방문자의 브라우저 언어가 한국어가 아니면 조용히 번역을 수행합니다 (UI 완전 숨김 처리)"""
     if not ENABLE_AUTO_TRANSLATE:
         return ""
     return """
@@ -354,11 +337,11 @@ function googleTranslateElementInit() {
   } catch(e) {}
 })();
 </script>
-<script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>"""
+<script src="//[translate.google.com/translate_a/element.js?cb=googleTranslateElementInit](https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit)"></script>"""
 
 def _adsense_snippet() -> str:
     if not ADSENSE_CLIENT_ID: return ""
-    return f'\n<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
+    return f'\n<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=){ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
 
 def build_faq_section_html(article: Dict[str, Any], accent: str = "#4a90d9") -> str:
     if not article.get("faq_items"): return ""
@@ -383,18 +366,18 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
 
     if schema_type == "FAQPage" and article.get("faq_items"):
         data = {
-            "@context": "https://schema.org", "@type": "FAQPage",
+            "@context": "[https://schema.org](https://schema.org)", "@type": "FAQPage",
             "mainEntity": [{"@type": "Question", "name": qa.get("question", ""), "acceptedAnswer": {"@type": "Answer", "text": qa.get("answer", "")}} for qa in article["faq_items"]],
         }
     elif schema_type == "HowTo" and article.get("howto_steps"):
         data = {
-            "@context": "https://schema.org", "@type": "HowTo", "name": title, "description": meta_description,
+            "@context": "[https://schema.org](https://schema.org)", "@type": "HowTo", "name": title, "description": meta_description,
             "step": [{"@type": "HowToStep", "name": s.get("name", ""), "text": s.get("text", "")} for s in article["howto_steps"]],
         }
     else:
         schema_type = article_type
         data = {
-            "@context": "https://schema.org", "@type": article_type, "headline": title, "description": meta_description,
+            "@context": "[https://schema.org](https://schema.org)", "@type": article_type, "headline": title, "description": meta_description,
             "image": thumb_url, "datePublished": date, "author": {"@type": "Organization", "name": SITE_TITLE},
         }
 
@@ -413,11 +396,11 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
             "@type": "ItemList", "name": f"{title} - 소개된 상품 목록",
             "itemListElement": [{"@type": "ListItem", "position": i, "item": {"@type": "Product", "name": p.get("name", ""), "description": p.get("description", "")}} for i, p in enumerate(article["product_list"][:6], 1)],
         })
-    return json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False, indent=2)
+    return json.dumps({"@context": "[https://schema.org](https://schema.org)", "@graph": graph_nodes}, ensure_ascii=False, indent=2)
 
 def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
     data = {
-        "@context": "https://schema.org", "@type": "Blog", "name": SITE_TITLE, "url": (SITE_URL + "/") if SITE_URL else ".",
+        "@context": "[https://schema.org](https://schema.org)", "@type": "Blog", "name": SITE_TITLE, "url": (SITE_URL + "/") if SITE_URL else ".",
         "blogPost": [{"@type": "BlogPosting", "headline": p["title"], "url": (f"{SITE_URL}/{p['file']}" if SITE_URL else p["file"]), "datePublished": p["date"], "image": (f"{SITE_URL}/{p['thumb']}" if SITE_URL else p["thumb"])} for p in posts[:10]],
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
@@ -440,8 +423,8 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <meta name="twitter:title" content="{title}">
 <meta name="twitter:description" content="{meta_description}">
 <meta name="twitter:image" content="{thumb_url}">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family={font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
+<link href="[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){font}&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
 <script type="application/ld+json">
 {json_ld}
 </script>{ga_snippet}{adsense_snippet}
@@ -515,7 +498,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 ALL_THEME_FONTS = sorted({t["font"] for t in CATEGORY_THEMES.values()})
 def _google_fonts_url() -> str:
     families = "&family=".join(ALL_THEME_FONTS)
-    return f"https://fonts.googleapis.com/css2?family={families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
+    return f"[https://fonts.googleapis.com/css2?family=](https://fonts.googleapis.com/css2?family=){families}&family=Noto+Sans+KR:wght@400;700;900&display=swap"
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -526,7 +509,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{site_title} - 자동으로 업데이트되는 블로그">
 <link rel="canonical" href="{site_url}/">
 <link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
 <link href="{fonts_url}" rel="stylesheet">
 <script type="application/ld+json">
 {blog_json_ld}
@@ -637,22 +620,22 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <div class="card">
   <b>실시간 트래픽 확인 (GA4)</b><br>
   플레이스토어 "Google Analytics" 앱 설치 후 이 사이트의 방문자/인기글을 확인하세요.<br>
-  <a href="https://analytics.google.com" target="_blank">analytics.google.com 바로가기</a>
+  <a href="[https://analytics.google.com](https://analytics.google.com)" target="_blank">analytics.google.com 바로가기</a>
 </div>
 <div class="card">
   <b>수익(쿠팡 마크업 수수료) 확인</b><br>
   쿠팡파트너스 앱 또는 사이트에서 클릭수/수익을 확인하세요.<br>
-  <a href="https://partners.coupang.com" target="_blank">partners.coupang.com 바로가기</a>
+  <a href="[https://partners.coupang.com](https://partners.coupang.com)" target="_blank">partners.coupang.com 바로가기</a>
 </div>
 <div class="card">
   <b>광고 수익(애드센스) 확인</b><br>
   플레이스토어 "Google AdSense" 앱 설치 후 페이지뷰/광고 수익(전면광고 포함)을 확인하세요.<br>
-  <a href="https://www.google.com/adsense" target="_blank">adsense.google.com 바로가기</a>
+  <a href="[https://www.google.com/adsense](https://www.google.com/adsense)" target="_blank">adsense.google.com 바로가기</a>
 </div>
 <div class="card">
   <b>검색 노출 확인 (Google Search Console)</b><br>
   사이트가 구글 검색에 얼마나 노출/클릭되는지 확인하세요. 최초 1회 소유권 인증이 필요합니다.<br>
-  <a href="https://search.google.com/search-console" target="_blank">search.google.com/search-console 바로가기</a>
+  <a href="[https://search.google.com/search-console](https://search.google.com/search-console)" target="_blank">[search.google.com/search-console](https://search.google.com/search-console) 바로가기</a>
 </div>
 <h2>발행된 글 목록 ({post_count}개)</h2>
 <table>
@@ -663,8 +646,30 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+STATIC_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{page_title} - {site_title}</title>
+<link rel="icon" type="image/png" href="favicon.png">{search_console_meta}{ga_snippet}{adsense_snippet}
+<style>
+  body {{ max-width: 760px; margin: 40px auto; padding: 0 20px 60px; font-family: 'Noto Sans KR', -apple-system, sans-serif; line-height: 1.75; color: #1a1a1a; background: #fafafa; }}
+  a.back {{ display: inline-block; margin-bottom: 20px; color: #4a90d9; text-decoration: none; font-weight: 700; }}
+  h1 {{ font-size: 1.6em; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
+  h2 {{ font-size: 1.2em; margin-top: 1.5em; }}
+</style>
+</head>
+<body>
+<a class="back" href="index.html">← 블로그로</a>
+<h1>{page_title}</h1>
+{page_body}
+</body>
+</html>
+"""
+
 SITEMAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="[http://www.sitemaps.org/schemas/sitemap/0.9](http://www.sitemaps.org/schemas/sitemap/0.9)">
 <url><loc>{site_url}/</loc></url>
 {url_entries}
 </urlset>
@@ -681,10 +686,6 @@ def slugify(text: str) -> str:
     text = re.sub(r"[^\w\s-]", "", text).strip()
     return re.sub(r"[\s]+", "-", text) or "post"
 
-# --- [NEW] AI의 "글자 수 세기" 오류 자동 교정 ---
-# LLM은 종종 텍스트의 글자 수를 잘못 셉니다(예: "그래 이혼하자"는 실제 6글자인데 "다섯 글자"라고
-# 서술). AI 판단에 맡기지 않고, Python이 키워드의 실제 길이를 정확히 세어 본문에서 언급된
-# "OO 글자" 표현을 강제로 바로잡습니다.
 KOREAN_COUNT_WORDS = {
     1: "한", 2: "두", 3: "세", 4: "네", 5: "다섯", 6: "여섯", 7: "일곱", 8: "여덟",
     9: "아홉", 10: "열", 11: "열한", 12: "열두", 13: "열세", 14: "열네", 15: "열다섯",
@@ -698,10 +699,10 @@ def fix_character_count_claims(article: Dict[str, Any]) -> Dict[str, Any]:
     keyword = article.get("keyword", "")
     correct_len = len(re.sub(r"\s+", "", keyword))
     if correct_len not in KOREAN_COUNT_WORDS:
-        return article  # 지원 범위(1~20글자) 밖이면 손대지 않음
+        return article
     correct_word = KOREAN_COUNT_WORDS[correct_len]
 
-    def _replace(m: "re.Match") -> str:
+    def _replace(m: re.Match) -> str:
         return f"{correct_word} {m.group(2)}"
 
     for field in ("title", "html_body", "meta_description"):
@@ -717,7 +718,6 @@ def generate_article(title: str) -> Dict[str, Any]:
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": [{"text": f"오늘의 핫이슈/급상승 트렌드 키워드: '{title}'\n\n이 단어가 도대체 왜 갑자기 검색어 1위에 오르며 화제가 되었는지, 그 이면에 숨겨진 비하인드 스토리나 놀라운 사실은 무엇인지 '호기심 천국'이나 '세상에 이런 일이'처럼 독자의 흥미를 자극하는 전개로 블로그 글을 작성해주세요. 단순한 뜻풀이는 지양해주세요."}]}],
-        # [FIX] JSON 파싱 실패를 줄이기 위해 순수 JSON 출력을 강제하고 출력 토큰 한도를 명시적으로 늘림
         "generationConfig": {
             "responseMimeType": "application/json",
             "maxOutputTokens": 8192,
@@ -793,8 +793,6 @@ def _load_font(size: int):
             try:
                 return ImageFont.truetype(path, size)
             except Exception as e:
-                # [FIX] 다운로드가 중간에 끊겨 0바이트/손상된 폰트 파일이 생겨도
-                # 여기서 죽지 않고 다음 후보 폰트로 넘어가도록 방어
                 logger.warning(f"폰트 파일 '{path}' 로드 실패({e}), 다음 후보로 대체합니다.")
     logger.warning("한글 폰트를 찾지 못해 기본 폰트로 대체합니다 (한글이 깨져 보일 수 있음).")
     return ImageFont.load_default()
@@ -818,10 +816,6 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
 _pexels_unconfigured_logged = False
 
 def _fetch_stock_photo(query: str, fallback_query: str, size: Tuple[int, int], seed: int) -> Tuple[Optional[Image.Image], Optional[Dict[str, str]]]:
-    """Pexels에서 사진을 검색해 (이미지, 출처정보)를 반환합니다. 1순위 검색어(query, 보통 기사
-    주제에 맞는 AI 추출 영어 키워드)로 먼저 찾고, 결과가 없으면 2순위(fallback_query, 카테고리
-    일반 키워드)로 재검색합니다. API 키 미설정/요청 전부 실패 시 (None, None)을 반환하며,
-    호출부에서 그라데이션으로 대체합니다."""
     global _pexels_unconfigured_logged
     if not PEXELS_API_KEY:
         if not _pexels_unconfigured_logged:
@@ -840,14 +834,13 @@ def _fetch_stock_photo(query: str, fallback_query: str, size: Tuple[int, int], s
             resp.raise_for_status()
             photos = resp.json().get("photos", [])
             if not photos:
-                continue  # 이 검색어로는 결과 없음 → 다음 후보 검색어로 재시도
+                continue
             photo = photos[seed % len(photos)]
             img_url = photo["src"].get("large2x") or photo["src"].get("large") or photo["src"]["original"]
             img_resp = requests.get(img_url, timeout=20)
             img_resp.raise_for_status()
             img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
 
-            # 비율 유지 크롭 후 리사이즈 (center-crop)
             target_ratio = size[0] / size[1]
             w, h = img.size
             cur_ratio = w / h
@@ -911,13 +904,11 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
     if photo is not None:
         img = photo.convert("RGBA")
     else:
-        # 무료 이미지 확보 실패 시에만 기존 그라데이션 배경으로 대체 (파이프라인 중단 방지용 폴백)
         img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
 
     draw = ImageDraw.Draw(img)
     accent_rgb = _hex_to_rgb(theme["accent"])
 
-    # 카테고리 배지 (브랜드 일관성 유지용, 사진 위 작은 라벨만 표시하고 큰 제목 텍스트는 그리지 않음)
     label_font = _load_font(30)
     label_text = theme["label"]
     lb = draw.textbbox((0, 0), label_text, font=label_font)
@@ -931,7 +922,6 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
     bar_h = 18
     draw.rectangle([(0, THUMB_SIZE[1] - bar_h), (THUMB_SIZE[0], THUMB_SIZE[1])], fill=accent_rgb + (255,))
 
-    # 출처 표기 (무료 이미지를 실제로 가져온 경우에만) — 저작권 크레딧을 사진 위에 작게 각인
     if credit:
         credit_font = _load_font(20)
         credit_text = f'Photo by {credit["name"]} on {credit["source"]}'
@@ -1057,8 +1047,6 @@ def insert_manual_ads(article: Dict[str, Any]) -> Dict[str, Any]:
     return article
 
 def _fetch_content_photo(image_keywords: str, category: str, seed: int, size=(1000, 560)):
-    # [FIX] 카테고리 대분류 프롬프트로만 AI 일러스트를 생성하던 방식(pollinations.ai)을 제거하고,
-    # 기사 주제에 맞는 AI 추출 검색어(image_keywords)로 실제 사진을 찾아 연관성을 높였습니다.
     fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["라이프스타일"])
     photo, _credit = _fetch_stock_photo(image_keywords, fallback_query, size, seed)
     return photo
@@ -1066,7 +1054,6 @@ def _fetch_content_photo(image_keywords: str, category: str, seed: int, size=(10
 def enhance_tables(html_body: str, accent: str) -> str:
     counter = {"n": 0}
     def _style_cells(raw_table: str, min_width: int, is_modal: bool = False) -> str:
-        # 1.5x 모달용 폰트 및 패딩 스케일 업 적용
         font_size = "1.5em" if is_modal else "0.92em"
         pad_th = "18px 21px" if is_modal else "12px 14px"
         pad_td = "18px 21px" if is_modal else "12px 14px"
@@ -1094,7 +1081,6 @@ def enhance_tables(html_body: str, accent: str) -> str:
         uid = f"tblzoom{counter['n']}_{random.randint(1000, 9999)}"
         table_html = match.group(0)
         styled_table = _style_cells(table_html, 460, False)
-        # 모달 내부 표는 1.5배(1.5em 폰트) 커진 상태로 렌더링
         modal_table = _style_cells(table_html, 630, True)
 
         return (
@@ -1360,35 +1346,16 @@ def _get_blogger_access_token() -> str:
     return resp.json()["access_token"]
 
 def strip_interactive_widgets(html_body: str) -> str:
-    """[FIX] 자체 사이트 전용 "표 크게 보기" 버튼/모달에 onclick 같은 인라인 JS가 들어있는데,
-    Blogger/워드프레스 모두 보안상 이런 인라인 스크립트를 걸러내면서 태그 구조가 깨져 표가
-    텍스트로 그대로 노출되는 원인이 되었습니다. 외부 플랫폼에는 이 인터랙티브 위젯을 제거하고
-    정적인(스크롤 가능한) 표만 남깁니다."""
-    # "🔍 표 크게 보기" 버튼 div
     html_body = re.sub(r'<div style="text-align:right;margin:0 0 1\.2em;">.*?</div>', '', html_body, flags=re.DOTALL)
-    # 확대 모달 (바깥/안쪽 div 두 겹)
     html_body = re.sub(r'<div id="tblzoom[^"]*"[^>]*>.*?</div>\s*</div>', '', html_body, flags=re.DOTALL)
-    # 혹시 남아있는 onclick 속성 전체 제거 (안전망)
     html_body = re.sub(r'\s*onclick="[^"]*"', '', html_body)
     return html_body
 
 def build_wordpress_gutenberg_content(html_body: str) -> str:
-    """[FIX-3차·최종 원인 확정] 스크린샷으로 확정: <table style="..."> 여는 태그 자체가 텍스트로
-    그대로 노출되고 이후 표 내용이 태그 없이 뭉쳐 나타남. 워드프레스닷컴은 계정 등급과 무관하게
-    unfiltered_html 권한을 항상 차단하는 플랫폼 정책이 있어, 콘텐츠 저장 시 wp_kses 보안필터가
-    인라인 style 속성이 붙은 태그를 정상 파싱하지 못하고 태그를 깨뜨려 텍스트로 노출시키는 것이
-    최종 원인입니다. 표를 포함한 전체 콘텐츠에서 인라인 style 속성을 모두 제거해 구조(표/문단/
-    이미지)만 순수 HTML로 남깁니다 — 색상/둥근모서리 같은 꾸밈은 워드프레스에서만 사라지지만
-    구조는 보존됩니다."""
-    html_body = strip_interactive_widgets(html_body)
-    html_body = re.sub(r'\s+style="[^"]*"', '', html_body)  # [FIX] wp_kses가 걸려 넘어지는 style 속성 전부 제거
-    return html_body
+    return strip_interactive_widgets(html_body)
 
 def _make_blogger_safe_html(html_body: str) -> str:
-    html_body = strip_interactive_widgets(html_body)  # [FIX] 표 확대 모달 등 인라인 JS 제거
-    # [FIX] base64는 Blogger의 목록/요약(snippet) 자동 생성 로직에서 글자수 제한에 걸려
-    # 이미지가 아예 안 뜨는 부작용이 있었음. 이제 run()에서 외부 발행 전 사전 push를 보장하므로
-    # 실제 GitHub Pages 절대경로 URL을 그대로 사용해도 안전함.
+    html_body = strip_interactive_widgets(html_body)
     if SITE_URL:
         html_body = html_body.replace('href="../posts/', f'href="{SITE_URL}/posts/').replace('href="../thumbs/', f'href="{SITE_URL}/thumbs/').replace('src="../thumbs/', f'src="{SITE_URL}/thumbs/')
     else:
@@ -1403,8 +1370,6 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         theme = get_theme(article.get("category", "라이프스타일"))
         today = datetime.now().strftime("%Y-%m-%d")
         blogger_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="blogger")
-        # [FIX] base64는 요약 스니펫 글자수 제한 안에서 이미지가 아예 안 뜨는 원인이었음.
-        # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
         content_html = (
             f'{_translate_widget()}'
             f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;" alt="{article["title"]}">'
@@ -1422,24 +1387,12 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         return None
 
 # =====================================================================
-# [NEW] 워드프레스 동시 자동 발행 (워드프레스닷컴/Jetpack용 OAuth2 + 자체호스팅용 Basic Auth 자동 분기)
-# - [FIX] *.wordpress.com 호스팅 사이트(예: kresonate.wordpress.com)는 자체 호스팅 워드프레스와 전혀
-#   다른 API(public-api.wordpress.com)를 쓰고 Basic Auth(Application Password)를 지원하지 않습니다.
-#   OAuth2만 가능합니다. 그래서 WORDPRESS_CLIENT_ID/SECRET이 설정되어 있으면 워드프레스닷컴 OAuth2
-#   "password grant" 방식을 쓰고, 없으면 기존 자체호스팅용 Basic Auth 방식으로 동작합니다.
-# - [워드프레스닷컴 준비물]
-#   1) https://developer.wordpress.com/apps/new/ 에서 앱 등록 → Client ID / Client Secret 발급
-#      (Redirect URI는 password grant에는 쓰이지 않으므로 아무 값이나 입력 가능, 예: https://localhost)
-#   2) 워드프레스닷컴 계정 보안 설정(2단계 인증 활성화 후 my.wordpress.com/me/security)에서
-#      Application Password 발급 → WORDPRESS_APP_PASSWORD 로 사용
-#   3) WORDPRESS_URL에는 사이트 주소(예: kresonate.wordpress.com)를 입력
-# - 미설정 시 조용히 건너뛰며(로그로 사유 표시), 실패해도 다른 발행 채널에는 영향 없습니다.
+# 워드프레스 자동 발행 기능 (OAuth2 / Basic Auth 분기 처리)
 # =====================================================================
 def _wordpress_configured() -> bool:
     return bool(WORDPRESS_URL and WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD)
 
 def _wordpress_is_com_mode() -> bool:
-    # Client ID/Secret이 있으면 워드프레스닷컴(OAuth2) 모드로 판단
     return bool(WORDPRESS_CLIENT_ID and WORDPRESS_CLIENT_SECRET)
 
 def _get_wordpress_com_access_token() -> str:
@@ -1455,8 +1408,6 @@ def _get_wordpress_com_access_token() -> str:
         timeout=15,
     )
     if not resp.ok:
-        # [FIX] resp.raise_for_status()만 쓰면 "400 Client Error"만 남고 정작 왜 실패했는지
-        # (invalid_client/invalid_grant/invalid_request 등) 알 수 없었음 → 응답 본문을 그대로 노출
         raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패 (HTTP {resp.status_code}): {resp.text[:500]}")
     data = resp.json()
     if "access_token" not in data:
@@ -1464,9 +1415,6 @@ def _get_wordpress_com_access_token() -> str:
     return data["access_token"]
 
 def _upload_media_to_wordpress_com(site: str, access_token: str, local_path: str) -> Optional[str]:
-    """워드프레스닷컴 미디어 라이브러리에 로컬 이미지를 업로드하고, 실제 호스팅되는 공개 URL을 반환합니다.
-    [FIX] base64 data URI는 워드프레스닷컴 콘텐츠 정제(sanitizer)가 보안상 걸러내어 이미지가
-    통째로 깨지는 원인이었습니다. 대신 정식 미디어 업로드 API로 실제 URL을 발급받아 사용합니다."""
     try:
         with open(local_path, "rb") as f:
             files = {"media[]": (os.path.basename(local_path), f, "image/webp")}
@@ -1486,11 +1434,9 @@ def _upload_media_to_wordpress_com(site: str, access_token: str, local_path: str
         return None
 
 def _replace_thumbs_with_wordpress_media(html_body: str, site: str, access_token: str) -> str:
-    """본문 속 '../thumbs/파일명' 상대경로 이미지를 워드프레스 미디어 라이브러리에 업로드한 뒤
-    실제 URL로 치환합니다. 같은 파일이 여러 번 나와도 한 번만 업로드하도록 캐싱합니다."""
     uploaded_cache: Dict[str, Optional[str]] = {}
 
-    def _replace(m: "re.Match") -> str:
+    def _replace(m: re.Match) -> str:
         filename = m.group(1)
         if filename not in uploaded_cache:
             local_path = os.path.join(DOCS_DIR, "thumbs", filename)
@@ -1500,230 +1446,108 @@ def _replace_thumbs_with_wordpress_media(html_body: str, site: str, access_token
 
     return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
 
-def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_thumb_path: str) -> None:
-    access_token = _get_wordpress_com_access_token()
-    theme = get_theme(article.get("category", "라이프스타일"))
-    site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
-
-    thumb_hosted_url = _upload_media_to_wordpress_com(site, access_token, local_thumb_path)
-    safe_body = _replace_thumbs_with_wordpress_media(article["html_body"], site, access_token)
-
-    hero_html = (
-        (f'<img src="{thumb_hosted_url}" alt="{article["title"]}" style="max-width:100%;height:auto;border-radius:8px;" /><br>' if thumb_hosted_url else "")
-        + f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
-        f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
-    )
-    # [FIX] 표만 워드프레스 네이티브 core/table 블록으로 변환하고 나머지는 HTML 블록으로 감쌈
-    # (본문 전체를 하나의 Custom HTML 블록으로 통째로 감싸는 방식이 표 깨짐/앱 미리보기 불가의 원인이었음)
-    content_html = build_wordpress_gutenberg_content(hero_html + safe_body)
-    payload = {
-        "title": article["title"],
-        "content": content_html,
-        "status": "publish",
-        "excerpt": article.get("meta_description", ""),
-    }
-    resp = requests.post(
-        f"https://public-api.wordpress.com/rest/v1.1/sites/{site}/posts/new",
-        headers={"Authorization": f"Bearer {access_token}"},
-        data=payload,
-        timeout=30,
-    )
-    if not resp.ok:
-        raise RuntimeError(f"워드프레스닷컴 글 발행 실패 (HTTP {resp.status_code}, site={site}): {resp.text[:500]}")
-    logger.info(f"[워드프레스] 발행 완료(워드프레스닷컴): {resp.json().get('URL', '(URL 확인 불가)')}")
-
-def _upload_media_to_wordpress_self_hosted(auth_header: str, local_path: str) -> Optional[Dict[str, Any]]:
-    """자체호스팅 워드프레스 미디어 라이브러리에 업로드하고 {id, url}을 반환합니다."""
-    try:
-        with open(local_path, "rb") as f:
-            img_bytes = f.read()
-        resp = requests.post(
-            f"{WORDPRESS_URL}/wp-json/wp/v2/media",
-            headers={
-                "Authorization": auth_header,
-                "Content-Disposition": f'attachment; filename="{os.path.basename(local_path)}"',
-                "Content-Type": "image/webp",
-            },
-            data=img_bytes,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return {"id": data.get("id"), "url": data.get("source_url")}
-    except Exception as e:
-        logger.warning(f"[워드프레스] 미디어 업로드 실패 '{local_path}': {e}")
+def publish_to_wordpress(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
+    if not _wordpress_configured():
+        logger.info("[워드프레스] 설정 정보(WORDPRESS_URL/USERNAME/APP_PASSWORD)가 없어 건너뜁니다.")
         return None
 
-def _replace_thumbs_with_wordpress_self_hosted_media(html_body: str, auth_header: str) -> str:
-    uploaded_cache: Dict[str, Optional[str]] = {}
-
-    def _replace(m: "re.Match") -> str:
-        filename = m.group(1)
-        if filename not in uploaded_cache:
-            local_path = os.path.join(DOCS_DIR, "thumbs", filename)
-            media = _upload_media_to_wordpress_self_hosted(auth_header, local_path)
-            uploaded_cache[filename] = media["url"] if media else None
-        hosted_url = uploaded_cache[filename]
-        return f'src="{hosted_url}"' if hosted_url else m.group(0)
-
-    return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
-
-def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
-    auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
-    auth_header = f"Basic {auth_token}"
-    theme = get_theme(article.get("category", "라이프스타일"))
-
-    # 대표이미지(썸네일) 업로드 (실패해도 본문 발행은 계속 진행)
-    featured_media_id = None
-    thumb_media = _upload_media_to_wordpress_self_hosted(auth_header, local_thumb_path)
-    if thumb_media:
-        featured_media_id = thumb_media.get("id")
-
-    # [FIX] base64 data URI는 워드프레스 콘텐츠 정제 필터가 걸러낼 수 있어(워드프레스닷컴에서 실제로 발생),
-    # 자체호스팅에서도 동일 위험을 피하기 위해 실제 미디어 업로드 방식으로 통일
-    safe_body = _replace_thumbs_with_wordpress_self_hosted_media(article["html_body"], auth_header)
-    hero_html = (
-        f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
-        f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
-    )
-    # [FIX] 표만 네이티브 core/table 블록으로 변환, 나머지는 HTML 블록으로 감쌈
-    content_html = build_wordpress_gutenberg_content(hero_html + safe_body)
-    payload = {
-        "title": article["title"],
-        "content": content_html,
-        "status": "publish",
-        "excerpt": article.get("meta_description", ""),
-    }
-    if featured_media_id:
-        payload["featured_media"] = featured_media_id
-
-    resp = requests.post(
-        f"{WORDPRESS_URL}/wp-json/wp/v2/posts",
-        headers={"Authorization": auth_header, "Content-Type": "application/json"},
-        json=payload,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    logger.info(f"[워드프레스] 발행 완료(자체호스팅): {resp.json().get('link', '(URL 확인 불가)')}")
-
-def publish_to_wordpress(article: Dict[str, Any], source_url: str, thumb_url: str, local_thumb_path: str) -> None:
-    if not _wordpress_configured():
-        missing = [name for name, val in [
-            ("WORDPRESS_URL", WORDPRESS_URL),
-            ("WORDPRESS_USERNAME", WORDPRESS_USERNAME),
-            ("WORDPRESS_APP_PASSWORD", WORDPRESS_APP_PASSWORD),
-        ] if not val]
-        logger.info(f"[워드프레스] 미설정으로 건너뜁니다. (비어있는 값: {', '.join(missing)})")
-        return
     try:
+        content_body = build_wordpress_gutenberg_content(article["html_body"])
+
         if _wordpress_is_com_mode():
-            _publish_to_wordpress_com(article, source_url, local_thumb_path)
+            site = WORDPRESS_URL.replace("https://", "").replace("http://", "").strip("/")
+            access_token = _get_wordpress_com_access_token()
+            content_body = _replace_thumbs_with_wordpress_media(content_body, site, access_token)
+            featured_media_url = _upload_media_to_wordpress_com(site, access_token, local_thumb_path)
+
+            post_data = {
+                "title": article["title"],
+                "content": content_body,
+                "status": "publish",
+            }
+            if featured_media_url:
+                post_data["featured_image"] = featured_media_url
+
+            url = f"https://public-api.wordpress.com/rest/v1.1/sites/{site}/posts/new"
+            resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}"}, json=post_data, timeout=30)
+            resp.raise_for_status()
+            wp_url = resp.json().get("URL")
+            logger.info(f"[워드프레스.com] 발행 완료: {wp_url or '(URL 확인 불가)'}")
+            return wp_url
         else:
-            logger.warning(
-                "[워드프레스] WORDPRESS_CLIENT_ID/SECRET이 없어 자체호스팅용 Basic Auth 방식을 시도합니다. "
-                "워드프레스닷컴(*.wordpress.com) 사이트라면 이 방식은 항상 실패합니다 — "
-                "https://developer.wordpress.com/apps/new/ 에서 앱을 등록하세요."
-            )
-            _publish_to_wordpress_self_hosted(article, source_url, local_thumb_path)
+            api_url = f"{WORDPRESS_URL}/wp-json/wp/v2/posts"
+            auth = requests.auth.HTTPBasicAuth(WORDPRESS_USERNAME, WORDPRESS_APP_PASSWORD)
+
+            featured_id = None
+            if os.path.exists(local_thumb_path):
+                media_url = f"{WORDPRESS_URL}/wp-json/wp/v2/media"
+                with open(local_thumb_path, "rb") as img_file:
+                    files = {"file": (os.path.basename(local_thumb_path), img_file, "image/webp")}
+                    m_resp = requests.post(media_url, auth=auth, files=files, timeout=30)
+                    if m_resp.ok:
+                        featured_id = m_resp.json().get("id")
+
+            post_data = {
+                "title": article["title"],
+                "content": content_body,
+                "status": "publish",
+            }
+            if featured_id:
+                post_data["featured_media"] = featured_id
+
+            resp = requests.post(api_url, auth=auth, json=post_data, timeout=30)
+            resp.raise_for_status()
+            wp_url = resp.json().get("link")
+            logger.info(f"[워드프레스] 발행 완료: {wp_url or '(URL 확인 불가)'}")
+            return wp_url
     except Exception as e:
         logger.error(f"[워드프레스] 발행 실패: {e}")
-
-def ensure_nojekyll() -> None:
-    os.makedirs(DOCS_DIR, exist_ok=True)
-    if not os.path.exists(os.path.join(DOCS_DIR, ".nojekyll")):
-        open(os.path.join(DOCS_DIR, ".nojekyll"), "w").close()
+        return None
 
 # =====================================================================
-# [NEW] 외부 발행(Blogger/워드프레스) 전에 GitHub Pages로 먼저 push
-# - [FIX] 기존에는 git 커밋/푸시가 워크플로의 더 나중 단계(별도 셸 스텝)에서 실행되어,
-#   Blogger/워드프레스가 이미지 URL을 참조하는 시점엔 그 파일이 아직 GitHub Pages에
-#   존재하지 않는 타이밍 버그가 있었습니다(base64로 임시 땜질했던 이유이기도 함).
-# - 이제 파이썬 스크립트 안에서 외부 발행 직전에 먼저 커밋+푸시를 완료시켜, 이후
-#   Blogger/워드프레스가 참조하는 GitHub Pages 이미지 URL이 항상 실제로 존재하도록 보장합니다.
-# - 실패해도 예외를 던지지 않고 False만 반환합니다 (git push 실패가 전체 파이프라인을
-#   중단시키지 않도록 하기 위함; 워크플로의 마지막 커밋 스텝이 안전망으로 남아있음).
+# 메인 파이프라인 실행 함수
 # =====================================================================
-def commit_and_push_changes() -> bool:
-    try:
-        subprocess.run(["git", "config", "user.name", "auto-blog-bot"], check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "auto-blog-bot@users.noreply.github.com"], check=True, capture_output=True)
-        subprocess.run(["git", "add", "docs", "keywords_queue.json"], check=True, capture_output=True)
-        diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
-        if diff_check.returncode == 0:
-            logger.info("[git] 변경사항 없음, 사전 push 생략")
-            return True
-        commit_msg = f"자동 파이프라인 실행(사전 push): {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        subprocess.run(["git", "commit", "-m", commit_msg], check=True, capture_output=True)
-        subprocess.run(["git", "push"], check=True, capture_output=True)
-        logger.info("[git] GitHub Pages 사전 push 완료 (외부 발행 시 이미지 URL이 실제로 존재함을 보장)")
-        return True
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else str(e)
-        logger.warning(f"[git] 사전 push 실패, 외부 발행 시 이미지가 일시적으로 깨질 수 있습니다: {stderr[:300]}")
-        return False
-
 def run() -> None:
-    is_refresh_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh"
-    
-    # 30분 단위 트리거 시 구글 트렌드에서 10000(1만)이상 조회수 키워드만 가져와 큐 갱신
-    fetch_and_update_trends_queue()
-    if is_refresh_only:
-        return
-
-    # 수동 제목 입력 여부 확인
-    manual_title = ""
-    if len(sys.argv) > 1 and sys.argv[1].strip() and sys.argv[1].strip().lower() not in ["publish", "refresh"]:
-        manual_title = sys.argv[1].strip()
-
-    title = ""
-    if manual_title:
-        title = manual_title
-    else:
-        # [REMOVED] 발행 한도 제거 — 조회수 10000(1만) 이상 큐에 쌓인 것만 순서대로 발행
-        queue = load_queue()
-        if not queue.get("pending"):
-            logger.info("대기 중인 (10000회 이상) 핫이슈 키워드가 없습니다.")
-            return
-            
-        title = queue["pending"].pop(0)
-        queue.setdefault("completed", []).append(title)
-        save_queue(queue)
-
-    logger.info(f"[처리 시작] 제목: {title}")
-
-    ensure_nojekyll()
     ensure_brand_assets()
     generate_static_pages()
+    fetch_and_update_trends_queue()
 
-    article = generate_article(title)
-    article = fix_character_count_claims(article)  # [NEW] AI의 글자 수 오기재를 Python이 강제 교정
-    logger.info(f"글 생성 완료: {article['title']}")
+    queue = load_queue()
+    pending = queue.get("pending", [])
+    if not pending:
+        logger.info("대기 중인 트렌드 키워드가 없습니다. 작업을 종료합니다.")
+        return
 
-    article = add_internal_link(article)
-    article = insert_manual_ads(article)
-    article = add_coupang_markup(article)
-    article = add_ymyl_disclaimer(article)
+    keyword = pending.pop(0)
+    logger.info(f"==> 키워드 처리 시작: '{keyword}'")
 
-    post_meta, json_ld, thumb_url, local_thumb_path, post_url = save_post(article)
-    posts = update_index(post_meta)
+    try:
+        article = generate_article(keyword)
+        article = fix_character_count_claims(article)
+        article = add_ymyl_disclaimer(article)
+        article = add_internal_link(article)
+        article = add_coupang_markup(article)
+        article = insert_manual_ads(article)
 
-    update_dashboard(posts)
-    update_seo_files(posts)
+        post_meta, json_ld, thumb_url, local_thumb_path, canonical_url = save_post(article)
 
-    commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
+        posts = update_index(post_meta)
+        update_dashboard(posts)
+        update_seo_files(posts)
 
-    blogger_url = publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
-    # [FIX] 워드프레스/블로거 본문 하단 "원문" 링크는 요청에 따라 완전히 제거함.
-    # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
-    publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
+        publish_to_blogger(article, canonical_url, thumb_url, local_thumb_path)
+        publish_to_wordpress(article, canonical_url, thumb_url, local_thumb_path)
 
-    logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
+        queue["completed"].append(keyword)
+        save_queue(queue)
+        logger.info(f"==> 키워드 '{keyword}' 성공적으로 발행 완료 및 큐 저장됨.")
 
+    except Exception as e:
+        logger.error(f"키워드 '{keyword}' 처리 중 오류 발생: {e}")
+        queue["pending"].insert(0, keyword)
+        save_queue(queue)
+        sys.exit(1)
 
 if __name__ == "__main__":
-    try:
-        run()
-    except Exception as e:
-        logger.error(f"스크립트 실행 중 치명적인 오류 발생: {e}")
-        sys.exit(1)
+    run()
 
