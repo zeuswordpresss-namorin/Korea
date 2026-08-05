@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
-- [스토리텔링 강화] 호기심 천국, 세상에 이런 일이 스타일의 흥미진진한 트렌드 원인 분석형 프롬프트 적용
-- [업그레이드] 조회수 10000회(1만) 이상 핫이슈만 감지 시 발행 (일일 발행 횟수 상한 없음)
+- [개편] 구글 트렌드 기반 소싱을 폐기하고, 에버그린 주제 뱅크(가이드/비교/체크리스트/FAQ/용어정리) 기반으로 전면 전환
+- [개편] 카테고리별 수익화 가중치(재테크·보험대출·정부지원금·헬스 우선) 반영, 하루 6회 발행 상한
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 """
 
@@ -20,7 +20,6 @@ import sys
 import textwrap
 import time
 import urllib.parse
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -38,10 +37,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =====================================================================
-# 구글 트렌드 관련 설정 (조회수 파싱을 위해 daily RSS만 사용)
+# 큐 파일 설정
 # =====================================================================
-TRENDS_RSS_URL = "https://trends.google.com/trending/rss?geo=KR"  # [FIX] 구 주소(daily/rss)는 404로 폐기됨 (2026-08 확인)
-REQUEST_TIMEOUT = 15
 QUEUE_FILE = "keywords_queue.json"
 
 # =====================================================================
@@ -98,20 +95,20 @@ GEMINI_URL = (
     "gemini-2.5-flash:generateContent?key={api_key}"
 )
 
-# 프롬프트를 흥미진진한 스토리텔러 톤으로 전면 개편
-SYSTEM_PROMPT = """당신은 사람들의 호기심을 강하게 자극하는 미스터리/정보 큐레이션 전문 스토리텔러이자 한국어 SEO 블로그 작가입니다. 
-TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'의 내레이션처럼 독자의 상상력을 자극하고, 몰랐던 사실을 알아가는 즐거움을 주는 톤으로 작성하되,
-사람이 직접 쓴 것처럼 자연스럽고 담백해야 합니다. 광고 카피처럼 과장되거나 기계적으로 반복되는 말투는 피하세요.
+# [개편] 트렌드 스토리텔링 프레이밍을 걷어내고, 처음부터 순수 가이드/정보성 콘텐츠로 전환
+SYSTEM_PROMPT = """당신은 독자에게 실질적으로 도움이 되는 정보를 정확하고 친절하게 전달하는 한국어 실용 정보 콘텐츠 전문 작가입니다.
+검색을 통해 찾아온 독자가 궁금한 것에 바로 답을 얻고, 다음 행동(가입/신청/구매/실천)까지 자신 있게 결정할 수 있도록 돕는 글을 씁니다.
+호기심을 자극하는 제목은 쓰되, 본문은 과장이나 감탄 없이 사람이 직접 정리해준 것처럼 담백하고 신뢰가 가는 톤으로 작성하세요.
 
 아래 규칙을 지켜 작성하세요:
 1. 제목은 검색 의도를 반영하되 흥미를 유발하도록 작성한다. 아래 9가지 후킹(hook) 기법 중 이 주제에 가장 잘 맞는 것을 1~2개 골라 제목과 도입부에 녹여낸다:
    ① 호기심 갭(정보의 틈을 열어 궁금하게) ② 구체성/숫자(정확한 수치로 신뢰감) ③ 손실회피(놓치면 손해라는 프레이밍)
    ④ 정체성/소속(나와 같은 부류가 하는 행동) ⑤ 대조(vs, 어느 쪽이 맞는지) ⑥ Before-After(변화의 폭을 자극)
    ⑦ 사회적 증거(다수의 선택을 근거로) ⑧ 의외성(예상을 살짝 배신하는 반전) ⑨ 낮은 진입장벽(나도 할 수 있겠다는 안도감)
-   (예: "OOO, 대체 왜 난리일까? 숨겨진 진짜 이유") 단, 입력받은 키워드의 의미를 벗어나지 않으며 25~40자 내외로 구글 검색결과에서 잘리지 않게 한다.
-1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 핵심 키워드를 앞부분에 배치하고, 클릭을 유도하는 호기심 자극 문장으로 100~140자 내외로 작성한다.
+   (예: "OO 신청 조건, 이것부터 확인하세요" / "OO 완벽 비교: 뭐가 다를까?") 단, 입력받은 주제의 의미를 벗어나지 않으며 25~40자 내외로 구글 검색결과에서 잘리지 않게 한다.
+1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 핵심 키워드를 앞부분에 배치하고, "이 글에서 무엇을 얻어갈 수 있는지"가 분명히 드러나는 문장으로 100~140자 내외로 작성한다.
 2. 소제목(H2)을 4~6개 사용해 구조화한다.
-3. [매우 중요] 단순한 사전적 뜻풀이나 정보 나열은 절대 금지합니다. 대신 "왜 지금 이 단어가 검색어 1위로 급상승했을까?", "이 이슈 이면에 숨겨진 진짜 이유는 무엇일까?"에 초점을 맞춰 비하인드 스토리, 관련 에피소드, 사람들이 몰랐던 놀라운 사실을 파헤치는 흥미진진한 전개를 보여주세요.
+3. [매우 중요] 사전적 뜻풀이 나열이나 알맹이 없는 서론으로 시간을 끌지 마세요. 독자가 검색으로 이 글에 들어온 이유(무엇을 알고 싶어서, 무엇을 결정하고 싶어서)에 처음부터 집중하고, 조건·절차·비교·주의사항처럼 실제로 쓸모 있는 구체적 정보를 우선 배치하세요.
 3-1. [문체/가독성 — 매우 중요] 다음 AI 특유의 어색한 말투를 피한다:
    - 모든 문단을 "~일까요?", "~습니다!" 같은 같은 패턴으로 끝맺지 말고 평서문/의문문/짧은 문장을 자연스럽게 섞는다.
    - 같은 내용을 표현만 바꿔 반복하지 않는다(패딩 금지). 한 문단에서 한 이야기를 하면 다음 문단은 반드시 새로운 정보로 넘어간다.
@@ -120,10 +117,10 @@ TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'�
    - 사람이 친구에게 설명하듯 구체적 사실·숫자·사례 위주로 쓰고, 막연한 감탄이나 분위기 묘사로 문단을 채우지 않는다.
 3-2. [콘텐츠 품질 — 매우 중요] 이 글은 시간이 지나도 유효한(에버그린) 정보 가치를 지녀야 합니다. 검색엔진용으로 양산된 듯한 글, 이미 알려진 사실의 재탕, 알맹이 없이 분량만 채운 글은 금지합니다.
    독자가 실제로 "도움이 됐다"고 느낄 구체적 정보(배경, 맥락, 숫자, 비교, 실용적 시사점)를 반드시 포함해 독창적이고 유용한 콘텐츠를 작성하세요. 사실에 근거하지 않은 추측성 서술은 "~로 보인다", "~라는 분석이 나온다"처럼 단정하지 않는 표현을 쓰고, 확인 안 된 사실을 확정적으로 단언하지 않는다.
-3-3. [에버그린 프레이밍] 이 글의 소재는 오늘의 급상승 검색어이지만, 소재만 시의성이 있을 뿐 글 자체는 "시간이 지나도 검색되는 글"이 되어야 합니다. 도입부는 지금 화제인 이유로 흥미를 끌되, 본문 소제목 중 최소 1~2개는 특정 날짜/사건에 묶이지 않는 evergreen 성격(예: "~하는 방법", "~ 가이드", "비교", "체크리스트", "초보자를 위한 안내", "주의할 점", "자주 묻는 질문", "용어 정리")으로 구성해, 몇 달 뒤에도 검색을 통해 유입된 독자가 바로 답을 얻을 수 있게 한다.
+3-3. [에버그린 구조] 이 글은 특정 날짜/사건에 묶이지 않는 주제를 다룹니다. 본문 소제목 중 최소 1~2개는 "~하는 방법", "~ 비교", "체크리스트", "초보자를 위한 안내", "주의할 점", "자주 묻는 질문", "용어 정리"처럼 독자가 검색을 통해 몇 달 뒤에 들어와도 바로 답을 얻을 수 있는 실용적 구조로 구성한다.
 3-4. [전문용어 해설] 일반 독자에게 낯설 수 있는 전문용어·업계 용어·줄임말이 나오면, 처음 등장하는 곳 바로 뒤에 괄호나 짧은 문장으로 간단히 풀어준다. (예: "PER(주가수익비율, 주가가 순이익 대비 몇 배인지 보여주는 지표)")
 4. 글자 수는 1500~2200자 내외.
-5. [중요] 서론(Hook)은 독자에게 충격적이거나 매우 흥미로운 질문을 던지며 시작합니다. (예: "혹시 OOO에 대해 들어보셨나요? 평범해 보이던 이 단어가 오늘 대한민국 인터넷을 발칵 뒤집어 놓았습니다. 과연 그 이면에는 어떤 사연이 숨어 있을까요?")
+5. [중요] 서론(Hook)은 독자가 이 글을 클릭한 이유(궁금한 점, 해결하고 싶은 문제)를 짚어주며 시작합니다. (예: "OO을 신청하려는데 조건이 헷갈리시나요? 흔히 놓치는 부분부터 실제 신청 절차까지 한 번에 정리해드립니다.")
 6. 가독성을 위해 본문 중 최소 1곳에 <table> (수치/스펙 비교용 정리표) 또는 <ul>/<ol> 목록을 반드시 포함한다. (질문-답변 내용은 표로 만들지 않음)
 7. "product_keyword"에는 이 글 내용과 실제로 관련된, 쿠팡에서 검색했을 때 진짜 상품이 나올 만한 쇼핑 키워드(2~4단어)를 넣는다. 억지로 연결하기 어렵다면 반드시 빈 문자열("")로 둔다.
 8. 콘텐츠 내용을 보고 아래 3가지 중 구글 상위노출에 가장 유리한 스키마 타입을 스스로 판단해서 고른다:
@@ -205,45 +202,90 @@ STOCK_SEARCH_TERMS = {
 
 
 # =====================================================================
-# 구글 트렌드 파싱 (트래픽 필터 포함) 및 큐/제한 관리 함수들
+# [개편] 에버그린 주제 뱅크 + 큐 관리
+# - 기존 "오늘의 구글 트렌드" 소싱을 완전히 제거하고, 미리 큐레이션한 에버그린(시간이 지나도
+#   검색되는) 주제 뱅크에서 주제를 뽑아 큐를 채웁니다. 가이드/비교/체크리스트/FAQ/용어정리 형태로
+#   구성해 검색 의도에 바로 답이 되는 콘텐츠를 지향합니다.
+# - CATEGORY_WEIGHT: 카테고리별 수익화 가중치. AdSense CPC/제휴 전환율이 높은 재테크·보험대출·
+#   정부지원금·헬스 카테고리에 더 자주 노출되도록 가중치를 부여합니다.
 # =====================================================================
-
-def fetch_high_traffic_trends(min_traffic: int = 10000) -> List[str]:
-    """조회수가 일정 수치 이상인 트렌드 키워드만 파싱하여 반환합니다."""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
-    try:
-        response = requests.get(TRENDS_RSS_URL, timeout=REQUEST_TIMEOUT, headers=headers)
-        response.raise_for_status()
-        root = ET.fromstring(response.content)
-        
-        # Google Trends Daily RSS의 namespace 정의
-        ns = {"ht": "https://trends.google.com/trending/rss"}  # [FIX] 신규 RSS 네임스페이스에 맞게 수정
-        high_traffic_keywords = []
-        
-        for item in root.iter("item"):
-            title_text = item.findtext("title")
-            traffic_text = item.findtext("ht:approx_traffic", namespaces=ns)
-            
-            if title_text and title_text.strip():
-                traffic = 0
-                if traffic_text:
-                    # '5,000+' 등에서 숫자만 추출
-                    clean_traffic = re.sub(r"[^\d]", "", traffic_text)
-                    if clean_traffic.isdigit():
-                        traffic = int(clean_traffic)
-                
-                if traffic >= min_traffic:
-                    high_traffic_keywords.append(title_text.strip())
-                    
-        return high_traffic_keywords
-    except Exception as e:
-        logger.warning(f"트렌드 조회수 파싱 실패: {e}")
-        return []
+EVERGREEN_TOPIC_BANK: Dict[str, List[str]] = {
+    "재테크머니": [
+        "ISA 계좌 개설 방법과 세금 혜택 총정리", "연금저축과 IRP 차이 완벽 비교",
+        "청년도약계좌 조건과 신청 방법 체크리스트", "예금자보호법 한도 5천만원, 분산예치 전략",
+        "코스피 코스닥 차이, 초보자를 위한 안내", "적금 vs 예금 vs CMA, 목적별 비교 가이드",
+        "신용점수 올리는 방법 9가지", "퇴직연금 DB형 DC형 차이와 선택 기준",
+        "재테크 초보자를 위한 첫 포트폴리오 짜는 법", "금리 인상기 대출 갈아타기 체크리스트",
+    ],
+    "대출보험": [
+        "전세자금대출 조건과 한도 비교 가이드", "실손보험 갱신 전 꼭 확인할 체크리스트",
+        "신용대출 vs 담보대출 차이 완벽 정리", "자동차보험 할인 특약 종류와 가입 팁",
+        "보험 리모델링 할 때 주의할 점", "정책서민금융상품 종류와 신청 자격 총정리",
+        "중도상환수수료 계산법과 절감 방법", "DSR DTI LTV 용어 정리, 헷갈리는 대출 규제",
+        "암보험 가입 전 꼭 알아야 할 주의점", "카드론 현금서비스 차이와 상환 전략",
+    ],
+    "정부지원금": [
+        "청년내일저축계좌 신청 자격과 방법", "근로장려금 신청 조건 체크리스트",
+        "기초연금 수급 자격과 신청 방법 가이드", "육아휴직급여 계산법과 신청 절차",
+        "소상공인 정책자금 종류 비교", "국민취업지원제도 신청 방법 총정리",
+        "에너지바우처 대상과 신청 방법", "청년월세지원 조건과 신청 체크리스트",
+        "귀농귀촌 지원금 종류와 신청 가이드", "국가장학금 소득분위 계산법 안내",
+    ],
+    "헬스운동": [
+        "홈트레이닝 초보자를 위한 시작 가이드", "단백질 보충제 종류와 고르는 법 비교",
+        "간헐적 단식 방법과 주의할 점", "런닝 초보자를 위한 페이스 조절법",
+        "체지방률 계산법과 정상 범위 안내", "스트레칭 루틴, 아침저녁 비교 가이드",
+        "근육통과 부상 구분하는 방법", "다이어트 정체기 극복 체크리스트",
+        "필라테스 vs 요가 차이 완벽 비교", "수면의 질 높이는 습관 가이드",
+    ],
+    "테크IT": [
+        "클라우드 저장소 요금제 비교 가이드", "노트북 고를 때 체크리스트 (사양 용어 정리)",
+        "비밀번호 관리자 앱 비교와 선택법", "OTT 서비스 요금제 완벽 비교",
+        "스마트폰 배터리 오래 쓰는 방법", "무료 이미지 편집 프로그램 비교",
+        "이메일 피싱 구별하는 방법 체크리스트", "생성형 AI 서비스 무료 vs 유료 비교",
+        "와이파이 속도 느릴 때 확인할 체크리스트", "중고 전자기기 구매 전 확인사항 가이드",
+    ],
+    "홈인테리어": [
+        "원룸 인테리어 예산별 가이드", "곰팡이 제거와 재발 방지 방법",
+        "커튼 vs 블라인드 장단점 비교", "이사 전 체크리스트 (버릴 것/챙길 것)",
+        "미니멀 라이프 시작하는 방법", "베란다 확장 전 알아야 할 주의점",
+        "친환경 세제 고르는 법 가이드", "좁은 주방 수납 아이디어 정리",
+        "반려동물과 함께하는 인테리어 팁", "겨울철 난방비 아끼는 방법 체크리스트",
+    ],
+    "푸드맛집": [
+        "제철 채소 고르는 법과 보관 방법", "에어프라이어 활용 레시피 가이드",
+        "홈베이킹 초보자를 위한 도구 체크리스트", "식품 유통기한과 소비기한 차이 정리",
+        "다이어트 도시락 준비 가이드", "커피 원두 로스팅 단계별 맛 차이 비교",
+        "냉동식품 보관법과 주의할 점", "비건 식단 시작하는 초보자 가이드",
+        "장보기 전 알아두면 좋은 체크리스트", "집들이 요리 메뉴 추천 가이드",
+    ],
+    "여행": [
+        "저가항공 티켓 싸게 사는 방법", "여행자보험 가입 전 체크리스트",
+        "캐리어 고를 때 확인할 사항 가이드", "해외여행 유심 vs 로밍 비교",
+        "국내 캠핑장 예약 꿀팁 정리", "여권 만료 확인과 재발급 방법",
+        "면세점 쇼핑 한도와 세관 신고 안내", "혼자 떠나는 여행 준비 체크리스트",
+        "여행 짐 싸기 노하우, 계절별 가이드", "공항 라운지 이용 조건 비교",
+    ],
+    "뷰티패션": [
+        "피부타입별 스킨케어 루틴 가이드", "쿠션 파운데이션 vs 팩트 비교",
+        "자외선차단제 고르는 법 체크리스트", "머리카락 손상 줄이는 관리법",
+        "체형별 옷 코디 가이드", "저자극 화장품 성분표 읽는 법",
+        "각질 관리 방법과 주의할 점", "향수 지속력 높이는 방법",
+        "겨울철 피부 건조 관리 가이드", "미니멀 옷장 만들기 체크리스트",
+    ],
+    "라이프스타일": [
+        "미루는 습관 고치는 방법", "아침 루틴 만들기 가이드",
+        "가계부 작성법, 초보자를 위한 안내", "번아웃 자가진단 체크리스트",
+        "독서 습관 만드는 방법", "디지털 디톡스 시작하는 가이드",
+        "감정일기 쓰는 법과 효과", "집중력 높이는 환경 만들기 체크리스트",
+        "새해 목표 세우는 방법 (SMART 기법)", "인간관계 스트레스 줄이는 법",
+    ],
+}
+# 카테고리별 수익화 가중치 (숫자가 클수록 큐에 더 자주 편성됨)
+CATEGORY_WEIGHT: Dict[str, int] = {
+    "재테크머니": 3, "대출보험": 3, "정부지원금": 3, "헬스운동": 2, "테크IT": 2,
+    "홈인테리어": 1, "푸드맛집": 1, "여행": 1, "뷰티패션": 1, "라이프스타일": 1,
+}
 
 def load_queue() -> Dict[str, Any]:
     if not os.path.exists(QUEUE_FILE):
@@ -263,32 +305,71 @@ def save_queue(queue: Dict[str, Any]) -> None:
     with open(QUEUE_FILE, "w", encoding="utf-8") as f:
         json.dump(queue, f, ensure_ascii=False, indent=2)
 
-def fetch_and_update_trends_queue() -> None:
+def refill_evergreen_queue(target_size: int = 20) -> None:
+    """[개편] 에버그린 주제 뱅크에서 카테고리 가중치를 반영해 큐를 채웁니다.
+    이미 사용(pending/completed)된 주제는 다시 넣지 않습니다."""
     logger.info("=" * 60)
-    logger.info("[구글 트렌드] 조회수 10000(1만) 이상 인기 검색어 수집 시작...")
-    trends = fetch_high_traffic_trends(min_traffic=10000)
-    
-    if not trends:
-        logger.info("조건(10000회 이상)을 만족하는 신규 핫이슈 트렌드가 없거나 수집에 실패했습니다.")
+    logger.info("[에버그린 주제뱅크] 큐 보충 시작...")
+    queue = load_queue()
+    used = set(queue.get("pending", [])) | set(queue.get("completed", []))
+
+    # 카테고리별 미사용 주제 후보 목록
+    pool: List[Tuple[str, int]] = []  # (주제, 가중치)
+    for category, topics in EVERGREEN_TOPIC_BANK.items():
+        weight = CATEGORY_WEIGHT.get(category, 1)
+        for topic in topics:
+            if topic not in used:
+                pool.append((topic, weight))
+
+    if not pool:
+        logger.info("[에버그린 주제뱅크] 모든 주제를 이미 사용했습니다. EVERGREEN_TOPIC_BANK에 새 주제를 추가해주세요.")
         logger.info("=" * 60)
         return
 
-    queue = load_queue()
-    existing_keywords = set(queue.get("pending", [])) | set(queue.get("completed", []))
-    new_keywords = [t for t in trends if t not in existing_keywords]
-    skipped_count = len(trends) - len(new_keywords)
+    need = max(0, target_size - len(queue["pending"]))
+    if need == 0:
+        logger.info(f"[에버그린 주제뱅크] 큐가 이미 충분합니다 (대기 {len(queue['pending'])}개).")
+        logger.info("=" * 60)
+        return
 
-    queue["pending"].extend(new_keywords)
+    weights = [w for _, w in pool]
+    topics_only = [t for t, _ in pool]
+    picked: List[str] = []
+    remaining_idx = list(range(len(topics_only)))
+    remaining_weights = list(weights)
+    for _ in range(min(need, len(topics_only))):
+        chosen = random.choices(remaining_idx, weights=remaining_weights, k=1)[0]
+        picked.append(topics_only[chosen])
+        pos = remaining_idx.index(chosen)
+        remaining_idx.pop(pos)
+        remaining_weights.pop(pos)
+
+    queue["pending"].extend(picked)
     save_queue(queue)
-
-    logger.info(f"[처리 완료] 10000회 이상 신규 추가된 키워드: {len(new_keywords)}개 (중복 제외됨: {skipped_count}개)")
-    logger.info(f"[현재 상태] 대기 중인 전체 키워드: {len(queue['pending'])}개")
+    logger.info(f"[에버그린 주제뱅크] 신규 편성: {len(picked)}개 (대기 {len(queue['pending'])}개)")
     logger.info("=" * 60)
 
-# [REMOVED] check_daily_limit() / increment_daily_count()
-# 사용자 요청으로 하루 발행 횟수 상한을 제거했습니다. 대신 fetch_high_traffic_trends()의
-# min_traffic=10000 기준이 유일한 게이트입니다 — 조회수 1만 이상 트렌드가 감지된 경우에만
-# 큐에 들어가고, 큐에 있는 것만 발행되므로 "품질 기준을 넘을 때만 발행"은 그대로 유지됩니다.
+DAILY_PUBLISH_LIMIT = 6  # [개편] 트렌드 감지 게이트가 사라졌으므로, 콘텐츠 팜처럼 보이지 않게 하루 상한을 다시 둠(품질 우선)
+
+def check_daily_limit() -> bool:
+    queue = load_queue()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    daily_stats = queue.get("daily_stats", {"date": "", "count": 0})
+    if daily_stats.get("date") != today_str:
+        return True
+    return daily_stats.get("count", 0) < DAILY_PUBLISH_LIMIT
+
+def increment_daily_count() -> None:
+    queue = load_queue()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    daily_stats = queue.get("daily_stats", {"date": today_str, "count": 0})
+    if daily_stats.get("date") == today_str:
+        daily_stats["count"] = daily_stats.get("count", 0) + 1
+    else:
+        daily_stats = {"date": today_str, "count": 1}
+    queue["daily_stats"] = daily_stats
+    save_queue(queue)
+
 
 
 # =====================================================================
@@ -718,7 +799,7 @@ def generate_article(title: str) -> Dict[str, Any]:
     url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": f"오늘의 핫이슈/급상승 트렌드 키워드: '{title}'\n\n이 단어가 도대체 왜 갑자기 검색어 1위에 오르며 화제가 되었는지, 그 이면에 숨겨진 비하인드 스토리나 놀라운 사실은 무엇인지 '호기심 천국'이나 '세상에 이런 일이'처럼 독자의 흥미를 자극하는 전개로 블로그 글을 작성해주세요. 단순한 뜻풀이는 지양해주세요."}]}],
+        "contents": [{"role": "user", "parts": [{"text": f"주제: '{title}'\n\n이 주제에 대해 검색으로 찾아온 독자가 실제로 궁금해할 조건·절차·비교·주의사항을 중심으로, 정확하고 실용적인 가이드형 블로그 글을 작성해주세요. 확실하지 않은 정보는 단정하지 말고, 공식 기관 확인이 필요한 내용은 그렇게 안내해주세요."}]}],
         # [FIX] JSON 파싱 실패를 줄이기 위해 순수 JSON 출력을 강제하고 출력 토큰 한도를 명시적으로 늘림
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -1716,9 +1797,9 @@ def commit_and_push_changes() -> bool:
 
 def run() -> None:
     is_refresh_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh"
-    
-    # 30분 단위 트리거 시 구글 트렌드에서 10000(1만)이상 조회수 키워드만 가져와 큐 갱신
-    fetch_and_update_trends_queue()
+
+    # [개편] 트렌드 감지 대신 에버그린 주제뱅크에서 큐를 보충
+    refill_evergreen_queue()
     if is_refresh_only:
         return
 
@@ -1731,10 +1812,14 @@ def run() -> None:
     if manual_title:
         title = manual_title
     else:
-        # [REMOVED] 발행 한도 제거 — 조회수 10000(1만) 이상 큐에 쌓인 것만 순서대로 발행
+        # [개편] 트렌드 감지 게이트가 사라졌으므로 하루 발행 한도로 콘텐츠 팜화 방지
+        if not check_daily_limit():
+            logger.info(f"오늘의 발행 한도({DAILY_PUBLISH_LIMIT}회)를 모두 소진하여 포스팅을 생략합니다.")
+            return
+
         queue = load_queue()
         if not queue.get("pending"):
-            logger.info("대기 중인 (10000회 이상) 핫이슈 키워드가 없습니다.")
+            logger.info("대기 중인 에버그린 주제가 없습니다. EVERGREEN_TOPIC_BANK를 확인해주세요.")
             return
             
         title = queue["pending"].pop(0)
@@ -1768,6 +1853,9 @@ def run() -> None:
     # [FIX] 워드프레스/블로거 본문 하단 "원문" 링크는 요청에 따라 완전히 제거함.
     # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
     publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
+
+    if not manual_title:
+        increment_daily_count()
 
     logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
 
