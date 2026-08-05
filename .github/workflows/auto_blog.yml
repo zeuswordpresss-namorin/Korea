@@ -12,11 +12,11 @@ on:
           - publish
           - refresh
       title:
-        description: "블로그 제목 (비워두면 10000회 이상 조회수 큐에서 자동 발췌)"
+        description: "블로그 제목 (비워두면 에버그린 주제뱅크 큐에서 자동 발췌)"
         required: false
         default: ""
   schedule:
-    - cron: "*/30 * * * *"   # 30분마다 트렌드 확인, 조회수 10000(1만) 이상 감지될 때만 발행 (일일 횟수 상한 없음)
+    - cron: "0 */3 * * *"   # 3시간마다 실행 (하루 최대 6회 발행 상한과 맞춤, 에버그린 주제뱅크 기반)
 
 permissions:
   contents: write
