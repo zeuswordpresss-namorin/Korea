@@ -116,10 +116,12 @@ TV 프로그램 '호기심 천국'이나 '순간포착 세상에 이런 일이'�
    - 모든 문단을 "~일까요?", "~습니다!" 같은 같은 패턴으로 끝맺지 말고 평서문/의문문/짧은 문장을 자연스럽게 섞는다.
    - 같은 내용을 표현만 바꿔 반복하지 않는다(패딩 금지). 한 문단에서 한 이야기를 하면 다음 문단은 반드시 새로운 정보로 넘어간다.
    - "정말", "충격적인", "놀라운", "발칵" 같은 과장 수식어는 글 전체에서 2~3회 이하로 아껴 쓴다.
-   - 문단은 2~4문장으로 짧게 끊어 모바일 가독성을 높인다.
+   - 문단은 2~4문장, 대략 70~90자 내외(PC 기준 2줄, 모바일 기준 5~6줄 정도)로 짧게 끊어 모바일 가독성을 높인다.
    - 사람이 친구에게 설명하듯 구체적 사실·숫자·사례 위주로 쓰고, 막연한 감탄이나 분위기 묘사로 문단을 채우지 않는다.
 3-2. [콘텐츠 품질 — 매우 중요] 이 글은 시간이 지나도 유효한(에버그린) 정보 가치를 지녀야 합니다. 검색엔진용으로 양산된 듯한 글, 이미 알려진 사실의 재탕, 알맹이 없이 분량만 채운 글은 금지합니다.
-   독자가 실제로 "도움이 됐다"고 느낄 구체적 정보(배경, 맥락, 숫자, 비교, 실용적 시사점)를 반드시 포함해 독창적이고 유용한 콘텐츠를 작성하세요.
+   독자가 실제로 "도움이 됐다"고 느낄 구체적 정보(배경, 맥락, 숫자, 비교, 실용적 시사점)를 반드시 포함해 독창적이고 유용한 콘텐츠를 작성하세요. 사실에 근거하지 않은 추측성 서술은 "~로 보인다", "~라는 분석이 나온다"처럼 단정하지 않는 표현을 쓰고, 확인 안 된 사실을 확정적으로 단언하지 않는다.
+3-3. [에버그린 프레이밍] 이 글의 소재는 오늘의 급상승 검색어이지만, 소재만 시의성이 있을 뿐 글 자체는 "시간이 지나도 검색되는 글"이 되어야 합니다. 도입부는 지금 화제인 이유로 흥미를 끌되, 본문 소제목 중 최소 1~2개는 특정 날짜/사건에 묶이지 않는 evergreen 성격(예: "~하는 방법", "~ 가이드", "비교", "체크리스트", "초보자를 위한 안내", "주의할 점", "자주 묻는 질문", "용어 정리")으로 구성해, 몇 달 뒤에도 검색을 통해 유입된 독자가 바로 답을 얻을 수 있게 한다.
+3-4. [전문용어 해설] 일반 독자에게 낯설 수 있는 전문용어·업계 용어·줄임말이 나오면, 처음 등장하는 곳 바로 뒤에 괄호나 짧은 문장으로 간단히 풀어준다. (예: "PER(주가수익비율, 주가가 순이익 대비 몇 배인지 보여주는 지표)")
 4. 글자 수는 1500~2200자 내외.
 5. [중요] 서론(Hook)은 독자에게 충격적이거나 매우 흥미로운 질문을 던지며 시작합니다. (예: "혹시 OOO에 대해 들어보셨나요? 평범해 보이던 이 단어가 오늘 대한민국 인터넷을 발칵 뒤집어 놓았습니다. 과연 그 이면에는 어떤 사연이 숨어 있을까요?")
 6. 가독성을 위해 본문 중 최소 1곳에 <table> (수치/스펙 비교용 정리표) 또는 <ul>/<ol> 목록을 반드시 포함한다. (질문-답변 내용은 표로 만들지 않음)
@@ -1128,7 +1130,13 @@ def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     photo.save(path, format="WEBP", quality=82, method=6)
 
-    img_html = f'<img src="../thumbs/{filename}" alt="{article["title"]} 관련 이미지" loading="lazy" width="1000" height="560" style="width:100%;border-radius:10px;margin:20px 0;">'
+    theme = get_theme(category)
+    img_html = (
+        '<figure style="margin:20px 0;">'
+        f'<img src="../thumbs/{filename}" alt="{article["title"]} 관련 이미지" loading="lazy" width="1000" height="560" style="width:100%;border-radius:10px;display:block;">'
+        f'<figcaption style="text-align:center;font-size:0.82em;color:#999;margin-top:6px;">{theme["badge"]} 관련 이미지</figcaption>'
+        '</figure>'
+    )
     idx = article["html_body"].find("</h2>")
     if idx != -1: article["html_body"] = article["html_body"][:idx + 5] + img_html + article["html_body"][idx + 5:]
     else: article["html_body"] = img_html + article["html_body"]
@@ -1393,14 +1401,30 @@ def convert_tables_to_lists_for_wordpress(html_body: str) -> str:
             cells = [_cell_text(c) for c in re.findall(r'<t[hd][^>]*>(.*?)</t[hd]>', row, re.DOTALL)]
             if not any(cells):
                 continue
-            pairs = []
-            for i, cell in enumerate(cells):
+            # [FIX] 한 줄에 " · "로 몰아넣으면 가독성이 떨어진다는 피드백 반영.
+            # 첫 열은 이 항목의 제목처럼 굵게, 나머지는 "라벨: 값" 형태로 줄바꿈해서 나열.
+            first_cell, rest_cells = cells[0], cells[1:]
+            lines = [f'<b>{first_cell}</b>']
+            for i, cell in enumerate(rest_cells, start=1):
+                if not cell:
+                    continue
                 label = header_cells[i] if i < len(header_cells) else ''
-                pairs.append(f'<b>{label}</b>: {cell}' if label and label != cell else cell)
-            items.append('<li>' + ' · '.join(p for p in pairs if p) + '</li>')
+                lines.append(f'<b>{label}</b> {cell}' if label else cell)
+            items.append('<li style="margin-bottom:10px;">' + '<br>'.join(lines) + '</li>')
         return '<ul>' + ''.join(items) + '</ul>' if items else ''
 
     return re.sub(r'<table\b.*?</table>', _convert, html_body, flags=re.DOTALL)
+
+def _make_wordpress_images_responsive(html_body: str) -> str:
+    """[FIX] style 속성을 제거하면서 고정 픽셀 width="1280" 같은 값만 남아, 좁은 모바일 화면에서도
+    그대로 1280px로 렌더링되어 이미지가 화면 밖으로 넘치던 문제를 해결합니다. width는 100%로,
+    height는 제거해 종횡비를 유지한 채 컨테이너 폭에 맞게 자동으로 줄어들게 합니다."""
+    def _fix(m: "re.Match") -> str:
+        tag = m.group(0)
+        tag = re.sub(r'\swidth="\d+"', ' width="100%"', tag)
+        tag = re.sub(r'\sheight="\d+"', '', tag)
+        return tag
+    return re.sub(r'<img\b[^>]*>', _fix, html_body)
 
 def build_wordpress_gutenberg_content(html_body: str) -> str:
     """[FIX-5차·최종 원인 확정] <table> 태그 자체가 속성 유무와 무관하게 워드프레스닷컴에서
@@ -1409,6 +1433,7 @@ def build_wordpress_gutenberg_content(html_body: str) -> str:
     html_body = strip_interactive_widgets(html_body)
     html_body = convert_tables_to_lists_for_wordpress(html_body)  # [FIX] <table> 자체를 배제
     html_body = re.sub(r'\s+style="[^"]*"', '', html_body)  # 나머지 style 속성도 안전을 위해 제거
+    html_body = _make_wordpress_images_responsive(html_body)  # [FIX] 이미지 크기 오버 방지
     return html_body
 
 def _make_blogger_safe_html(html_body: str) -> str:
@@ -1753,3 +1778,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"스크립트 실행 중 치명적인 오류 발생: {e}")
         sys.exit(1)
+
