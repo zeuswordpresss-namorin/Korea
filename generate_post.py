@@ -128,8 +128,10 @@ SYSTEM_PROMPT = """당신은 독자에게 실질적으로 도움이 되는 정�
    - "HowTo": 순서가 있는 절차/방법을 안내하는 주제일 때
    - "Article": 위 둘에 해당하지 않는 스토리텔링, 정보, 이슈형 글일 때
 9. 고른 스키마 타입에 맞는 데이터를 함께 채운다: (FAQPage는 "faq_items", HowTo는 "howto_steps" 채우기, Article은 빈 배열)
-10. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다. ["뷰티패션", "푸드맛집", "여행", "테크IT", "재테크머니", "헬스운동", "홈인테리어", "대출보험", "정부지원금", "라이프스타일"]
+10. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다. ["뷰티패션", "푸드맛집", "여행", "테크IT", "재테크머니", "헬스운동", "홈인테리어", "대출보험", "정부지원금", "라이프스타일", "산사워케이션", "종가음식", "한방웰니스", "K공예인테리어", "가양주"]
 11. category가 "대출보험" 또는 "정부지원금"이면 일반적인 조건 위주로 설명하고 공식 기관 확인이 필요하다는 점을 덧붙인다.
+11-1. [출처 투명성 — 매우 중요] 확인 가능한 공식 출처(정부기관, 지자체, 공식 협회/진흥원, 공식 웹사이트 등)를 언급할 수 있는 내용이면 본문에서 "OO(기관명)에 따르면" 형태로 자연스럽게 언급한다. 실제로 존재하는지 확신할 수 없는 기관명·통계·수치는 지어내지 말고, 확실하지 않으면 출처를 특정하지 않은 채 일반적 서술로 남긴다.
+11-2. [변동성 데이터 표기] 가격, 예약 방법, 영업시간, 지원금액, 신청 기간처럼 시간이 지나면 바뀔 수 있는 구체적 수치나 절차를 언급할 때는 "2026년 8월 기준"처럼 시점을 명시하고, 문단 끝에 "정확한 사항은 공식 홈페이지나 해당 기관에서 다시 확인하시길 권장합니다" 같은 안내를 자연스럽게 덧붙인다.
 12. 이 글이 여러 구체적인 대상을 비교/소개하는 성격이면 "product_list"에 1문장 설명과 함께 채운다. (최대 6개). 아니면 빈 배열.
 12-1. "image_keywords"에는 이 글의 썸네일/본문 이미지로 쓸 무료 스톡사진을 검색하기 위한 영어 키워드 2~4단어를 넣는다.
    [매우 중요] 키워드를 그대로 번역하지 말 것. 스톡사진 사이트에는 한국 밈/특정 인물/드라마 대사 같은 고유명사 사진이 없으므로,
@@ -162,6 +164,12 @@ CATEGORY_THEMES = {
     "라이프스타일": {"gradient": [(66, 133, 244), (156, 39, 176), (234, 67, 121)], "accent": "#4a90d9", "badge": "✨ 라이프스타일", "label": "LIFESTYLE", "font": "Noto+Sans+KR:wght@700", "decor": ["✨", "🌸", "☕", "📓", "🎧", "🕊️", "🌿", "⭐"]},
     "대출보험": {"gradient": [(20, 30, 48), (36, 59, 85), (65, 90, 119)], "accent": "#1e3a5f", "badge": "🏦 대출·보험", "label": "FINANCE", "font": "Noto+Sans+KR:wght@700", "decor": ["🏦", "📄", "💳", "🔍", "📞", "✅", "💼", "🧾"], "ymyl": True},
     "정부지원금": {"gradient": [(0, 91, 82), (0, 128, 105), (82, 183, 136)], "accent": "#00695c", "badge": "🏛️ 정부지원금", "label": "SUPPORT", "font": "Noto+Sans+KR:wght@700", "decor": ["🏛️", "📋", "🖊️", "📅", "✅", "💌", "🪪", "📢"], "ymyl": True},
+    # --- [NEW] K-문화 블루오션 카테고리 (요일별 테마) ---
+    "산사워케이션": {"gradient": [(58, 90, 64), (95, 133, 97), (168, 197, 158)], "accent": "#3a5a40", "badge": "🏔️ 산사 워케이션", "label": "TEMPLE STAY", "font": "Gowun+Dodum", "decor": ["🏔️", "🧘", "📶", "🍵", "🔔", "🌲", "☁️", "💻"]},
+    "종가음식": {"gradient": [(122, 45, 35), (168, 92, 56), (222, 170, 108)], "accent": "#7a2d23", "badge": "🍲 종가 내림음식", "label": "JONGGA", "font": "Jua", "decor": ["🍲", "🥢", "🏯", "🍶", "🌾", "🫕", "🍚", "🏮"]},
+    "한방웰니스": {"gradient": [(91, 60, 100), (139, 94, 148), (196, 160, 202)], "accent": "#5b3c64", "badge": "🌿 한방 웰니스", "label": "HANBANG", "font": "Gowun+Dodum", "decor": ["🌿", "♨️", "🍵", "🪷", "💆", "🧴", "🌾", "🩺"]},
+    "K공예인테리어": {"gradient": [(139, 108, 66), (181, 148, 96), (222, 197, 158)], "accent": "#8b6c42", "badge": "🏺 K-공예 인테리어", "label": "K-CRAFT", "font": "Gowun+Dodum", "decor": ["🏺", "🪔", "🖌️", "🪵", "🧵", "🎨", "🕯️", "🏮"]},
+    "가양주": {"gradient": [(150, 40, 27), (196, 84, 39), (231, 156, 92)], "accent": "#96281b", "badge": "🍶 가양주", "label": "GAYANGJU", "font": "Jua", "decor": ["🍶", "🌾", "🍇", "🏺", "🥃", "🍂", "🏮", "🎋"]},
 }
 DEFAULT_THEME = CATEGORY_THEMES["라이프스타일"]
 
@@ -179,6 +187,11 @@ ILLUSTRATION_PROMPTS = {
     "대출보험": "minimalist pencil sketch style illustration of bank building document and contract, clean professional line art",
     "정부지원금": "minimalist pencil sketch style illustration of government building document and checklist, clean line art",
     "라이프스타일": "minimalist pencil sketch style illustration of coffee book and cozy lifestyle items, clean line art",
+    "산사워케이션": "minimalist pencil sketch style illustration of mountain temple and laptop workspace, clean line art",
+    "종가음식": "minimalist pencil sketch style illustration of traditional korean dining table, clean line art",
+    "한방웰니스": "minimalist pencil sketch style illustration of korean herbal tea and spa elements, clean line art",
+    "K공예인테리어": "minimalist pencil sketch style illustration of korean pottery and craft interior, clean line art",
+    "가양주": "minimalist pencil sketch style illustration of traditional korean rice wine bottle, clean line art",
 }
 ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black or monochromatic vector lines, no watermark, no text"
 
@@ -198,6 +211,11 @@ STOCK_SEARCH_TERMS = {
     "대출보험": "bank finance document",
     "정부지원금": "government building document",
     "라이프스타일": "lifestyle coffee cozy",
+    "산사워케이션": "temple mountain meditation workspace",
+    "종가음식": "korean traditional dining table",
+    "한방웰니스": "korean traditional spa wellness tea",
+    "K공예인테리어": "korean pottery craft interior",
+    "가양주": "korean traditional rice wine bottle",
 }
 
 
@@ -280,12 +298,76 @@ EVERGREEN_TOPIC_BANK: Dict[str, List[str]] = {
         "감정일기 쓰는 법과 효과", "집중력 높이는 환경 만들기 체크리스트",
         "새해 목표 세우는 방법 (SMART 기법)", "인간관계 스트레스 줄이는 법",
     ],
+    # --- [NEW] K-문화 블루오션 카테고리 (사용자 제안 큐레이션 반영, 요일별 우선 테마) ---
+    "산사워케이션": [
+        "산사 워케이션 가능한 전국 사찰 리스트", "사찰 워케이션 장기 체류 비용 비교 가이드",
+        "산사 워케이션 와이파이 속도·업무 집중도 후기 정리", "일과 후 명상 프로그램 참여 방법 안내",
+        "템플스테이 vs 산사 워케이션 차이 비교", "디지털 노마드를 위한 사찰 워케이션 체크리스트",
+        "산사 워케이션 예약 방법과 준비물 가이드", "원격근무자를 위한 산사 워케이션 후기 모음",
+    ],
+    "종가음식": [
+        "종가 내림음식 프라이빗 다이닝 예약 방법 가이드", "지역별 대표 종가 시그니처 메뉴 비교",
+        "종갓집 내림음식 예약 시 지켜야 할 에티켓", "고택 숙박(한옥 스테이)과 종가음식 연계 코스 가이드",
+        "종가음식과 일반 한정식 차이 비교", "안동 종가음식 체험 후기와 예약 팁",
+        "종부님이 전하는 내림음식 조리법의 특징 정리", "종가음식 프라이빗 다이닝 가격대 비교",
+    ],
+    "한방웰니스": [
+        "사상체질 진단 방법과 체질별 특징 정리", "체질별 한방 스파 추천 가이드",
+        "한방 족욕·입욕 전문 웰니스 센터 고르는 법", "체질 맞춤 한방차 재료 소싱 방법",
+        "약선 밀키트 정기구독 서비스 비교", "한방 스파와 일반 스파 차이 비교",
+        "사상체질별 어울리는 음식 체크리스트", "한방 웰니스 초보자를 위한 안내",
+    ],
+    "K공예인테리어": [
+        "소반을 커피테이블로 활용하는 인테리어 팁", "나전칠기 입문용 브랜드 비교 가이드",
+        "달항아리 모던 인테리어 배치 아이디어", "K-공예 원데이클래스 체험 가이드",
+        "신진 공예 작가 가성비 입문 브랜드 리스트", "전통 공예품 현대 인테리어 활용 체크리스트",
+        "옻칠 식기 만들기 원데이클래스 후기 정리", "1인 가구를 위한 K-공예 소품 활용법",
+    ],
+    "가양주": [
+        "지역별 소규모 가양주 양조장 투어 가이드", "가양주와 어울리는 안주 페어링 정리",
+        "전통주 구독 서비스 장단점 비교", "집에서 이화주(떠먹는 막걸리) 담그는 키트 후기",
+        "가양주 vs 시판 막걸리 차이 비교", "전통주 초보자를 위한 용어 정리",
+        "가양주 양조장 투어 준비물 체크리스트", "대중교통으로 가는 전통주 양조장 안내",
+    ],
 }
 # 카테고리별 수익화 가중치 (숫자가 클수록 큐에 더 자주 편성됨)
 CATEGORY_WEIGHT: Dict[str, int] = {
     "재테크머니": 3, "대출보험": 3, "정부지원금": 3, "헬스운동": 2, "테크IT": 2,
     "홈인테리어": 1, "푸드맛집": 1, "여행": 1, "뷰티패션": 1, "라이프스타일": 1,
+    "산사워케이션": 2, "종가음식": 2, "한방웰니스": 2, "K공예인테리어": 2, "가양주": 2,
 }
+# [NEW] 요일별 우선 테마 (월=0 ~ 금=4). 해당 요일엔 이 카테고리의 미발행 주제를 최우선으로 편성.
+# 검색엔진에 체계적인 카테고리 구조를 인식시키고, 한 카테고리 연속 발행으로 인한 전문성 분산을 방지.
+WEEKDAY_THEME_CATEGORY: Dict[int, str] = {
+    0: "산사워케이션",   # 월요일
+    1: "종가음식",       # 화요일
+    2: "한방웰니스",     # 수요일
+    3: "K공예인테리어",  # 목요일
+    4: "가양주",         # 금요일
+}
+
+def _topic_category(topic: str) -> Optional[str]:
+    for category, topics in EVERGREEN_TOPIC_BANK.items():
+        if topic in topics:
+            return category
+    return None
+
+def pick_next_topic(queue: Dict[str, Any]) -> Optional[str]:
+    """[NEW] 오늘이 월~금이면 해당 요일의 우선 테마 카테고리에 속한 대기 주제를 최우선으로 뽑고,
+    없으면 기존 순서(FIFO)대로 뽑습니다."""
+    pending: List[str] = queue.get("pending", [])
+    if not pending:
+        return None
+
+    today_category = WEEKDAY_THEME_CATEGORY.get(datetime.now().weekday())
+    if today_category:
+        matches = [t for t in pending if _topic_category(t) == today_category]
+        if matches:
+            chosen = random.choice(matches)
+            pending.remove(chosen)
+            return chosen
+
+    return pending.pop(0)
 
 def load_queue() -> Dict[str, Any]:
     if not os.path.exists(QUEUE_FILE):
@@ -1822,7 +1904,10 @@ def run() -> None:
             logger.info("대기 중인 에버그린 주제가 없습니다. EVERGREEN_TOPIC_BANK를 확인해주세요.")
             return
             
-        title = queue["pending"].pop(0)
+        title = pick_next_topic(queue)
+        if not title:
+            logger.info("대기 중인 에버그린 주제가 없습니다. EVERGREEN_TOPIC_BANK를 확인해주세요.")
+            return
         queue.setdefault("completed", []).append(title)
         save_queue(queue)
 
