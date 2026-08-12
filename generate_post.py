@@ -604,6 +604,13 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{meta_description}">
 <link rel="canonical" href="{canonical_url}">
 <link rel="icon" type="image/png" href="../favicon.png">{search_console_meta}
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#facc15">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{site_title_short}">
+<script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{{}})); }}</script>
 <meta property="og:type" content="article">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{meta_description}">
@@ -699,6 +706,13 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{site_title} - 자동으로 업데이트되는 블로그">
 <link rel="canonical" href="{site_url}/">
 <link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#facc15">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{site_title_short}">
+<script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{{}})); }}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="{fonts_url}" rel="stylesheet">
 <script type="application/ld+json">
@@ -1161,6 +1175,82 @@ def ensure_brand_assets() -> None:
     with Image.open(logo_path) as im:
         im.convert("RGB").resize((64, 64)).save(favicon_path, format="PNG")
 
+# =====================================================================
+# [NEW] PWA(프로그레시브 웹앱) 지원
+# - 홈 화면에 앱 아이콘처럼 설치할 수 있도록 manifest.json, 아이콘(PNG), 서비스워커를 생성합니다.
+# - 앱스토어/플레이스토어 등록이나 결제 기능은 포함하지 않으며, 순수 "설치형 웹앱" 수준입니다.
+# =====================================================================
+def generate_pwa_icons() -> None:
+    logo_path = os.path.join(DOCS_DIR, "logo.webp")
+    if not os.path.exists(logo_path):
+        return
+    with Image.open(logo_path) as im:
+        im = im.convert("RGB")
+        for size in (192, 512):
+            im.resize((size, size)).save(os.path.join(DOCS_DIR, f"icon-{size}.png"), format="PNG")
+        # 마스커블 아이콘(안드로이드가 원형/둥근모서리로 잘라도 안전하도록 여백을 둔 버전)
+        maskable = Image.new("RGB", (512, 512), BRAND_GRADIENT[0])
+        inner = im.resize((360, 360))
+        maskable.paste(inner, (76, 76))
+        maskable.save(os.path.join(DOCS_DIR, "icon-maskable-512.png"), format="PNG")
+
+def generate_pwa_manifest() -> None:
+    accent_hex = "#{:02x}{:02x}{:02x}".format(*BRAND_ACCENT)
+    bg_hex = "#{:02x}{:02x}{:02x}".format(*BRAND_GRADIENT[0])
+    manifest = {
+        "name": SITE_TITLE,
+        "short_name": SITE_TITLE[:12],
+        "description": SITE_TAGLINE,
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": bg_hex,
+        "theme_color": accent_hex,
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        ],
+    }
+    with open(os.path.join(DOCS_DIR, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+def generate_service_worker() -> None:
+    # 네트워크 우선(신선한 글을 놓치지 않도록) + 실패 시 캐시 폴백 정도의 최소 구현.
+    # 블로그는 콘텐츠가 계속 갱신되므로 공격적인 캐싱은 피합니다.
+    sw_js = """const CACHE_NAME = 'blog-pwa-v1';
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(
+      keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
+    ))
+  );
+  self.clients.claim();
+});
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+  event.respondWith(
+    fetch(event.request)
+      .then((resp) => {
+        const copy = resp.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return resp;
+      })
+      .catch(() => caches.match(event.request))
+  );
+});
+"""
+    with open(os.path.join(DOCS_DIR, "sw.js"), "w", encoding="utf-8") as f:
+        f.write(sw_js)
+
+def ensure_pwa_assets() -> None:
+    generate_pwa_icons()
+    generate_pwa_manifest()
+    generate_service_worker()
+
 def _coupang_deeplink(search_url: str) -> Optional[str]:
     if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY): return None
     domain = "https://api-gateway.coupang.com"
@@ -1448,6 +1538,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         search_console_meta=_search_console_meta(),
         translate_widget=_translate_widget(),
         photo_credit_html=photo_credit_html,
+        site_title_short=SITE_TITLE[:12],
     )
     with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
         f.write(html)
@@ -1504,6 +1595,7 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
             footer_html='<div class="site-footer"><a href="about.html">블로그 소개</a>·<a href="privacy.html">개인정보처리방침</a>·<a href="contact.html">문의하기</a>'
                         f'<div style="margin-top:8px;">© {datetime.now().year} {SITE_TITLE}</div></div>',
             translate_widget=_translate_widget(),
+            site_title_short=SITE_TITLE[:12],
         ))
     return posts
 
@@ -1875,93 +1967,4 @@ def commit_and_push_changes() -> bool:
     try:
         subprocess.run(["git", "config", "user.name", "auto-blog-bot"], check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "auto-blog-bot@users.noreply.github.com"], check=True, capture_output=True)
-        subprocess.run(["git", "add", "docs", "keywords_queue.json"], check=True, capture_output=True)
-        diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
-        if diff_check.returncode == 0:
-            logger.info("[git] 변경사항 없음, 사전 push 생략")
-            return True
-        commit_msg = f"자동 파이프라인 실행(사전 push): {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        subprocess.run(["git", "commit", "-m", commit_msg], check=True, capture_output=True)
-        subprocess.run(["git", "push"], check=True, capture_output=True)
-        logger.info("[git] GitHub Pages 사전 push 완료 (외부 발행 시 이미지 URL이 실제로 존재함을 보장)")
-        return True
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else str(e)
-        logger.warning(f"[git] 사전 push 실패, 외부 발행 시 이미지가 일시적으로 깨질 수 있습니다: {stderr[:300]}")
-        return False
-
-def run() -> None:
-    is_refresh_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh"
-
-    # [개편] 트렌드 감지 대신 에버그린 주제뱅크에서 큐를 보충
-    refill_evergreen_queue()
-    if is_refresh_only:
-        return
-
-    # 수동 제목 입력 여부 확인
-    manual_title = ""
-    if len(sys.argv) > 1 and sys.argv[1].strip() and sys.argv[1].strip().lower() not in ["publish", "refresh"]:
-        manual_title = sys.argv[1].strip()
-
-    title = ""
-    if manual_title:
-        title = manual_title
-    else:
-        # [개편] 트렌드 감지 게이트가 사라졌으므로 하루 발행 한도로 콘텐츠 팜화 방지
-        if not check_daily_limit():
-            logger.info(f"오늘의 발행 한도({DAILY_PUBLISH_LIMIT}회)를 모두 소진하여 포스팅을 생략합니다.")
-            return
-
-        queue = load_queue()
-        if not queue.get("pending"):
-            logger.info("대기 중인 에버그린 주제가 없습니다. EVERGREEN_TOPIC_BANK를 확인해주세요.")
-            return
-            
-        title = pick_next_topic(queue)
-        if not title:
-            logger.info("대기 중인 에버그린 주제가 없습니다. EVERGREEN_TOPIC_BANK를 확인해주세요.")
-            return
-        queue.setdefault("completed", []).append(title)
-        save_queue(queue)
-
-    logger.info(f"[처리 시작] 제목: {title}")
-
-    ensure_nojekyll()
-    ensure_brand_assets()
-    generate_static_pages()
-
-    article = generate_article(title)
-    article = fix_character_count_claims(article)  # [NEW] AI의 글자 수 오기재를 Python이 강제 교정
-    logger.info(f"글 생성 완료: {article['title']}")
-
-    article = add_internal_link(article)
-    article = insert_manual_ads(article)
-    article = add_coupang_markup(article)
-    article = add_ymyl_disclaimer(article)
-
-    post_meta, json_ld, thumb_url, local_thumb_path, post_url = save_post(article)
-    posts = update_index(post_meta)
-
-    update_dashboard(posts)
-    update_seo_files(posts)
-
-    commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
-
-    blogger_url = publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
-    # [FIX] 워드프레스/블로거 본문 하단 "원문" 링크는 요청에 따라 완전히 제거함.
-    # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
-    publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
-
-    if not manual_title:
-        increment_daily_count()
-
-    logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
-
-
-if __name__ == "__main__":
-    try:
-        run()
-    except Exception as e:
-        logger.error(f"스크립트 실행 중 치명적인 오류 발생: {e}")
-        sys.exit(1)
-
+        subprocess.run(["
