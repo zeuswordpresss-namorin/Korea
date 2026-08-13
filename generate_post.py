@@ -604,13 +604,13 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{meta_description}">
 <link rel="canonical" href="{canonical_url}">
 <link rel="icon" type="image/png" href="../favicon.png">{search_console_meta}
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="../manifest.json">
 <meta name="theme-color" content="#facc15">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="../icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="{site_title_short}">
-<script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{{}})); }}</script>
+<script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('../sw.js').catch(()=>{{}})); }}</script>
 <meta property="og:type" content="article">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{meta_description}">
@@ -706,13 +706,13 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta name="description" content="{site_title} - 자동으로 업데이트되는 블로그">
 <link rel="canonical" href="{site_url}/">
 <link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#facc15">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="{site_title_short}">
-<script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{{}})); }}</script>
+<script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{{}})); }}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="{fonts_url}" rel="stylesheet">
 <script type="application/ld+json">
@@ -1197,19 +1197,23 @@ def generate_pwa_icons() -> None:
 def generate_pwa_manifest() -> None:
     accent_hex = "#{:02x}{:02x}{:02x}".format(*BRAND_ACCENT)
     bg_hex = "#{:02x}{:02x}{:02x}".format(*BRAND_GRADIENT[0])
+    # [FIX] "/"(도메인 루트) 절대경로는 GitHub Pages 프로젝트 사이트(예: 아이디.github.io/저장소명/)처럼
+    # 하위 경로에 배포되면 실제로 존재하지 않는 루트를 가리켜 404가 나고 PWA 설치 배너가 뜨지 않는
+    # 원인이 됨. manifest의 start_url/scope/icons는 manifest.json 자신의 위치 기준 상대경로로 지정해
+    # 루트 배포든 하위경로 배포든(SITE_URL 설정과 무관하게) 항상 올바르게 동작하도록 함.
     manifest = {
         "name": SITE_TITLE,
         "short_name": SITE_TITLE[:12],
         "description": SITE_TAGLINE,
-        "start_url": "/",
-        "scope": "/",
+        "start_url": ".",
+        "scope": ".",
         "display": "standalone",
         "background_color": bg_hex,
         "theme_color": accent_hex,
         "icons": [
-            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-            {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+            {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
         ],
     }
     with open(os.path.join(DOCS_DIR, "manifest.json"), "w", encoding="utf-8") as f:
