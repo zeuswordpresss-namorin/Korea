@@ -131,7 +131,7 @@ SYSTEM_PROMPT = """당신은 독자에게 실질적으로 도움이 되는 정�
 10. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다. ["뷰티패션", "푸드맛집", "여행", "테크IT", "재테크머니", "헬스운동", "홈인테리어", "대출보험", "정부지원금", "라이프스타일", "산사워케이션", "종가음식", "한방웰니스", "K공예인테리어", "가양주"]
 11. category가 "대출보험" 또는 "정부지원금"이면 일반적인 조건 위주로 설명하고 공식 기관 확인이 필요하다는 점을 덧붙인다.
 11-1. [출처 투명성 — 매우 중요] 확인 가능한 공식 출처(정부기관, 지자체, 공식 협회/진흥원, 공식 웹사이트 등)를 언급할 수 있는 내용이면 본문에서 "OO(기관명)에 따르면" 형태로 자연스럽게 언급한다. 실제로 존재하는지 확신할 수 없는 기관명·통계·수치는 지어내지 말고, 확실하지 않으면 출처를 특정하지 않은 채 일반적 서술로 남긴다.
-11-2. [변동성 데이터 표기] 가격, 예약 방법, 영업시간, 지원금액, 신청 기간처럼 시간이 지나면 바뀔 수 있는 구체적 수치나 절차를 언급할 때는 "2026년 8월 기준"처럼 시점을 명시하고, 문단 끝에 "정확한 사항은 공식 홈페이지나 해당 기관에서 다시 확인하시길 권장합니다" 같은 안내를 자연스럽게 덧붙인다.
+11-2. [변동성 데이터 표기] 가격, 예약 방법, 영업시간, 지원금액, 신청 기간처럼 시간이 지나면 바뀔 수 있는 구체적 수치나 절차를 언급할 때는 사용자 메시지에 적힌 "오늘 날짜"를 기준으로 "OOOO년 O월 기준"처럼 시점을 명시하고, 문단 끝에 "정확한 사항은 공식 홈페이지나 해당 기관에서 다시 확인하시길 권장합니다" 같은 안내를 자연스럽게 덧붙인다.
 12. 이 글이 여러 구체적인 대상을 비교/소개하는 성격이면 "product_list"에 1문장 설명과 함께 채운다. (최대 6개). 아니면 빈 배열.
 12-1. "image_keywords"에는 이 글의 썸네일/본문 이미지로 쓸 무료 스톡사진을 검색하기 위한 영어 키워드 2~4단어를 넣는다.
    [매우 중요] 키워드를 그대로 번역하지 말 것. 스톡사진 사이트에는 한국 밈/특정 인물/드라마 대사 같은 고유명사 사진이 없으므로,
@@ -903,7 +903,7 @@ def generate_article(title: str) -> Dict[str, Any]:
     url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": f"주제: '{title}'\n\n이 주제에 대해 검색으로 찾아온 독자가 실제로 궁금해할 조건·절차·비교·주의사항을 중심으로, 정확하고 실용적인 가이드형 블로그 글을 작성해주세요. 확실하지 않은 정보는 단정하지 말고, 공식 기관 확인이 필요한 내용은 그렇게 안내해주세요."}]}],
+        "contents": [{"role": "user", "parts": [{"text": f"오늘 날짜: {datetime.now().strftime('%Y년 %m월 %d일')}\n\n주제: '{title}'\n\n이 주제에 대해 검색으로 찾아온 독자가 실제로 궁금해할 조건·절차·비교·주의사항을 중심으로, 정확하고 실용적인 가이드형 블로그 글을 작성해주세요. 확실하지 않은 정보는 단정하지 말고, 공식 기관 확인이 필요한 내용은 그렇게 안내해주세요. 시점을 언급할 때는 반드시 위에 적힌 '오늘 날짜'를 기준으로 하고, 이보다 오래된 연도를 임의로 쓰지 마세요."}]}],
         # [FIX] JSON 파싱 실패를 줄이기 위해 순수 JSON 출력을 강제하고 출력 토큰 한도를 명시적으로 늘림
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -1202,6 +1202,7 @@ def generate_pwa_manifest() -> None:
     # 원인이 됨. manifest의 start_url/scope/icons는 manifest.json 자신의 위치 기준 상대경로로 지정해
     # 루트 배포든 하위경로 배포든(SITE_URL 설정과 무관하게) 항상 올바르게 동작하도록 함.
     manifest = {
+        "id": ".",
         "name": SITE_TITLE,
         "short_name": SITE_TITLE[:12],
         "description": SITE_TAGLINE,
@@ -1346,12 +1347,16 @@ def enhance_tables(html_body: str, accent: str) -> str:
         styled = re.sub(
             r"<th\b[^>]*>",
             f'<th style="padding:{pad_th};text-align:left;background:{accent}1f;font-weight:800;'
-            f'color:#111;border-bottom:2px solid {accent}80;white-space:nowrap;">',
+            f'color:#111;border-bottom:2px solid {accent}80;white-space:nowrap;word-break:keep-all;min-width:56px;">',
             styled,
         )
         styled = re.sub(
             r"<td\b[^>]*>",
-            f'<td style="padding:{pad_td};text-align:left;border-bottom:1px solid #ececec;line-height:1.65;vertical-align:top;">',
+            # [FIX] word-break:keep-all 없이는 좁은 열에서 한글 단어가 한 글자씩 쪼개져 세로로
+            # 늘어지는 가독성 문제가 있었음. 단어 단위로만 줄바꿈되고, 최소 너비를 둬서 셀이
+            # 지나치게 눌리지 않도록 수정.
+            f'<td style="padding:{pad_td};text-align:left;border-bottom:1px solid #ececec;line-height:1.65;'
+            f'vertical-align:top;word-break:keep-all;min-width:56px;">',
             styled,
         )
         return styled
