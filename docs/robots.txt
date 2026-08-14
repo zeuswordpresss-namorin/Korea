@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://zeuswordpresss-namorin.github.io/myblog/sitemap.xml
+Sitemap: https://zeuswordpresss-namorin.github.io/Korea/sitemap.xml
