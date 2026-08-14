@@ -1331,9 +1331,13 @@ def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     photo.save(path, format="WEBP", quality=82, method=6)
 
     theme = get_theme(category)
+    # [FIX] 상대경로("../thumbs/...")는 GitHub Pages(docs/posts/*.html)에서만 유효하고,
+    # 같은 html_body를 그대로 재사용하는 Blogger/워드프레스에서는 해당 경로가 존재하지 않아
+    # 이미지가 깨지는 원인이었습니다. SITE_URL이 설정된 경우 절대 URL을 사용합니다.
+    img_src = f"{SITE_URL}/thumbs/{filename}" if SITE_URL else f"../thumbs/{filename}"
     img_html = (
         '<figure style="margin:20px 0;">'
-        f'<img src="../thumbs/{filename}" alt="{article["title"]} 관련 이미지" loading="lazy" width="1000" height="560" style="width:100%;border-radius:10px;display:block;">'
+        f'<img src="{img_src}" alt="{article["title"]} 관련 이미지" loading="lazy" width="1000" height="560" style="width:100%;border-radius:10px;display:block;">'
         f'<figcaption style="text-align:center;font-size:0.82em;color:#999;margin-top:6px;">{theme["badge"]} 관련 이미지</figcaption>'
         '</figure>'
     )
