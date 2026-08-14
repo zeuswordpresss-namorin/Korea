@@ -162,17 +162,26 @@ DEFAULT_THEME = CATEGORY_THEMES["번역감정"]
 def get_theme(category: str) -> Dict[str, Any]:
     return CATEGORY_THEMES.get(category, DEFAULT_THEME)
 
+# --- [전면 개편] 무료 AI 생성 2D 시그니처 캐릭터 삽화 (말풍선 대화 만화 스타일) ---
+# Pexels 유료 API 키 없이도 항상 그림이 생성되도록, API 키가 필요 없는 무료 AI 이미지 생성
+# 서비스(Pollinations.ai)로 "하늘이" 라는 고정 시그니처 캐릭터가 말풍선으로 대화하는
+# 2D 플랫 카툰 삽화를 만듭니다. 카테고리별로 장면과 톤만 다르게 구성해 시리즈 일관성을 유지합니다.
+SIGNATURE_CHARACTER = (
+    "a cute minimalist 2D cartoon mascot character named Haneul-i, round soft face, big round eyes, "
+    "simple flat-color vector illustration, warm rounded shapes, soft pastel color palette, "
+    "consistent recurring comic-strip mascot"
+)
 ILLUSTRATION_PROMPTS = {
-    "번역감정": "minimalist pencil sketch style illustration of two people with a speech bubble containing a small heart, clean line art",
-    "일상표현": "minimalist pencil sketch style illustration of friends greeting each other with a speech bubble, clean line art",
-    "한국문화": "minimalist pencil sketch style illustration of a korean family sharing a table with traditional elements, clean line art",
-    "리액션": "minimalist pencil sketch style illustration of a surprised face with exclamation marks, clean line art",
+    "번역감정": f"{SIGNATURE_CHARACTER}, sitting closely with a friend character, warm speech bubble containing a small heart symbol between them, gentle emotional conversation scene, soft pink and cream tones",
+    "일상표현": f"{SIGNATURE_CHARACTER}, waving and greeting another character on a street, speech bubble containing a check mark symbol, friendly everyday conversation scene, soft blue and teal tones",
+    "한국문화": f"{SIGNATURE_CHARACTER}, sitting at a low traditional Korean table with a friend character, speech bubble containing a small lantern icon, warm cultural scene, terracotta and cream tones",
+    "리액션": f"{SIGNATURE_CHARACTER}, jumping back with a wide open surprised mouth, big speech bubble containing an exclamation mark, dramatic comic reaction scene, bright orange and yellow tones",
 }
-ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black or monochromatic vector lines, no watermark, no text"
+ILLUSTRATION_SUFFIX = ", flat 2D comic illustration, clean vector art, flat colors, thick clean outlines, no text, no watermark, high quality digital illustration"
 
-# --- 썸네일용 무료 스톡 이미지(출처 표기) 검색 설정 ---
-# Pexels 무료 이미지 API에서 실제 사진을 검색해 저작권 출처(작가명/링크)를 함께 표기합니다.
-# 준비물: https://www.pexels.com/api/ 에서 무료로 발급받는 API 키를 PEXELS_API_KEY 환경변수로 전달.
+# --- Pexels 무료 스톡 이미지 (2차 폴백 전용) ---
+# 1차: 무료 AI 시그니처 캐릭터 생성(API 키 불필요) → 실패 시 2차: Pexels 스톡사진(API 키 설정된 경우만)
+# → 최종 폴백: 그라데이션 배경. 준비물(선택): https://www.pexels.com/api/ 에서 무료 키 발급.
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 STOCK_SEARCH_TERMS = {
     "번역감정": "korean friends emotional moment",
@@ -887,6 +896,29 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     hex_color = hex_color.lstrip("#")
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
+# =====================================================================
+# [전면 개편] 무료 AI 2D 시그니처 캐릭터 이미지 생성 (Pollinations.ai — API 키 불필요)
+# 말풍선 대화를 나누는 고정 마스코트 캐릭터를 카테고리별 프롬프트로 생성합니다.
+# 실패 시 None을 반환하며, 호출부에서 Pexels(설정된 경우) → 그라데이션 순으로 폴백합니다.
+# =====================================================================
+def _generate_ai_cartoon_image(prompt: str, size: Tuple[int, int], seed: int) -> Optional[Image.Image]:
+    try:
+        w, h = size
+        encoded_prompt = urllib.parse.quote(prompt)
+        url = (
+            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            f"?width={w}&height={h}&seed={seed}&nologo=true&model=flux"
+        )
+        resp = requests.get(url, timeout=45)
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        if img.size != size:
+            img = img.resize(size)
+        return img
+    except Exception as e:
+        logger.warning(f"[AI 캐릭터 이미지] Pollinations 생성 실패, 2차 폴백으로 넘어갑니다: {e}")
+        return None
+
 _pexels_unconfigured_logged = False
 
 def _fetch_stock_photo(query: str, fallback_query: str, size: Tuple[int, int], seed: int) -> Tuple[Optional[Image.Image], Optional[Dict[str, str]]]:
@@ -977,14 +1009,23 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
 
 def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "번역감정", image_keywords: str = "") -> Optional[Dict[str, str]]:
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
-    fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["번역감정"])
-    photo, credit = _fetch_stock_photo(image_keywords, fallback_query, THUMB_SIZE, seed)
 
-    if photo is not None:
-        img = photo.convert("RGBA")
+    # 1차: 무료 AI 시그니처 캐릭터 만화 생성 (API 키 불필요)
+    category_prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["번역감정"])
+    ai_img = _generate_ai_cartoon_image(f"{category_prompt}{ILLUSTRATION_SUFFIX}", THUMB_SIZE, seed)
+
+    credit = None
+    if ai_img is not None:
+        img = ai_img.convert("RGBA")
     else:
-        # 무료 이미지 확보 실패 시에만 기존 그라데이션 배경으로 대체 (파이프라인 중단 방지용 폴백)
-        img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
+        # 2차 폴백: Pexels 무료 스톡사진 (API 키가 설정된 경우만)
+        fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["번역감정"])
+        photo, credit = _fetch_stock_photo(image_keywords, fallback_query, THUMB_SIZE, seed)
+        if photo is not None:
+            img = photo.convert("RGBA")
+        else:
+            # 최종 폴백: 그라데이션 배경 (파이프라인 중단 방지용)
+            img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
 
     draw = ImageDraw.Draw(img)
     accent_rgb = _hex_to_rgb(theme["accent"])
@@ -1210,8 +1251,12 @@ def insert_manual_ads(article: Dict[str, Any]) -> Dict[str, Any]:
     return article
 
 def _fetch_content_photo(image_keywords: str, category: str, seed: int, size=(1000, 560)):
-    # [FIX] 카테고리 대분류 프롬프트로만 AI 일러스트를 생성하던 방식(pollinations.ai)을 제거하고,
-    # 기사 주제에 맞는 AI 추출 검색어(image_keywords)로 실제 사진을 찾아 연관성을 높였습니다.
+    # 1차: 무료 AI 시그니처 캐릭터 만화 생성 (API 키 불필요)
+    category_prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["번역감정"])
+    ai_img = _generate_ai_cartoon_image(f"{category_prompt}{ILLUSTRATION_SUFFIX}", size, seed)
+    if ai_img is not None:
+        return ai_img
+    # 2차 폴백: Pexels 무료 스톡사진 (API 키가 설정된 경우만)
     fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["번역감정"])
     photo, _credit = _fetch_stock_photo(image_keywords, fallback_query, size, seed)
     return photo
@@ -1608,7 +1653,18 @@ def _make_blogger_safe_html(html_body: str) -> str:
     return html_body
 
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
-    if not _blogger_configured(): return None
+    if not _blogger_configured():
+        # [FIX] 기존에는 미설정 시 아무 로그 없이 조용히 건너뛰어, 파이프라인이 "성공"으로 표시돼도
+        # 실제로는 Blogger에 아무것도 발행되지 않는 원인을 알 수 없었습니다. 어떤 시크릿이
+        # 비어있는지 명시적으로 로그에 남깁니다.
+        missing = [name for name, val in [
+            ("BLOGGER_BLOG_ID", BLOGGER_BLOG_ID),
+            ("GOOGLE_CLIENT_ID", GOOGLE_CLIENT_ID),
+            ("GOOGLE_CLIENT_SECRET", GOOGLE_CLIENT_SECRET),
+            ("GOOGLE_REFRESH_TOKEN", GOOGLE_REFRESH_TOKEN),
+        ] if not val]
+        logger.warning(f"[블로거] 미설정으로 건너뜁니다. (비어있는 값: {', '.join(missing)}) — GitHub Secrets에 등록되어 있는지 확인하세요.")
+        return None
     try:
         access_token = _get_blogger_access_token()
         theme = get_theme(article.get("category", "번역감정"))
