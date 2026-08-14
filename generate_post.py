@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립트 (통합판)
-- [개편] 구글 트렌드 기반 소싱을 폐기하고, 에버그린 주제 뱅크(가이드/비교/체크리스트/FAQ/용어정리) 기반으로 전면 전환
-- [개편] 카테고리별 수익화 가중치(재테크·보험대출·정부지원금·헬스 우선) 반영, 하루 6회 발행 상한
+
+[전면 개편] "한국어를 배우면 한국인이 보인다" - 외국인 대상 한국어 표현·한국인 사고방식 블로그
+- 주인공은 단어가 아니라 한국인의 사고방식과 문화 (번역이 어려운 감정 / 매일 쓰는 말 / 한국 문화 / 리액션)
+- 매 글 고정 5단 템플릿 사용: 오늘의 표현 -> 왜 직역이 안 될까 -> 한국인은 언제 쓸까 -> 문화 이야기 -> 참여형 질문
+- 에버그린 주제 뱅크(100개 표현/문화 주제, 4개 카테고리 요일별 로테이션) 기반, 하루 6회 발행 상한
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 """
 
@@ -45,8 +48,8 @@ QUEUE_FILE = "keywords_queue.json"
 # 환경변수로 받는 설정값
 # =====================================================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-SITE_TITLE = os.environ.get("SITE_TITLE", "내 자동 블로그")
-SITE_TAGLINE = os.environ.get("SITE_TAGLINE", "매일 자동으로 업데이트되는 정보 큐레이션 블로그")
+SITE_TITLE = os.environ.get("SITE_TITLE", "오늘의 한국어")
+SITE_TAGLINE = os.environ.get("SITE_TAGLINE", "한국어를 배우면 한국인이 보인다 - 외국인을 위한 한국어 표현과 사고방식")
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
 GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")
 GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")
@@ -95,255 +98,137 @@ GEMINI_URL = (
     "gemini-2.5-flash:generateContent?key={api_key}"
 )
 
-# [개편] 트렌드 스토리텔링 프레이밍을 걷어내고, 처음부터 순수 가이드/정보성 콘텐츠로 전환
-SYSTEM_PROMPT = """당신은 독자에게 실질적으로 도움이 되는 정보를 정확하고 친절하게 전달하는 한국어 실용 정보 콘텐츠 전문 작가입니다.
-검색을 통해 찾아온 독자가 궁금한 것에 바로 답을 얻고, 다음 행동(가입/신청/구매/실천)까지 자신 있게 결정할 수 있도록 돕는 글을 씁니다.
-호기심을 자극하는 제목은 쓰되, 본문은 과장이나 감탄 없이 사람이 직접 정리해준 것처럼 담백하고 신뢰가 가는 톤으로 작성하세요.
+# [전면 개편] "한국어를 배우면 한국인이 보인다" - 고정 5단 템플릿 기반 한국어 표현/문화 콘텐츠
+SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방식을 설명하는 전문 에디터입니다.
+이 블로그의 콘셉트는 "한국어를 배우면 한국인이 보인다"입니다. 주인공은 단어가 아니라, 그 단어 뒤에 숨은 한국인의 사고방식과 문화입니다.
+독자는 한국어를 배우는 외국인이며, 사전적 정의가 아니라 "왜 이 표현이 그 나라 말로는 설명이 안 되는지", "실제 한국인은 언제 이 말을 쓰는지"를 궁금해합니다.
+
+[필수 포맷 구조 — 반드시 이 5단 구성과 순서를 그대로 지켜서 html_body를 작성한다]
+1. 오늘의 표현 — 표현(한국어 원문), 뜻(간결한 설명), 사용 맥락(누구에게/어떤 상황에 쓰는지)을 h2 아래 정리
+2. 왜 영어로 직역이 안 될까? — 영어(또는 다른 언어)의 가장 가까운 단어를 대며, 그 단어로는 못 담아내는 한국인만의 뉘앙스를 설명
+3. 한국인은 어떤 상황에서 쓸까? — 실제 대화체에 가까운 일상 예시 1~2개 (누가, 어떤 상황에서, 어떤 말투로 썼는지)
+4. 문화 이야기 — 이 표현이 한국 사회/관계 맺는 방식과 어떻게 연결되는지, 배경과 맥락을 짧게
+5. 여러분의 언어에서는 어떤가요? — 반드시 참여형 질문 1~2개로 마무리해 댓글을 유도한다 (예: "여러분의 언어에도 이런 단어가 있나요?", "비슷한 감정을 뭐라고 표현하시나요?")
 
 아래 규칙을 지켜 작성하세요:
-1. 제목은 검색 의도를 반영하되 흥미를 유발하도록 작성한다. 아래 9가지 후킹(hook) 기법 중 이 주제에 가장 잘 맞는 것을 1~2개 골라 제목과 도입부에 녹여낸다:
-   ① 호기심 갭(정보의 틈을 열어 궁금하게) ② 구체성/숫자(정확한 수치로 신뢰감) ③ 손실회피(놓치면 손해라는 프레이밍)
-   ④ 정체성/소속(나와 같은 부류가 하는 행동) ⑤ 대조(vs, 어느 쪽이 맞는지) ⑥ Before-After(변화의 폭을 자극)
-   ⑦ 사회적 증거(다수의 선택을 근거로) ⑧ 의외성(예상을 살짝 배신하는 반전) ⑨ 낮은 진입장벽(나도 할 수 있겠다는 안도감)
-   (예: "OO 신청 조건, 이것부터 확인하세요" / "OO 완벽 비교: 뭐가 다를까?") 단, 입력받은 주제의 의미를 벗어나지 않으며 25~40자 내외로 구글 검색결과에서 잘리지 않게 한다.
-1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 핵심 키워드를 앞부분에 배치하고, "이 글에서 무엇을 얻어갈 수 있는지"가 분명히 드러나는 문장으로 100~140자 내외로 작성한다.
-2. 소제목(H2)을 4~6개 사용해 구조화한다.
-3. [매우 중요] 사전적 뜻풀이 나열이나 알맹이 없는 서론으로 시간을 끌지 마세요. 독자가 검색으로 이 글에 들어온 이유(무엇을 알고 싶어서, 무엇을 결정하고 싶어서)에 처음부터 집중하고, 조건·절차·비교·주의사항처럼 실제로 쓸모 있는 구체적 정보를 우선 배치하세요.
-3-1. [문체/가독성 — 매우 중요] 다음 AI 특유의 어색한 말투를 피한다:
+1. 제목은 영어 검색 키워드형으로 작성한다. (예: "Why '정(Jeong)' Has No English Equivalent", "The Real Meaning of '눈치' (Nunchi)", "Why Koreans Say '수고했어요' So Often") 표현의 한국어 원문을 반드시 제목에 괄호나 따옴표로 포함시키고, 25~55자 내외로 작성한다.
+1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 표현을 앞부분에 배치하고, "이 표현의 뜻과 왜 번역이 안 되는지를 알 수 있다"는 점이 드러나게 100~140자 내외로 작성한다.
+2. 소제목(H2)은 정확히 위 5단 구조(오늘의 표현 / 왜 영어로 직역이 안 될까? / 한국인은 어떤 상황에서 쓸까? / 문화 이야기 / 여러분의 언어에서는 어떤가요?)를 그대로 사용한다. 순서와 문구를 임의로 바꾸지 않는다.
+3. [문체/가독성 — 매우 중요] 다음 AI 특유의 어색한 말투를 피한다:
    - 모든 문단을 "~일까요?", "~습니다!" 같은 같은 패턴으로 끝맺지 말고 평서문/의문문/짧은 문장을 자연스럽게 섞는다.
    - 같은 내용을 표현만 바꿔 반복하지 않는다(패딩 금지). 한 문단에서 한 이야기를 하면 다음 문단은 반드시 새로운 정보로 넘어간다.
-   - "정말", "충격적인", "놀라운", "발칵" 같은 과장 수식어는 글 전체에서 2~3회 이하로 아껴 쓴다.
-   - 문단은 2~4문장, 대략 70~90자 내외(PC 기준 2줄, 모바일 기준 5~6줄 정도)로 짧게 끊어 모바일 가독성을 높인다.
-   - 사람이 친구에게 설명하듯 구체적 사실·숫자·사례 위주로 쓰고, 막연한 감탄이나 분위기 묘사로 문단을 채우지 않는다.
-3-2. [콘텐츠 품질 — 매우 중요] 이 글은 시간이 지나도 유효한(에버그린) 정보 가치를 지녀야 합니다. 검색엔진용으로 양산된 듯한 글, 이미 알려진 사실의 재탕, 알맹이 없이 분량만 채운 글은 금지합니다.
-   독자가 실제로 "도움이 됐다"고 느낄 구체적 정보(배경, 맥락, 숫자, 비교, 실용적 시사점)를 반드시 포함해 독창적이고 유용한 콘텐츠를 작성하세요. 사실에 근거하지 않은 추측성 서술은 "~로 보인다", "~라는 분석이 나온다"처럼 단정하지 않는 표현을 쓰고, 확인 안 된 사실을 확정적으로 단언하지 않는다.
-3-3. [에버그린 구조] 이 글은 특정 날짜/사건에 묶이지 않는 주제를 다룹니다. 본문 소제목 중 최소 1~2개는 "~하는 방법", "~ 비교", "체크리스트", "초보자를 위한 안내", "주의할 점", "자주 묻는 질문", "용어 정리"처럼 독자가 검색을 통해 몇 달 뒤에 들어와도 바로 답을 얻을 수 있는 실용적 구조로 구성한다.
-3-4. [전문용어 해설] 일반 독자에게 낯설 수 있는 전문용어·업계 용어·줄임말이 나오면, 처음 등장하는 곳 바로 뒤에 괄호나 짧은 문장으로 간단히 풀어준다. (예: "PER(주가수익비율, 주가가 순이익 대비 몇 배인지 보여주는 지표)")
-4. 글자 수는 1500~2200자 내외.
-5. [중요] 서론(Hook)은 독자가 이 글을 클릭한 이유(궁금한 점, 해결하고 싶은 문제)를 짚어주며 시작합니다. (예: "OO을 신청하려는데 조건이 헷갈리시나요? 흔히 놓치는 부분부터 실제 신청 절차까지 한 번에 정리해드립니다.")
-6. 가독성을 위해 본문 중 최소 1곳에 <table> (수치/스펙 비교용 정리표) 또는 <ul>/<ol> 목록을 반드시 포함한다. (질문-답변 내용은 표로 만들지 않음)
-7. "product_keyword"에는 이 글 내용과 실제로 관련된, 쿠팡에서 검색했을 때 진짜 상품이 나올 만한 쇼핑 키워드(2~4단어)를 넣는다. 억지로 연결하기 어렵다면 반드시 빈 문자열("")로 둔다.
-8. 콘텐츠 내용을 보고 아래 3가지 중 구글 상위노출에 가장 유리한 스키마 타입을 스스로 판단해서 고른다:
-   - "FAQPage": 질문/답변 형태로 정리하기 좋은 주제일 때
-   - "HowTo": 순서가 있는 절차/방법을 안내하는 주제일 때
-   - "Article": 위 둘에 해당하지 않는 스토리텔링, 정보, 이슈형 글일 때
-9. 고른 스키마 타입에 맞는 데이터를 함께 채운다: (FAQPage는 "faq_items", HowTo는 "howto_steps" 채우기, Article은 빈 배열)
-10. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다. ["뷰티패션", "푸드맛집", "여행", "테크IT", "재테크머니", "헬스운동", "홈인테리어", "대출보험", "정부지원금", "라이프스타일", "산사워케이션", "종가음식", "한방웰니스", "K공예인테리어", "가양주"]
-11. category가 "대출보험" 또는 "정부지원금"이면 일반적인 조건 위주로 설명하고 공식 기관 확인이 필요하다는 점을 덧붙인다.
-11-1. [출처 투명성 — 매우 중요] 확인 가능한 공식 출처(정부기관, 지자체, 공식 협회/진흥원, 공식 웹사이트 등)를 언급할 수 있는 내용이면 본문에서 "OO(기관명)에 따르면" 형태로 자연스럽게 언급한다. 실제로 존재하는지 확신할 수 없는 기관명·통계·수치는 지어내지 말고, 확실하지 않으면 출처를 특정하지 않은 채 일반적 서술로 남긴다.
-11-2. [변동성 데이터 표기] 가격, 예약 방법, 영업시간, 지원금액, 신청 기간처럼 시간이 지나면 바뀔 수 있는 구체적 수치나 절차를 언급할 때는 사용자 메시지에 적힌 "오늘 날짜"를 기준으로 "OOOO년 O월 기준"처럼 시점을 명시하고, 문단 끝에 "정확한 사항은 공식 홈페이지나 해당 기관에서 다시 확인하시길 권장합니다" 같은 안내를 자연스럽게 덧붙인다.
-12. 이 글이 여러 구체적인 대상을 비교/소개하는 성격이면 "product_list"에 1문장 설명과 함께 채운다. (최대 6개). 아니면 빈 배열.
-12-1. "image_keywords"에는 이 글의 썸네일/본문 이미지로 쓸 무료 스톡사진을 검색하기 위한 영어 키워드 2~4단어를 넣는다.
-   [매우 중요] 키워드를 그대로 번역하지 말 것. 스톡사진 사이트에는 한국 밈/특정 인물/드라마 대사 같은 고유명사 사진이 없으므로,
-   글의 핵심 "장면/분위기/사물"을 일반적인 영어로 묘사한다. (예: 키워드가 "그래 이혼하자"라는 드라마 대사 밈이면
-   "couple emotional conversation" 처럼 실제 촬영 가능한 보편적 장면으로, 키워드가 "아이온큐"라는 양자컴퓨터 기업이면
-   "quantum computer technology"처럼 그 산업/사물을 나타내는 명사로 변환한다.)
-13. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
+   - "정말", "충격적인", "놀라운" 같은 과장 수식어는 글 전체에서 1~2회 이하로 아껴 쓴다.
+   - 문단은 2~4문장, 대략 60~90자 내외로 짧게 끊어 모바일 가독성을 높인다.
+   - 친한 친구에게 설명하듯 구체적 사례·대화 예시 위주로 쓰고, 막연한 감탄으로 문단을 채우지 않는다.
+4. [친근한 톤앤매너] 전체적으로 친근하고 공감대를 형성하는 어조를 유지한다. 독자를 "여러분"으로 자연스럽게 지칭하며, 딱딱한 설명체가 아니라 대화하듯 풀어쓴다.
+5. 글자 수는 900~1400자 내외 (모바일에서 가볍게 읽히는 짧은 분량을 지향한다).
+6. "왜 영어로 직역이 안 될까?" 섹션에는 표현의 한국어 원문을 최소 1회 굵게(strong) 강조한다.
+7. "한국인은 어떤 상황에서 쓸까?" 섹션은 <ul> 목록으로 예시 1~2개를 정리한다.
+8. schema_type은 항상 "Article"로 고정한다. faq_items와 howto_steps는 항상 빈 배열로 둔다.
+9. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다: ["번역감정", "일상표현", "한국문화", "리액션"]
+   - 번역감정: 정, 눈치, 아쉽다처럼 영어로 옮기기 어려운 감정·정서 단어
+   - 일상표현: 괜찮아요, 수고했어요처럼 한국인이 매일 쓰는 관용적 인사·말
+   - 한국문화: 나이 문화, 회식 문화, 존댓말처럼 표현 뒤에 있는 문화적 배경/관습
+   - 리액션: 헐, 대박, 아이고처럼 한국인 특유의 감탄사·반응 표현
+10. product_keyword와 product_list는 이 블로그와 무관하므로 항상 빈 문자열("")과 빈 배열([])로 둔다.
+11. "image_keywords"에는 이 글의 썸네일/본문 이미지로 쓸 무료 스톡사진을 검색하기 위한 영어 키워드 2~4단어를 넣는다.
+   [매우 중요] 한국어 표현을 그대로 번역하지 말 것. 스톡사진 사이트에는 한국 특유의 단어를 나타내는 사진이 없으므로,
+   그 감정/상황이 드러나는 사람들의 모습을 보편적인 영어로 묘사한다. (예: 표현이 "눈치"라면
+   "friends reading social cues" 처럼, 표현이 "정"이라면 "close friends warm moment" 처럼 실제 촬영 가능한 보편적 장면으로 변환한다.)
+12. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
 {
   "title": "...",
   "html_body": "...",
   "meta_description": "...",
-  "schema_type": "Article 또는 FAQPage 또는 HowTo",
-  "faq_items": [{"question": "...", "answer": "..."}],
-  "howto_steps": [{"name": "...", "text": "..."}],
-  "category": "위 10개 중 하나",
-  "product_keyword": "쇼핑 키워드 또는 빈 문자열",
-  "product_list": [{"name": "...", "description": "..."}],
+  "schema_type": "Article",
+  "faq_items": [],
+  "howto_steps": [],
+  "category": "위 4개 중 하나",
+  "product_keyword": "",
+  "product_list": [],
   "image_keywords": "영어 스톡사진 검색어 2~4단어"
 }
-html_body는 <h2>, <p>, <table>, <ul> 등을 사용한 HTML 조각이어야 한다."""
+html_body는 5단 구조를 <h2>, <p>, <ul>, <strong> 등을 사용한 HTML 조각으로 작성한다."""
 
 CATEGORY_THEMES = {
-    "뷰티패션": {"gradient": [(255, 107, 157), (255, 154, 158), (250, 208, 196)], "accent": "#ff6b9d", "badge": "💄 뷰티·패션", "label": "BEAUTY", "font": "Gowun+Dodum", "decor": ["💄", "💅", "👗", "👠", "💋", "🎀", "💎", "🌸"]},
-    "푸드맛집": {"gradient": [(255, 107, 53), (247, 147, 30), (255, 210, 63)], "accent": "#ff6b35", "badge": "🍽️ 푸드·맛집", "label": "FOOD", "font": "Jua", "decor": ["🍕", "🍔", "🍰", "🍜", "🍩", "☕", "🍓", "🧁"]},
-    "여행": {"gradient": [(17, 153, 142), (56, 239, 125), (100, 210, 255)], "accent": "#11998e", "badge": "✈️ 여행", "label": "TRAVEL", "font": "Gowun+Dodum", "decor": ["✈️", "🌴", "🗺️", "🧳", "🏖️", "📸", "🚗", "🗼"]},
-    "테크IT": {"gradient": [(30, 60, 114), (42, 82, 152), (0, 198, 255)], "accent": "#2a5298", "badge": "💻 테크·IT", "label": "TECH", "font": "Noto+Sans+KR:wght@700", "decor": ["💻", "⌨️", "🖥️", "📱", "🔌", "🤖", "⚡", "🛰️"]},
-    "재테크머니": {"gradient": [(17, 105, 79), (56, 173, 118), (168, 224, 99)], "accent": "#11694f", "badge": "💰 재테크", "label": "MONEY", "font": "Noto+Sans+KR:wght@700", "decor": ["💰", "💵", "📈", "🪙", "🏦", "💳", "📊", "🐷"]},
-    "헬스운동": {"gradient": [(19, 78, 94), (113, 178, 128), (168, 224, 99)], "accent": "#134e5e", "badge": "💪 헬스·운동", "label": "FITNESS", "font": "Jua", "decor": ["💪", "🏋️", "🥗", "🧘", "🏃", "⏱️", "🚴", "🥑"]},
-    "홈인테리어": {"gradient": [(196, 132, 88), (218, 170, 122), (238, 210, 175)], "accent": "#c48458", "badge": "🏠 홈·인테리어", "label": "HOME", "font": "Gowun+Dodum", "decor": ["🏠", "🪴", "🕯️", "🛋️", "🖼️", "🧺", "🪞", "🛏️"]},
-    "라이프스타일": {"gradient": [(66, 133, 244), (156, 39, 176), (234, 67, 121)], "accent": "#4a90d9", "badge": "✨ 라이프스타일", "label": "LIFESTYLE", "font": "Noto+Sans+KR:wght@700", "decor": ["✨", "🌸", "☕", "📓", "🎧", "🕊️", "🌿", "⭐"]},
-    "대출보험": {"gradient": [(20, 30, 48), (36, 59, 85), (65, 90, 119)], "accent": "#1e3a5f", "badge": "🏦 대출·보험", "label": "FINANCE", "font": "Noto+Sans+KR:wght@700", "decor": ["🏦", "📄", "💳", "🔍", "📞", "✅", "💼", "🧾"], "ymyl": True},
-    "정부지원금": {"gradient": [(0, 91, 82), (0, 128, 105), (82, 183, 136)], "accent": "#00695c", "badge": "🏛️ 정부지원금", "label": "SUPPORT", "font": "Noto+Sans+KR:wght@700", "decor": ["🏛️", "📋", "🖊️", "📅", "✅", "💌", "🪪", "📢"], "ymyl": True},
-    # --- [NEW] K-문화 블루오션 카테고리 (요일별 테마) ---
-    "산사워케이션": {"gradient": [(58, 90, 64), (95, 133, 97), (168, 197, 158)], "accent": "#3a5a40", "badge": "🏔️ 산사 워케이션", "label": "TEMPLE STAY", "font": "Gowun+Dodum", "decor": ["🏔️", "🧘", "📶", "🍵", "🔔", "🌲", "☁️", "💻"]},
-    "종가음식": {"gradient": [(122, 45, 35), (168, 92, 56), (222, 170, 108)], "accent": "#7a2d23", "badge": "🍲 종가 내림음식", "label": "JONGGA", "font": "Jua", "decor": ["🍲", "🥢", "🏯", "🍶", "🌾", "🫕", "🍚", "🏮"]},
-    "한방웰니스": {"gradient": [(91, 60, 100), (139, 94, 148), (196, 160, 202)], "accent": "#5b3c64", "badge": "🌿 한방 웰니스", "label": "HANBANG", "font": "Gowun+Dodum", "decor": ["🌿", "♨️", "🍵", "🪷", "💆", "🧴", "🌾", "🩺"]},
-    "K공예인테리어": {"gradient": [(139, 108, 66), (181, 148, 96), (222, 197, 158)], "accent": "#8b6c42", "badge": "🏺 K-공예 인테리어", "label": "K-CRAFT", "font": "Gowun+Dodum", "decor": ["🏺", "🪔", "🖌️", "🪵", "🧵", "🎨", "🕯️", "🏮"]},
-    "가양주": {"gradient": [(150, 40, 27), (196, 84, 39), (231, 156, 92)], "accent": "#96281b", "badge": "🍶 가양주", "label": "GAYANGJU", "font": "Jua", "decor": ["🍶", "🌾", "🍇", "🏺", "🥃", "🍂", "🏮", "🎋"]},
+    # --- [전면 개편] "한국어를 배우면 한국인이 보인다" 4대 카테고리 ---
+    "번역감정": {"gradient": [(233, 92, 132), (247, 158, 173), (255, 205, 210)], "accent": "#e95c84", "badge": "💗 번역이 안 되는 감정", "label": "EMOTION", "font": "Gowun+Dodum", "decor": ["💗", "😌", "🥲", "💭", "😳", "🫠", "😔", "✨"]},
+    "일상표현": {"gradient": [(46, 134, 171), (99, 179, 197), (163, 217, 219)], "accent": "#2e86ab", "badge": "💬 매일 쓰는 말", "label": "PHRASE", "font": "Noto+Sans+KR:wght@700", "decor": ["💬", "👋", "🙏", "😊", "🗣️", "📢", "✅", "🤝"]},
+    "한국문화": {"gradient": [(150, 40, 27), (196, 84, 39), (231, 156, 92)], "accent": "#96281b", "badge": "🇰🇷 한국 문화", "label": "CULTURE", "font": "Jua", "decor": ["🇰🇷", "🏮", "🥢", "🍶", "🎎", "🏯", "🎏", "🪭"]},
+    "리액션": {"gradient": [(255, 154, 60), (255, 194, 92), (255, 226, 130)], "accent": "#ff9a3c", "badge": "😲 한국인의 리액션", "label": "REACTION", "font": "Jua", "decor": ["😲", "🤯", "😂", "😱", "🙌", "👀", "🔥", "💯"]},
 }
-DEFAULT_THEME = CATEGORY_THEMES["라이프스타일"]
+DEFAULT_THEME = CATEGORY_THEMES["번역감정"]
 
 def get_theme(category: str) -> Dict[str, Any]:
     return CATEGORY_THEMES.get(category, DEFAULT_THEME)
 
 ILLUSTRATION_PROMPTS = {
-    "뷰티패션": "minimalist pencil sketch style illustration of cosmetics lipstick and fashion clothing items, clean line art",
-    "푸드맛집": "minimalist pencil sketch style illustration of food dishes and cafe coffee items, clean line art",
-    "여행": "minimalist pencil sketch style illustration of travel landscape airplane suitcase palm tree, clean line art",
-    "테크IT": "minimalist pencil sketch style illustration of laptop computer and technology icons, clean modern line art",
-    "재테크머니": "minimalist pencil sketch style illustration of coins money and finance growth chart, clean line art",
-    "헬스운동": "minimalist pencil sketch style illustration of fitness workout dumbbell and healthy food, clean line art",
-    "홈인테리어": "minimalist pencil sketch style illustration of cozy home interior furniture and plants, clean line art",
-    "대출보험": "minimalist pencil sketch style illustration of bank building document and contract, clean professional line art",
-    "정부지원금": "minimalist pencil sketch style illustration of government building document and checklist, clean line art",
-    "라이프스타일": "minimalist pencil sketch style illustration of coffee book and cozy lifestyle items, clean line art",
-    "산사워케이션": "minimalist pencil sketch style illustration of mountain temple and laptop workspace, clean line art",
-    "종가음식": "minimalist pencil sketch style illustration of traditional korean dining table, clean line art",
-    "한방웰니스": "minimalist pencil sketch style illustration of korean herbal tea and spa elements, clean line art",
-    "K공예인테리어": "minimalist pencil sketch style illustration of korean pottery and craft interior, clean line art",
-    "가양주": "minimalist pencil sketch style illustration of traditional korean rice wine bottle, clean line art",
+    "번역감정": "minimalist pencil sketch style illustration of two people with a speech bubble containing a small heart, clean line art",
+    "일상표현": "minimalist pencil sketch style illustration of friends greeting each other with a speech bubble, clean line art",
+    "한국문화": "minimalist pencil sketch style illustration of a korean family sharing a table with traditional elements, clean line art",
+    "리액션": "minimalist pencil sketch style illustration of a surprised face with exclamation marks, clean line art",
 }
 ILLUSTRATION_SUFFIX = ", simple outline shapes, white background, isolated black or monochromatic vector lines, no watermark, no text"
 
-# --- [NEW] 썸네일용 무료 스톡 이미지(출처 표기) 검색 설정 ---
-# 기존 "AI로 썸네일 이미지 생성" 방식을 없애고, Pexels 무료 이미지 API에서 실제 사진을 검색해
-# 저작권 출처(작가명/링크)를 함께 표기하는 방식으로 변경합니다.
+# --- 썸네일용 무료 스톡 이미지(출처 표기) 검색 설정 ---
+# Pexels 무료 이미지 API에서 실제 사진을 검색해 저작권 출처(작가명/링크)를 함께 표기합니다.
 # 준비물: https://www.pexels.com/api/ 에서 무료로 발급받는 API 키를 PEXELS_API_KEY 환경변수로 전달.
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 STOCK_SEARCH_TERMS = {
-    "뷰티패션": "cosmetics makeup fashion",
-    "푸드맛집": "food restaurant dish",
-    "여행": "travel landscape destination",
-    "테크IT": "laptop computer technology",
-    "재테크머니": "money finance coins",
-    "헬스운동": "fitness workout gym",
-    "홈인테리어": "home interior cozy",
-    "대출보험": "bank finance document",
-    "정부지원금": "government building document",
-    "라이프스타일": "lifestyle coffee cozy",
-    "산사워케이션": "temple mountain meditation workspace",
-    "종가음식": "korean traditional dining table",
-    "한방웰니스": "korean traditional spa wellness tea",
-    "K공예인테리어": "korean pottery craft interior",
-    "가양주": "korean traditional rice wine bottle",
+    "번역감정": "korean friends emotional moment",
+    "일상표현": "korean people talking conversation",
+    "한국문화": "korean traditional culture family",
+    "리액션": "korean people surprised reaction",
 }
 
 
 # =====================================================================
-# [개편] 에버그린 주제 뱅크 + 큐 관리
-# - 기존 "오늘의 구글 트렌드" 소싱을 완전히 제거하고, 미리 큐레이션한 에버그린(시간이 지나도
-#   검색되는) 주제 뱅크에서 주제를 뽑아 큐를 채웁니다. 가이드/비교/체크리스트/FAQ/용어정리 형태로
-#   구성해 검색 의도에 바로 답이 되는 콘텐츠를 지향합니다.
-# - CATEGORY_WEIGHT: 카테고리별 수익화 가중치. AdSense CPC/제휴 전환율이 높은 재테크·보험대출·
-#   정부지원금·헬스 카테고리에 더 자주 노출되도록 가중치를 부여합니다.
+# [전면 개편] 에버그린 주제 뱅크 (100개) + 큐 관리
+# - "한국어를 배우면 한국인이 보인다" 콘셉트에 맞춰 4대 카테고리(번역감정/일상표현/한국문화/리액션)
+#   각 25개씩 총 100개 주제로 구성. 각 항목은 EVERGREEN_TOPIC_BANK의 "주제(한국어 표현/문화 키워드)"이며,
+#   실제 제목·본문은 SYSTEM_PROMPT의 5단 템플릿에 따라 생성됩니다.
+# - CATEGORY_WEIGHT: 4개 카테고리를 균등하게 순환시켜 특정 카테고리로 편중되지 않게 합니다.
 # =====================================================================
 EVERGREEN_TOPIC_BANK: Dict[str, List[str]] = {
-    "재테크머니": [
-        "ISA 계좌 개설 방법과 세금 혜택 총정리", "연금저축과 IRP 차이 완벽 비교",
-        "청년도약계좌 조건과 신청 방법 체크리스트", "예금자보호법 한도 5천만원, 분산예치 전략",
-        "코스피 코스닥 차이, 초보자를 위한 안내", "적금 vs 예금 vs CMA, 목적별 비교 가이드",
-        "신용점수 올리는 방법 9가지", "퇴직연금 DB형 DC형 차이와 선택 기준",
-        "재테크 초보자를 위한 첫 포트폴리오 짜는 법", "금리 인상기 대출 갈아타기 체크리스트",
+    "번역감정": [
+        "정(情)", "눈치", "아쉽다", "답답하다", "서운하다", "민망하다", "섭섭하다", "허전하다",
+        "애틋하다", "짠하다", "뭉클하다", "억울하다", "속상하다", "찜찜하다", "든든하다", "오지랖",
+        "시원섭섭하다", "얄밉다", "한(恨)", "흥", "궁상맞다", "유난스럽다", "정떨어지다", "애매하다",
+        "마음이 놓이다",
     ],
-    "대출보험": [
-        "전세자금대출 조건과 한도 비교 가이드", "실손보험 갱신 전 꼭 확인할 체크리스트",
-        "신용대출 vs 담보대출 차이 완벽 정리", "자동차보험 할인 특약 종류와 가입 팁",
-        "보험 리모델링 할 때 주의할 점", "정책서민금융상품 종류와 신청 자격 총정리",
-        "중도상환수수료 계산법과 절감 방법", "DSR DTI LTV 용어 정리, 헷갈리는 대출 규제",
-        "암보험 가입 전 꼭 알아야 할 주의점", "카드론 현금서비스 차이와 상환 전략",
+    "일상표현": [
+        "괜찮아요", "수고했어요", "잘 먹겠습니다", "잘 먹었습니다", "다녀오겠습니다", "고생했어요",
+        "밥 한번 먹자", "조심히 들어가세요", "수고하셨습니다", "잘 지내시죠", "식사하셨어요",
+        "다음에 봐요", "신경 쓰지 마세요", "별말씀을요", "그러게요", "죄송한데요", "괜찮으시면",
+        "바쁘시죠", "힘내세요", "조심하세요", "축하드려요", "화이팅", "신경 좀 써주세요",
+        "감사합니다 정말로", "신세 많이 졌습니다",
     ],
-    "정부지원금": [
-        "청년내일저축계좌 신청 자격과 방법", "근로장려금 신청 조건 체크리스트",
-        "기초연금 수급 자격과 신청 방법 가이드", "육아휴직급여 계산법과 신청 절차",
-        "소상공인 정책자금 종류 비교", "국민취업지원제도 신청 방법 총정리",
-        "에너지바우처 대상과 신청 방법", "청년월세지원 조건과 신청 체크리스트",
-        "귀농귀촌 지원금 종류와 신청 가이드", "국가장학금 소득분위 계산법 안내",
+    "한국문화": [
+        "나이 문화", "존댓말", "회식 문화", "눈치 문화", "정 문화", "빨리빨리 문화",
+        "한국식 나이 계산법", "회식 자리 예절", "선후배 문화", "직급 호칭 문화", "한국식 술자리 매너",
+        "명절 세배 문화", "밥 사는 문화", "정 나눔 선물 문화", "단체 문화", "눈치껏 행동하기",
+        "서열 문화", "동안 문화", "한국식 배려", "회식 2차 3차 문화", "한국식 인사법",
+        "존댓말 반말 전환 시점", "한국의 집단주의 정서", "정 많은 민족성", "한국식 나이 서열",
     ],
-    "헬스운동": [
-        "홈트레이닝 초보자를 위한 시작 가이드", "단백질 보충제 종류와 고르는 법 비교",
-        "간헐적 단식 방법과 주의할 점", "런닝 초보자를 위한 페이스 조절법",
-        "체지방률 계산법과 정상 범위 안내", "스트레칭 루틴, 아침저녁 비교 가이드",
-        "근육통과 부상 구분하는 방법", "다이어트 정체기 극복 체크리스트",
-        "필라테스 vs 요가 차이 완벽 비교", "수면의 질 높이는 습관 가이드",
-    ],
-    "테크IT": [
-        "클라우드 저장소 요금제 비교 가이드", "노트북 고를 때 체크리스트 (사양 용어 정리)",
-        "비밀번호 관리자 앱 비교와 선택법", "OTT 서비스 요금제 완벽 비교",
-        "스마트폰 배터리 오래 쓰는 방법", "무료 이미지 편집 프로그램 비교",
-        "이메일 피싱 구별하는 방법 체크리스트", "생성형 AI 서비스 무료 vs 유료 비교",
-        "와이파이 속도 느릴 때 확인할 체크리스트", "중고 전자기기 구매 전 확인사항 가이드",
-    ],
-    "홈인테리어": [
-        "원룸 인테리어 예산별 가이드", "곰팡이 제거와 재발 방지 방법",
-        "커튼 vs 블라인드 장단점 비교", "이사 전 체크리스트 (버릴 것/챙길 것)",
-        "미니멀 라이프 시작하는 방법", "베란다 확장 전 알아야 할 주의점",
-        "친환경 세제 고르는 법 가이드", "좁은 주방 수납 아이디어 정리",
-        "반려동물과 함께하는 인테리어 팁", "겨울철 난방비 아끼는 방법 체크리스트",
-    ],
-    "푸드맛집": [
-        "제철 채소 고르는 법과 보관 방법", "에어프라이어 활용 레시피 가이드",
-        "홈베이킹 초보자를 위한 도구 체크리스트", "식품 유통기한과 소비기한 차이 정리",
-        "다이어트 도시락 준비 가이드", "커피 원두 로스팅 단계별 맛 차이 비교",
-        "냉동식품 보관법과 주의할 점", "비건 식단 시작하는 초보자 가이드",
-        "장보기 전 알아두면 좋은 체크리스트", "집들이 요리 메뉴 추천 가이드",
-    ],
-    "여행": [
-        "저가항공 티켓 싸게 사는 방법", "여행자보험 가입 전 체크리스트",
-        "캐리어 고를 때 확인할 사항 가이드", "해외여행 유심 vs 로밍 비교",
-        "국내 캠핑장 예약 꿀팁 정리", "여권 만료 확인과 재발급 방법",
-        "면세점 쇼핑 한도와 세관 신고 안내", "혼자 떠나는 여행 준비 체크리스트",
-        "여행 짐 싸기 노하우, 계절별 가이드", "공항 라운지 이용 조건 비교",
-    ],
-    "뷰티패션": [
-        "피부타입별 스킨케어 루틴 가이드", "쿠션 파운데이션 vs 팩트 비교",
-        "자외선차단제 고르는 법 체크리스트", "머리카락 손상 줄이는 관리법",
-        "체형별 옷 코디 가이드", "저자극 화장품 성분표 읽는 법",
-        "각질 관리 방법과 주의할 점", "향수 지속력 높이는 방법",
-        "겨울철 피부 건조 관리 가이드", "미니멀 옷장 만들기 체크리스트",
-    ],
-    "라이프스타일": [
-        "미루는 습관 고치는 방법", "아침 루틴 만들기 가이드",
-        "가계부 작성법, 초보자를 위한 안내", "번아웃 자가진단 체크리스트",
-        "독서 습관 만드는 방법", "디지털 디톡스 시작하는 가이드",
-        "감정일기 쓰는 법과 효과", "집중력 높이는 환경 만들기 체크리스트",
-        "새해 목표 세우는 방법 (SMART 기법)", "인간관계 스트레스 줄이는 법",
-    ],
-    # --- [NEW] K-문화 블루오션 카테고리 (사용자 제안 큐레이션 반영, 요일별 우선 테마) ---
-    "산사워케이션": [
-        "산사 워케이션 가능한 전국 사찰 리스트", "사찰 워케이션 장기 체류 비용 비교 가이드",
-        "산사 워케이션 와이파이 속도·업무 집중도 후기 정리", "일과 후 명상 프로그램 참여 방법 안내",
-        "템플스테이 vs 산사 워케이션 차이 비교", "디지털 노마드를 위한 사찰 워케이션 체크리스트",
-        "산사 워케이션 예약 방법과 준비물 가이드", "원격근무자를 위한 산사 워케이션 후기 모음",
-    ],
-    "종가음식": [
-        "종가 내림음식 프라이빗 다이닝 예약 방법 가이드", "지역별 대표 종가 시그니처 메뉴 비교",
-        "종갓집 내림음식 예약 시 지켜야 할 에티켓", "고택 숙박(한옥 스테이)과 종가음식 연계 코스 가이드",
-        "종가음식과 일반 한정식 차이 비교", "안동 종가음식 체험 후기와 예약 팁",
-        "종부님이 전하는 내림음식 조리법의 특징 정리", "종가음식 프라이빗 다이닝 가격대 비교",
-    ],
-    "한방웰니스": [
-        "사상체질 진단 방법과 체질별 특징 정리", "체질별 한방 스파 추천 가이드",
-        "한방 족욕·입욕 전문 웰니스 센터 고르는 법", "체질 맞춤 한방차 재료 소싱 방법",
-        "약선 밀키트 정기구독 서비스 비교", "한방 스파와 일반 스파 차이 비교",
-        "사상체질별 어울리는 음식 체크리스트", "한방 웰니스 초보자를 위한 안내",
-    ],
-    "K공예인테리어": [
-        "소반을 커피테이블로 활용하는 인테리어 팁", "나전칠기 입문용 브랜드 비교 가이드",
-        "달항아리 모던 인테리어 배치 아이디어", "K-공예 원데이클래스 체험 가이드",
-        "신진 공예 작가 가성비 입문 브랜드 리스트", "전통 공예품 현대 인테리어 활용 체크리스트",
-        "옻칠 식기 만들기 원데이클래스 후기 정리", "1인 가구를 위한 K-공예 소품 활용법",
-    ],
-    "가양주": [
-        "지역별 소규모 가양주 양조장 투어 가이드", "가양주와 어울리는 안주 페어링 정리",
-        "전통주 구독 서비스 장단점 비교", "집에서 이화주(떠먹는 막걸리) 담그는 키트 후기",
-        "가양주 vs 시판 막걸리 차이 비교", "전통주 초보자를 위한 용어 정리",
-        "가양주 양조장 투어 준비물 체크리스트", "대중교통으로 가는 전통주 양조장 안내",
+    "리액션": [
+        "헐", "대박", "어머", "아이고", "어쩌지", "진짜?", "세상에", "헉",
+        "미쳤다", "짱이다", "완전", "대박사건", "어우", "아 진짜", "그니까", "아니 진짜",
+        "실화냐", "소름", "레알", "인정", "극혐", "웃프다", "당황스럽다", "어이없다",
+        "기가 막히다",
     ],
 }
-# 카테고리별 수익화 가중치 (숫자가 클수록 큐에 더 자주 편성됨)
+# 카테고리별 가중치 (4개 카테고리를 균등 순환 — 특정 카테고리 편중 방지)
 CATEGORY_WEIGHT: Dict[str, int] = {
-    "재테크머니": 3, "대출보험": 3, "정부지원금": 3, "헬스운동": 2, "테크IT": 2,
-    "홈인테리어": 1, "푸드맛집": 1, "여행": 1, "뷰티패션": 1, "라이프스타일": 1,
-    "산사워케이션": 2, "종가음식": 2, "한방웰니스": 2, "K공예인테리어": 2, "가양주": 2,
+    "번역감정": 1, "일상표현": 1, "한국문화": 1, "리액션": 1,
 }
-# [NEW] 요일별 우선 테마 (월=0 ~ 금=4). 해당 요일엔 이 카테고리의 미발행 주제를 최우선으로 편성.
+# 요일별 우선 테마 (월=0 ~ 금=4). 4개 카테고리를 월~목 순서대로, 금요일엔 번역감정으로 다시 순환.
 # 검색엔진에 체계적인 카테고리 구조를 인식시키고, 한 카테고리 연속 발행으로 인한 전문성 분산을 방지.
 WEEKDAY_THEME_CATEGORY: Dict[int, str] = {
-    0: "산사워케이션",   # 월요일
-    1: "종가음식",       # 화요일
-    2: "한방웰니스",     # 수요일
-    3: "K공예인테리어",  # 목요일
-    4: "가양주",         # 금요일
+    0: "번역감정",   # 월요일
+    1: "일상표현",   # 화요일
+    2: "한국문화",   # 수요일
+    3: "리액션",     # 목요일
+    4: "번역감정",   # 금요일 (플래그십 카테고리 재순환)
 }
 
 def _topic_category(topic: str) -> Optional[str]:
@@ -533,7 +418,7 @@ def _adsense_snippet() -> str:
     if not ADSENSE_CLIENT_ID: return ""
     return f'\n<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={ADSENSE_CLIENT_ID}" crossorigin="anonymous"></script>'
 
-def build_faq_section_html(article: Dict[str, Any], accent: str = "#4a90d9") -> str:
+def build_faq_section_html(article: Dict[str, Any], accent: str = "#e95c84") -> str:
     if not article.get("faq_items"): return ""
     cards = []
     for i, qa in enumerate(article["faq_items"], 1):
@@ -576,7 +461,7 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
         "@type": "BreadcrumbList",
         "itemListElement": [
             {"@type": "ListItem", "position": 1, "name": SITE_TITLE, "item": (SITE_URL + "/") if SITE_URL else "../index.html"},
-            {"@type": "ListItem", "position": 2, "name": article.get("category", "라이프스타일"), "item": (SITE_URL + "/") if SITE_URL else "../index.html"},
+            {"@type": "ListItem", "position": 2, "name": article.get("category", "번역감정"), "item": (SITE_URL + "/") if SITE_URL else "../index.html"},
             {"@type": "ListItem", "position": 3, "name": title, "item": canonical_url},
         ],
     }
@@ -813,9 +698,9 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
   h2 {{ font-size: 1.1em; margin-top: 2em; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 0.9em; }}
   th, td {{ text-align: left; padding: 8px 4px; border-bottom: 1px solid #eee; }}
-  a {{ color: #4a90d9; }}
+  a {{ color: #e95c84; }}
   .card {{ background:#f7f7f9; border-radius:8px; padding:16px; margin: 10px 0; }}
-  a.back {{ display: inline-block; margin-bottom: 20px; color: #4a90d9; text-decoration: none; }}
+  a.back {{ display: inline-block; margin-bottom: 20px; color: #e95c84; text-decoration: none; }}
 </style>
 </head>
 <body>
@@ -1090,9 +975,9 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     if current: lines.append(current)
     return lines
 
-def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "라이프스타일", image_keywords: str = "") -> Optional[Dict[str, str]]:
+def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "번역감정", image_keywords: str = "") -> Optional[Dict[str, str]]:
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
-    fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["라이프스타일"])
+    fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["번역감정"])
     photo, credit = _fetch_stock_photo(image_keywords, fallback_query, THUMB_SIZE, seed)
 
     if photo is not None:
@@ -1275,7 +1160,7 @@ def _coupang_deeplink(search_url: str) -> Optional[str]:
         return None
 
 def add_ymyl_disclaimer(article: Dict[str, Any]) -> Dict[str, Any]:
-    theme = get_theme(article.get("category", "라이프스타일"))
+    theme = get_theme(article.get("category", "번역감정"))
     if not theme.get("ymyl"): return article
     disclaimer = (
         '<div style="background:#fff8e1;border:1px solid #ffe082;border-radius:10px;'
@@ -1288,7 +1173,7 @@ def add_ymyl_disclaimer(article: Dict[str, Any]) -> Dict[str, Any]:
 
 def _relevance_score(article: Dict[str, Any], candidate: Dict[str, Any]) -> float:
     score = 0.0
-    if candidate.get("category") == article.get("category", "라이프스타일"): score += 3.0
+    if candidate.get("category") == article.get("category", "번역감정"): score += 3.0
     current_words = set(re.findall(r"[\w가-힣]+", (article.get("title", "") + " " + article.get("keyword", ""))))
     candidate_words = set(re.findall(r"[\w가-힣]+", candidate.get("title", "")))
     score += len(current_words & candidate_words) * 1.5
@@ -1327,7 +1212,7 @@ def insert_manual_ads(article: Dict[str, Any]) -> Dict[str, Any]:
 def _fetch_content_photo(image_keywords: str, category: str, seed: int, size=(1000, 560)):
     # [FIX] 카테고리 대분류 프롬프트로만 AI 일러스트를 생성하던 방식(pollinations.ai)을 제거하고,
     # 기사 주제에 맞는 AI 추출 검색어(image_keywords)로 실제 사진을 찾아 연관성을 높였습니다.
-    fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["라이프스타일"])
+    fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["번역감정"])
     photo, _credit = _fetch_stock_photo(image_keywords, fallback_query, size, seed)
     return photo
 
@@ -1391,7 +1276,7 @@ def enhance_tables(html_body: str, accent: str) -> str:
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
 def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
-    category = article.get("category", "라이프스타일")
+    category = article.get("category", "번역감정")
     seed = int(hashlib.md5((article["title"] + "-inline").encode("utf-8")).hexdigest(), 16) % 100000
     photo = _fetch_content_photo(article.get("image_keywords", ""), category, seed)
     if photo is None: return article
@@ -1495,7 +1380,7 @@ def _build_related_html(exclude_slug: str) -> str:
 def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, str]:
     os.makedirs(POSTS_DIR, exist_ok=True)
     os.makedirs(os.path.join(DOCS_DIR, "thumbs"), exist_ok=True)
-    category = article.get("category", "라이프스타일")
+    category = article.get("category", "번역감정")
     theme = get_theme(category)
     slug = slugify(article["keyword"])
     today = datetime.now().strftime("%Y-%m-%d")
@@ -1574,14 +1459,14 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
         hero_html = (
             '<div class="tier-label">🔥 최신 이야기</div>'
             f'<a class="hero" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="eager" fetchpriority="high">'
-            f'<div class="hero-body"><span class="hero-badge" style="background:{p.get("accent", "#4a90d9")}">{p.get("badge", "✨ 라이프스타일")}</span>'
+            f'<div class="hero-body"><span class="hero-badge" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="hero-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>'
         )
     mid_html = ""
     if mid_posts:
         cards = "\n".join(
             f'<a class="mid-card" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
-            f'<div class="mid-body"><span class="badge-sm" style="background:{p.get("accent", "#4a90d9")}">{p.get("badge", "✨ 라이프스타일")}</span>'
+            f'<div class="mid-body"><span class="badge-sm" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="mid-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>' for p in mid_posts
         )
         mid_html = f'<div class="tier-label">📖 다음 이야기</div><div class="mid-grid">{cards}</div>'
@@ -1589,7 +1474,7 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
     if bottom_posts:
         cards = "\n".join(
             f'<a class="bottom-card" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
-            f'<div class="bottom-body"><span class="badge-sm" style="background:{p.get("accent", "#4a90d9")}">{p.get("badge", "✨ 라이프스타일")}</span>'
+            f'<div class="bottom-body"><span class="badge-sm" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="bottom-title">{p["title"]}</div></div></a>' for p in bottom_posts
         )
         bottom_html = f'<div class="tier-label">🗂️ 지난 글 모아보기</div><div class="bottom-grid">{cards}</div>'
@@ -1726,7 +1611,7 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
     if not _blogger_configured(): return None
     try:
         access_token = _get_blogger_access_token()
-        theme = get_theme(article.get("category", "라이프스타일"))
+        theme = get_theme(article.get("category", "번역감정"))
         today = datetime.now().strftime("%Y-%m-%d")
         blogger_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="blogger")
         # [FIX] base64는 요약 스니펫 글자수 제한 안에서 이미지가 아예 안 뜨는 원인이었음.
@@ -1831,7 +1716,7 @@ def _replace_thumbs_with_wordpress_media(html_body: str, site: str, access_token
 
 def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_thumb_path: str) -> None:
     access_token = _get_wordpress_com_access_token()
-    theme = get_theme(article.get("category", "라이프스타일"))
+    theme = get_theme(article.get("category", "번역감정"))
     site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
 
     thumb_hosted_url = _upload_media_to_wordpress_com(site, access_token, local_thumb_path)
@@ -1900,7 +1785,7 @@ def _replace_thumbs_with_wordpress_self_hosted_media(html_body: str, auth_header
 def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
     auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
     auth_header = f"Basic {auth_token}"
-    theme = get_theme(article.get("category", "라이프스타일"))
+    theme = get_theme(article.get("category", "번역감정"))
 
     # 대표이미지(썸네일) 업로드 (실패해도 본문 발행은 계속 진행)
     featured_media_id = None
