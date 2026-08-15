@@ -445,30 +445,30 @@ function googleTranslateElementInit() {
 
     parts.append("""
 <script>
-function playKoreanTTS(text, gender) {
+function playKoreanTTS(text) {
+  try {
+    var audio = new Audio('https://translate.google.com/translate_tts?ie=UTF-8&q=' + encodeURIComponent(text) + '&tl=ko&client=tw-ob');
+    var played = audio.play();
+    if (played && played.catch) {
+      played.catch(function(err) {
+        console.warn('[TTS] 구글 번역 음성 재생 실패, 브라우저 음성으로 대체합니다:', err);
+        _fallbackKoreanTTS(text);
+      });
+    }
+  } catch(e) {
+    console.warn('[TTS] 구글 번역 음성 호출 실패, 브라우저 음성으로 대체합니다:', e);
+    _fallbackKoreanTTS(text);
+  }
+}
+function _fallbackKoreanTTS(text) {
   try {
     if (!('speechSynthesis' in window)) { alert('이 브라우저는 음성 재생을 지원하지 않습니다.'); return; }
     window.speechSynthesis.cancel();
     var utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'ko-KR';
-    utter.rate = 0.8;   // 또박또박 정확하게 들리도록 속도를 살짝 낮춤
-    utter.pitch = (gender === 'male') ? 0.82 : 1.18;
-    var voices = window.speechSynthesis.getVoices();
-    var koVoices = voices.filter(function(v){ return v.lang && v.lang.toLowerCase().indexOf('ko') === 0; });
-    var pick = null;
-    if (koVoices.length) {
-      var match = koVoices.find(function(v){
-        var n = v.name.toLowerCase();
-        return (gender === 'male') ? (n.indexOf('male') !== -1 && n.indexOf('female') === -1) : (n.indexOf('female') !== -1);
-      });
-      pick = match || koVoices[0];
-    }
-    if (pick) utter.voice = pick;
+    utter.rate = 0.85;
     window.speechSynthesis.speak(utter);
-  } catch(e) { console.error('[TTS 오류]', e); }
-}
-if ('speechSynthesis' in window) {
-  window.speechSynthesis.onvoiceschanged = function(){ window.speechSynthesis.getVoices(); };
+  } catch(e) { console.error('[TTS 폴백 오류]', e); }
 }
 </script>""")
     return "".join(parts)
@@ -995,6 +995,10 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     hex_color = hex_color.lstrip("#")
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
+def _blend_rgb(c1: Tuple[int, int, int], c2: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
+    """c1과 c2를 t(0~1) 비율로 섞는다 (t=0이면 c1, t=1이면 c2)"""
+    return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+
 # =====================================================================
 # [전면 개편] 무료 AI 2D 시그니처 캐릭터 이미지 생성 (Pollinations.ai — API 키 불필요)
 # 말풍선 대화를 나누는 고정 마스코트 캐릭터를 카테고리별 프롬프트로 생성합니다.
@@ -1163,13 +1167,17 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
         line_h = expr_font_size + 12
         total_h = line_h * len(lines)
         ty = h - (scrim_h - 26) // 2 - total_h // 2 + 14
+        # [NEW] 퍼스널컬러: 표현 텍스트를 흰색 고정이 아니라, 카테고리(감정)의 accent 색을 바탕으로
+        # 채움은 accent+화이트를 섞은 밝은 톤, 외곽선은 accent+블랙을 섞은 짙은 톤으로 배색해
+        # 감정마다 다른 톤앤매너의 시그니처 텍스처가 되도록 한다.
+        text_fill = _blend_rgb((255, 255, 255), accent_rgb, 0.30) + (255,)
+        text_stroke = _blend_rgb(accent_rgb, (0, 0, 0), 0.55) + (235,)
         for line in lines:
             lb = draw.textbbox((0, 0), line, font=expr_font)
             tw = lb[2] - lb[0]
             tx = (w - tw) / 2 - lb[0]
-            # 시그니처 텍스트: 살짝 두꺼운 외곽선(stroke) + 화이트 채움으로 어떤 배경에서도 또렷하게
-            draw.text((tx, ty - lb[1]), line, font=expr_font, fill=(255, 255, 255, 255),
-                       stroke_width=4, stroke_fill=(0, 0, 0, 220))
+            draw.text((tx, ty - lb[1]), line, font=expr_font, fill=text_fill,
+                       stroke_width=4, stroke_fill=text_stroke)
             ty += line_h
 
     # 카테고리 배지 (브랜드 일관성 유지용 작은 라벨)
@@ -1463,21 +1471,17 @@ def enhance_tables(html_body: str, accent: str) -> str:
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
 def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
-    """말풍선 아이콘 클릭 시 배우는 한글 표현을 남/여 음성으로 정확하게 읽어주는 버튼 2개"""
+    """말풍선 아이콘 클릭 시 배우는 한글 표현을 구글 번역 음성(정확한 발음)으로 들려주는 버튼"""
     expression = (expression or "").strip()
     if not expression or len(expression) > 20:
         return ""
     escaped = expression.replace("\\", "\\\\").replace("'", "\\'")
     accent = theme["accent"]
     return (
-        '<div class="notranslate" translate="no" '
-        'style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 16px;">'
-        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\', \'female\')" aria-label="여성 음성으로 듣기" '
+        '<div class="notranslate" translate="no" style="margin:2px 0 16px;">'
+        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\')" aria-label="발음 듣기 (Google 번역)" '
         f'style="background:#fff;border:1.5px solid {accent};color:{accent};border-radius:20px;padding:6px 14px;'
-        'font-size:0.85em;font-weight:700;cursor:pointer;">💬 여성 발음 듣기</button>'
-        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\', \'male\')" aria-label="남성 음성으로 듣기" '
-        f'style="background:#fff;border:1.5px solid {accent};color:{accent};border-radius:20px;padding:6px 14px;'
-        'font-size:0.85em;font-weight:700;cursor:pointer;">💬 남성 발음 듣기</button>'
+        'font-size:0.85em;font-weight:700;cursor:pointer;">💬 발음 듣기 (Google 번역)</button>'
         '</div>'
     )
 
@@ -1485,28 +1489,10 @@ def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     category = article.get("category", "번역감정")
     theme = get_theme(category)
 
-    # 말풍선 발음 듣기 버튼은 이미지 생성 성패와 무관하게 항상 넣는다
+    # [FIX] 본문 중간에 별도로 넣던 삽화(figure)를 제거했습니다. 히어로 썸네일에 이미
+    # 한글 표현이 큼직하게 들어가 있어 같은 캐릭터 그림이 본문에 또 나오면 중복이었습니다.
+    # 발음 듣기 버튼만 "오늘의 표현" 바로 아래 남깁니다.
     extra_html = _tts_buttons_html(article.get("expression", ""), theme)
-
-    seed = int(hashlib.md5((article["title"] + "-inline").encode("utf-8")).hexdigest(), 16) % 100000
-    photo = _fetch_content_photo(article.get("image_keywords", ""), category, seed)
-    if photo is not None:
-        filename = f"{slug}-inline.webp"
-        path = os.path.join(DOCS_DIR, "thumbs", filename)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        photo.save(path, format="WEBP", quality=82, method=6)
-
-        # [FIX] 상대경로("../thumbs/...")는 GitHub Pages(docs/posts/*.html)에서만 유효하고,
-        # 같은 html_body를 그대로 재사용하는 Blogger/워드프레스에서는 해당 경로가 존재하지 않아
-        # 이미지가 깨지는 원인이었습니다. SITE_URL이 설정된 경우 절대 URL을 사용합니다.
-        img_src = f"{SITE_URL}/thumbs/{filename}" if SITE_URL else f"../thumbs/{filename}"
-        extra_html += (
-            '<figure style="margin:20px 0;">'
-            f'<img src="{img_src}" alt="{article["title"]} 관련 이미지" loading="lazy" width="1000" height="560" style="width:100%;border-radius:10px;display:block;">'
-            f'<figcaption style="text-align:center;font-size:0.82em;color:#999;margin-top:6px;">{theme["badge"]} 관련 이미지</figcaption>'
-            '</figure>'
-        )
-
     if not extra_html:
         return article
 
