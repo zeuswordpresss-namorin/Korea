@@ -12,11 +12,11 @@ on:
           - publish
           - refresh
       title:
-        description: "발행할 한국어 표현/키워드 (비워두면 100개 주제뱅크 큐에서 요일별 테마에 맞춰 자동 발췌)"
+        description: "발행할 한국어 표현/키워드 (비워두면 100개 주제뱅크 큐에서 자동 발췌) — 수동 실행은 하루 발행 한도의 영향을 받지 않습니다"
         required: false
         default: ""
   schedule:
-    - cron: "0 */3 * * *"   # 3시간마다 실행 (하루 최대 6회 발행 상한, 4대 카테고리 요일별 로테이션 기반)
+    - cron: "0 * * * *"   # 매시 정각마다 실행 후보로 판정 (하루 랜덤 2회만 실제 발행, 나머지는 자동으로 건너뜀)
 
 permissions:
   contents: write
