@@ -135,7 +135,8 @@ SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방
    [매우 중요] 한국어 표현을 그대로 번역하지 말 것. 스톡사진 사이트에는 한국 특유의 단어를 나타내는 사진이 없으므로,
    그 감정/상황이 드러나는 사람들의 모습을 보편적인 영어로 묘사한다. (예: 표현이 "눈치"라면
    "friends reading social cues" 처럼, 표현이 "정"이라면 "close friends warm moment" 처럼 실제 촬영 가능한 보편적 장면으로 변환한다.)
-12. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
+12. "expression"에는 "오늘의 표현"에서 다루는 한국어 표현의 순수 원문만 담는다. 설명·이모지·괄호 없이 단어/구절 그대로. (예: "민망하다", "정", "수고했어요")
+13. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
 {
   "title": "...",
   "html_body": "...",
@@ -146,7 +147,8 @@ SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방
   "category": "위 4개 중 하나",
   "product_keyword": "",
   "product_list": [],
-  "image_keywords": "영어 스톡사진 검색어 2~4단어"
+  "image_keywords": "영어 스톡사진 검색어 2~4단어",
+  "expression": "표현의 한국어 원문만"
 }
 html_body는 5단 구조를 <h2>, <p>, <ul>, <strong> 등을 사용한 HTML 조각으로 작성한다."""
 
@@ -172,10 +174,26 @@ SIGNATURE_CHARACTER = (
     "consistent recurring comic-strip mascot"
 )
 ILLUSTRATION_PROMPTS = {
-    "번역감정": f"{SIGNATURE_CHARACTER}, sitting closely with a friend character, warm speech bubble containing a small heart symbol between them, gentle emotional conversation scene, soft pink and cream tones",
-    "일상표현": f"{SIGNATURE_CHARACTER}, waving and greeting another character on a street, speech bubble containing a check mark symbol, friendly everyday conversation scene, soft blue and teal tones",
-    "한국문화": f"{SIGNATURE_CHARACTER}, sitting at a low traditional Korean table with a friend character, speech bubble containing a small lantern icon, warm cultural scene, terracotta and cream tones",
-    "리액션": f"{SIGNATURE_CHARACTER}, jumping back with a wide open surprised mouth, big speech bubble containing an exclamation mark, dramatic comic reaction scene, bright orange and yellow tones",
+    "번역감정": (
+        f"{SIGNATURE_CHARACTER} acting out a short situational skit — leaning toward a friend character with a "
+        "shy warm smile, one hand rubbing the back of the neck, gentle motion lines showing a small shuffle, "
+        "a speech bubble containing a small pink heart and sparkle emoji floating above the scene, soft pink and cream tones"
+    ),
+    "일상표현": (
+        f"{SIGNATURE_CHARACTER} acting out a short situational skit — waving energetically at a friend character "
+        "passing by on a street, both captured mid-step with dynamic motion lines, a speech bubble containing a "
+        "check mark and small wave emoji, cheerful soft blue and teal tones"
+    ),
+    "한국문화": (
+        f"{SIGNATURE_CHARACTER} acting out a short situational skit — bowing slightly at a low traditional Korean "
+        "table filled with small side dishes, a friend character passing a bowl, motion lines showing a respectful "
+        "nod, a speech bubble containing a lantern and rice bowl emoji, warm terracotta and cream tones"
+    ),
+    "리액션": (
+        f"{SIGNATURE_CHARACTER} acting out a short situational skit — jumping backward with both arms flailing and "
+        "mouth wide open in shock, sweat drop and exclamation mark emoji flying out of a big speech bubble, dramatic "
+        "radiating motion lines, bright orange and yellow tones"
+    ),
 }
 ILLUSTRATION_SUFFIX = ", flat 2D comic illustration, clean vector art, flat colors, thick clean outlines, no text, no watermark, high quality digital illustration"
 
@@ -396,10 +414,12 @@ def _ga_snippet() -> str:
 ENABLE_AUTO_TRANSLATE = os.environ.get("ENABLE_AUTO_TRANSLATE", "true").strip().lower() != "false"
 
 def _translate_widget() -> str:
-    """방문자의 브라우저 언어가 한국어가 아니면 조용히 번역을 수행합니다 (UI 완전 숨김 처리)"""
-    if not ENABLE_AUTO_TRANSLATE:
-        return ""
-    return """
+    """방문자의 브라우저 언어가 한국어가 아니면 조용히 번역을 수행합니다 (UI 완전 숨김 처리).
+    [NEW] 말풍선 아이콘 클릭 시 배우는 한글 표현을 남성/여성 음성으로 또박또박 읽어주는
+    TTS(Web Speech API) 스크립트도 함께 포함합니다 (모든 플랫폼 공통 삽입 지점)."""
+    parts = []
+    if ENABLE_AUTO_TRANSLATE:
+        parts.append("""
 <div id="google_translate_element" style="position:absolute; top:-9999px; left:-9999px; display:none;"></div>
 <script>
 function googleTranslateElementInit() {
@@ -421,7 +441,37 @@ function googleTranslateElementInit() {
   } catch(e) {}
 })();
 </script>
-<script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>"""
+<script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>""")
+
+    parts.append("""
+<script>
+function playKoreanTTS(text, gender) {
+  try {
+    if (!('speechSynthesis' in window)) { alert('이 브라우저는 음성 재생을 지원하지 않습니다.'); return; }
+    window.speechSynthesis.cancel();
+    var utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'ko-KR';
+    utter.rate = 0.8;   // 또박또박 정확하게 들리도록 속도를 살짝 낮춤
+    utter.pitch = (gender === 'male') ? 0.82 : 1.18;
+    var voices = window.speechSynthesis.getVoices();
+    var koVoices = voices.filter(function(v){ return v.lang && v.lang.toLowerCase().indexOf('ko') === 0; });
+    var pick = null;
+    if (koVoices.length) {
+      var match = koVoices.find(function(v){
+        var n = v.name.toLowerCase();
+        return (gender === 'male') ? (n.indexOf('male') !== -1 && n.indexOf('female') === -1) : (n.indexOf('female') !== -1);
+      });
+      pick = match || koVoices[0];
+    }
+    if (pick) utter.voice = pick;
+    window.speechSynthesis.speak(utter);
+  } catch(e) { console.error('[TTS 오류]', e); }
+}
+if ('speechSynthesis' in window) {
+  window.speechSynthesis.onvoiceschanged = function(){ window.speechSynthesis.getVoices(); };
+}
+</script>""")
+    return "".join(parts)
 
 def _adsense_snippet() -> str:
     if not ADSENSE_CLIENT_ID: return ""
@@ -460,9 +510,12 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
         }
     else:
         schema_type = article_type
+        org_id = build_organization_website_json_ld()["org_id"]
         data = {
             "@context": "https://schema.org", "@type": article_type, "headline": title, "description": meta_description,
-            "image": thumb_url, "datePublished": date, "author": {"@type": "Organization", "name": SITE_TITLE},
+            "image": thumb_url, "datePublished": date,
+            "author": {"@type": "Organization", "name": SITE_TITLE, "@id": org_id},
+            "publisher": {"@type": "Organization", "name": SITE_TITLE, "@id": org_id},
         }
 
     data.pop("@context", None)
@@ -482,12 +535,32 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
         })
     return json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False, indent=2)
 
+def build_organization_website_json_ld() -> Dict[str, Any]:
+    """[NEW] 브랜드 엔티티 SEO: 사이트 전체를 대표하는 Organization + WebSite를 선언한다.
+    각 글의 Article/BlogPosting의 publisher가 이 @id를 참조해 동일 브랜드로 연결된다."""
+    base = (SITE_URL + "/") if SITE_URL else "."
+    org_id = f"{base}#organization"
+    site_id = f"{base}#website"
+    return {
+        "org": {
+            "@type": "Organization", "@id": org_id, "name": SITE_TITLE, "url": base,
+            "description": SITE_TAGLINE,
+        },
+        "website": {
+            "@type": "WebSite", "@id": site_id, "url": base, "name": SITE_TITLE,
+            "description": SITE_TAGLINE, "publisher": {"@id": org_id}, "inLanguage": "ko",
+        },
+        "org_id": org_id,
+    }
+
 def build_blog_index_json_ld(posts: List[Dict[str, Any]]) -> str:
-    data = {
-        "@context": "https://schema.org", "@type": "Blog", "name": SITE_TITLE, "url": (SITE_URL + "/") if SITE_URL else ".",
+    brand = build_organization_website_json_ld()
+    blog_node = {
+        "@type": "Blog", "name": SITE_TITLE, "url": (SITE_URL + "/") if SITE_URL else ".",
+        "publisher": {"@id": brand["org_id"]},
         "blogPost": [{"@type": "BlogPosting", "headline": p["title"], "url": (f"{SITE_URL}/{p['file']}" if SITE_URL else p["file"]), "datePublished": p["date"], "image": (f"{SITE_URL}/{p['thumb']}" if SITE_URL else p["thumb"])} for p in posts[:10]],
     }
-    return json.dumps(data, ensure_ascii=False, indent=2)
+    return json.dumps({"@context": "https://schema.org", "@graph": [brand["org"], brand["website"], blog_node]}, ensure_ascii=False, indent=2)
 
 POST_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
@@ -506,6 +579,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 <meta name="apple-mobile-web-app-title" content="{site_title_short}">
 <script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('../sw.js').catch(()=>{{}})); }}</script>
 <meta property="og:type" content="article">
+<meta property="og:site_name" content="{site_title}">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{meta_description}">
 <meta property="og:image" content="{thumb_url}">
@@ -597,7 +671,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{site_title}</title>
-<meta name="description" content="{site_title} - 자동으로 업데이트되는 블로그">
+<meta name="description" content="{site_tagline}">
 <link rel="canonical" href="{site_url}/">
 <link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
 <link rel="manifest" href="manifest.json">
@@ -607,6 +681,14 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="{site_title_short}">
 <script>if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{{}})); }}</script>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{site_title}">
+<meta property="og:title" content="{site_title}">
+<meta property="og:description" content="{site_tagline}">
+<meta property="og:url" content="{site_url}/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{site_title}">
+<meta name="twitter:description" content="{site_tagline}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="{fonts_url}" rel="stylesheet">
 <script type="application/ld+json">
@@ -852,6 +934,10 @@ def generate_article(title: str) -> Dict[str, Any]:
                 continue
 
             article["keyword"] = title
+            article["expression"] = (article.get("expression") or "").strip()
+            # [NEW] 배우는 한글 표현이 구글 자동번역으로 다른 언어로 바뀌지 않도록,
+            # 본문 전체에서 해당 표현이 등장하는 모든 위치를 notranslate 처리
+            article["html_body"] = _wrap_notranslate(article["html_body"], article["expression"])
 
             desc = article.get("meta_description", "").strip()
             if len(desc) > 160:
@@ -891,6 +977,19 @@ def _make_gradient_background(size: Tuple[int, int], colors: List[Tuple[int, int
     mid_mask = Image.new("L", size)
     mid_mask.putdata([int(80 * (1 - abs((x / w + y / h) / 2 - 0.5) * 2)) for y in range(h) for x in range(w)])
     return Image.composite(mid, blended, mid_mask)
+
+def _wrap_notranslate(html_body: str, expression: str) -> str:
+    """배우는 한글 표현은 구글 자동번역(_translate_widget)이 건너뛰도록 notranslate 처리.
+    HTML 태그/속성 내부는 건드리지 않고, 텍스트 노드에 등장하는 표현만 안전하게 감싼다."""
+    expression = (expression or "").strip()
+    if not expression or len(expression) > 20:
+        return html_body
+    wrapped = f'<span class="notranslate kr-word" translate="no">{expression}</span>'
+    parts = re.split(r'(<[^>]+>)', html_body)
+    for i, part in enumerate(parts):
+        if part and not part.startswith("<") and expression in part:
+            parts[i] = part.replace(expression, wrapped)
+    return "".join(parts)
 
 def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     hex_color = hex_color.lstrip("#")
@@ -1320,30 +1419,57 @@ def enhance_tables(html_body: str, accent: str) -> str:
 
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
+def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
+    """말풍선 아이콘 클릭 시 배우는 한글 표현을 남/여 음성으로 정확하게 읽어주는 버튼 2개"""
+    expression = (expression or "").strip()
+    if not expression or len(expression) > 20:
+        return ""
+    escaped = expression.replace("\\", "\\\\").replace("'", "\\'")
+    accent = theme["accent"]
+    return (
+        '<div class="notranslate" translate="no" '
+        'style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 16px;">'
+        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\', \'female\')" aria-label="여성 음성으로 듣기" '
+        f'style="background:#fff;border:1.5px solid {accent};color:{accent};border-radius:20px;padding:6px 14px;'
+        'font-size:0.85em;font-weight:700;cursor:pointer;">💬 여성 발음 듣기</button>'
+        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\', \'male\')" aria-label="남성 음성으로 듣기" '
+        f'style="background:#fff;border:1.5px solid {accent};color:{accent};border-radius:20px;padding:6px 14px;'
+        'font-size:0.85em;font-weight:700;cursor:pointer;">💬 남성 발음 듣기</button>'
+        '</div>'
+    )
+
 def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     category = article.get("category", "번역감정")
+    theme = get_theme(category)
+
+    # 말풍선 발음 듣기 버튼은 이미지 생성 성패와 무관하게 항상 넣는다
+    extra_html = _tts_buttons_html(article.get("expression", ""), theme)
+
     seed = int(hashlib.md5((article["title"] + "-inline").encode("utf-8")).hexdigest(), 16) % 100000
     photo = _fetch_content_photo(article.get("image_keywords", ""), category, seed)
-    if photo is None: return article
-    filename = f"{slug}-inline.webp"
-    path = os.path.join(DOCS_DIR, "thumbs", filename)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    photo.save(path, format="WEBP", quality=82, method=6)
+    if photo is not None:
+        filename = f"{slug}-inline.webp"
+        path = os.path.join(DOCS_DIR, "thumbs", filename)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        photo.save(path, format="WEBP", quality=82, method=6)
 
-    theme = get_theme(category)
-    # [FIX] 상대경로("../thumbs/...")는 GitHub Pages(docs/posts/*.html)에서만 유효하고,
-    # 같은 html_body를 그대로 재사용하는 Blogger/워드프레스에서는 해당 경로가 존재하지 않아
-    # 이미지가 깨지는 원인이었습니다. SITE_URL이 설정된 경우 절대 URL을 사용합니다.
-    img_src = f"{SITE_URL}/thumbs/{filename}" if SITE_URL else f"../thumbs/{filename}"
-    img_html = (
-        '<figure style="margin:20px 0;">'
-        f'<img src="{img_src}" alt="{article["title"]} 관련 이미지" loading="lazy" width="1000" height="560" style="width:100%;border-radius:10px;display:block;">'
-        f'<figcaption style="text-align:center;font-size:0.82em;color:#999;margin-top:6px;">{theme["badge"]} 관련 이미지</figcaption>'
-        '</figure>'
-    )
+        # [FIX] 상대경로("../thumbs/...")는 GitHub Pages(docs/posts/*.html)에서만 유효하고,
+        # 같은 html_body를 그대로 재사용하는 Blogger/워드프레스에서는 해당 경로가 존재하지 않아
+        # 이미지가 깨지는 원인이었습니다. SITE_URL이 설정된 경우 절대 URL을 사용합니다.
+        img_src = f"{SITE_URL}/thumbs/{filename}" if SITE_URL else f"../thumbs/{filename}"
+        extra_html += (
+            '<figure style="margin:20px 0;">'
+            f'<img src="{img_src}" alt="{article["title"]} 관련 이미지" loading="lazy" width="1000" height="560" style="width:100%;border-radius:10px;display:block;">'
+            f'<figcaption style="text-align:center;font-size:0.82em;color:#999;margin-top:6px;">{theme["badge"]} 관련 이미지</figcaption>'
+            '</figure>'
+        )
+
+    if not extra_html:
+        return article
+
     idx = article["html_body"].find("</h2>")
-    if idx != -1: article["html_body"] = article["html_body"][:idx + 5] + img_html + article["html_body"][idx + 5:]
-    else: article["html_body"] = img_html + article["html_body"]
+    if idx != -1: article["html_body"] = article["html_body"][:idx + 5] + extra_html + article["html_body"][idx + 5:]
+    else: article["html_body"] = extra_html + article["html_body"]
     return article
 
 def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
@@ -1482,6 +1608,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         translate_widget=_translate_widget(),
         photo_credit_html=photo_credit_html,
         site_title_short=SITE_TITLE[:12],
+        site_title=SITE_TITLE,
     )
     with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
         f.write(html)
