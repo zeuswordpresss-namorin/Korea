@@ -1106,7 +1106,7 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     if current: lines.append(current)
     return lines
 
-def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "번역감정", image_keywords: str = "") -> Optional[Dict[str, str]]:
+def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "번역감정", image_keywords: str = "", expression: str = "") -> Optional[Dict[str, str]]:
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
 
     # 1차: 무료 AI 시그니처 캐릭터 만화 생성 (API 키 불필요)
@@ -1128,8 +1128,51 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
 
     draw = ImageDraw.Draw(img)
     accent_rgb = _hex_to_rgb(theme["accent"])
+    w, h = THUMB_SIZE
 
-    # 카테고리 배지 (브랜드 일관성 유지용, 사진 위 작은 라벨만 표시하고 큰 제목 텍스트는 그리지 않음)
+    # [NEW] 시그니처 텍스처: 배우는 한글 표현을 썸네일의 메인 비주얼로 크게 노출
+    # 하단부에 브랜드 그라데이션 스크림 + 카테고리 색 텍스처 라인을 깔고, 그 위에 표현을 큰 글씨로 얹는다.
+    expression = (expression or "").strip()
+    if expression and len(expression) <= 20:
+        scrim_h = int(h * 0.42)
+        scrim = Image.new("RGBA", (w, scrim_h), (0, 0, 0, 0))
+        scrim_draw = ImageDraw.Draw(scrim)
+        for y in range(scrim_h):
+            alpha = int(200 * (y / scrim_h) ** 1.4)
+            scrim_draw.line([(0, y), (w, y)], fill=(10, 10, 14, alpha))
+        img.alpha_composite(scrim, (0, h - scrim_h))
+        draw = ImageDraw.Draw(img)
+
+        # 시그니처 텍스처: 카테고리 accent 색 사선 줄무늬를 스크림 위에 은은하게
+        texture = Image.new("RGBA", (w, scrim_h), (0, 0, 0, 0))
+        tex_draw = ImageDraw.Draw(texture)
+        stripe_gap = 46
+        for x in range(-scrim_h, w, stripe_gap):
+            tex_draw.line([(x, scrim_h), (x + scrim_h, 0)], fill=accent_rgb + (28,), width=6)
+        img.alpha_composite(texture, (0, h - scrim_h))
+        draw = ImageDraw.Draw(img)
+
+        # 카테고리 accent 포인트 바 (표현 텍스트 위 짧은 밑줄 장식)
+        bar_y = h - scrim_h + 26
+        draw.rounded_rectangle([w // 2 - 34, bar_y, w // 2 + 34, bar_y + 6], radius=3, fill=accent_rgb + (255,))
+
+        expr_font_size = 96 if len(expression) <= 6 else (72 if len(expression) <= 10 else 54)
+        expr_font = _load_font(expr_font_size)
+        max_text_w = w - 80
+        lines = _wrap_by_pixel_width(draw, expression, expr_font, max_text_w)[:2]
+        line_h = expr_font_size + 12
+        total_h = line_h * len(lines)
+        ty = h - (scrim_h - 26) // 2 - total_h // 2 + 14
+        for line in lines:
+            lb = draw.textbbox((0, 0), line, font=expr_font)
+            tw = lb[2] - lb[0]
+            tx = (w - tw) / 2 - lb[0]
+            # 시그니처 텍스트: 살짝 두꺼운 외곽선(stroke) + 화이트 채움으로 어떤 배경에서도 또렷하게
+            draw.text((tx, ty - lb[1]), line, font=expr_font, fill=(255, 255, 255, 255),
+                       stroke_width=4, stroke_fill=(0, 0, 0, 220))
+            ty += line_h
+
+    # 카테고리 배지 (브랜드 일관성 유지용 작은 라벨)
     label_font = _load_font(30)
     label_text = theme["label"]
     lb = draw.textbbox((0, 0), label_text, font=label_font)
@@ -1561,7 +1604,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     today = datetime.now().strftime("%Y-%m-%d")
     thumb_filename = f"{slug}-{today}.webp"
     post_filename = f"{slug}-{today}.html"
-    photo_credit = generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category, article.get("image_keywords", ""))
+    photo_credit = generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category, article.get("image_keywords", ""), article.get("expression", ""))
     photo_credit_html = ""
     if photo_credit:
         photo_credit_html = (
