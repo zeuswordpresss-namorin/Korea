@@ -351,7 +351,8 @@ def refill_evergreen_queue(target_size: int = 20) -> None:
     logger.info(f"[에버그린 주제뱅크] 신규 편성: {len(picked)}개 (대기 {len(queue['pending'])}개)")
     logger.info("=" * 60)
 
-DAILY_PUBLISH_LIMIT = 6  # [개편] 트렌드 감지 게이트가 사라졌으므로, 콘텐츠 팜처럼 보이지 않게 하루 상한을 다시 둠(품질 우선)
+DAILY_PUBLISH_LIMIT = 2  # [개편] 하루 자동 발행을 2회로 축소 (사람이 직접 쓴 것처럼 보이도록)
+GITHUB_EVENT_NAME = os.environ.get("GITHUB_EVENT_NAME", "")  # "schedule"=자동(cron), "workflow_dispatch"=수동
 
 def check_daily_limit() -> bool:
     queue = load_queue()
@@ -360,6 +361,26 @@ def check_daily_limit() -> bool:
     if daily_stats.get("date") != today_str:
         return True
     return daily_stats.get("count", 0) < DAILY_PUBLISH_LIMIT
+
+def _should_publish_now_random() -> bool:
+    """[NEW] '하루 랜덤 자동 2번 발행' — 매시 정각마다 cron이 돌지만, 실제 발행 여부는
+    저수지 표본추출(reservoir sampling) 방식의 확률로 결정해 하루 중 무작위 시각에
+    총 DAILY_PUBLISH_LIMIT회만 발행되도록 한다. (수동 실행은 이 함수를 타지 않음 — 제한 없음)"""
+    queue = load_queue()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    daily_stats = queue.get("daily_stats", {"date": "", "count": 0})
+    published_today = daily_stats.get("count", 0) if daily_stats.get("date") == today_str else 0
+
+    slots_remaining = DAILY_PUBLISH_LIMIT - published_today
+    if slots_remaining <= 0:
+        return False
+
+    now = datetime.now()
+    hours_remaining = 24 - now.hour  # 이번 시각의 실행도 후보에 포함
+    probability = min(1.0, slots_remaining / max(1, hours_remaining))
+    roll = random.random()
+    logger.info(f"[랜덤 발행 판정] 오늘 발행 {published_today}/{DAILY_PUBLISH_LIMIT}회, 남은 시간대 {hours_remaining}개, 발행 확률 {probability:.2f}, 주사위 {roll:.2f}")
+    return roll < probability
 
 def increment_daily_count() -> None:
     queue = load_queue()
@@ -2105,14 +2126,24 @@ def run() -> None:
     if len(sys.argv) > 1 and sys.argv[1].strip() and sys.argv[1].strip().lower() not in ["publish", "refresh"]:
         manual_title = sys.argv[1].strip()
 
+    # [NEW] 수동 실행(workflow_dispatch)은 제목 입력 여부와 무관하게 발행 한도를 적용하지 않는다.
+    # 자동 실행(schedule/cron)에만 "하루 랜덤 2회" 제한을 적용한다.
+    is_manual_trigger = GITHUB_EVENT_NAME == "workflow_dispatch"
+
     title = ""
     if manual_title:
         title = manual_title
     else:
-        # [개편] 트렌드 감지 게이트가 사라졌으므로 하루 발행 한도로 콘텐츠 팜화 방지
-        if not check_daily_limit():
-            logger.info(f"오늘의 발행 한도({DAILY_PUBLISH_LIMIT}회)를 모두 소진하여 포스팅을 생략합니다.")
-            return
+        if is_manual_trigger:
+            logger.info("[수동 실행] workflow_dispatch로 직접 실행되어 발행 한도를 적용하지 않습니다.")
+        else:
+            # [개편] 하루 총 발행 한도(2회) + 무작위 시간대 분산으로 콘텐츠 팜화 방지
+            if not check_daily_limit():
+                logger.info(f"오늘의 발행 한도({DAILY_PUBLISH_LIMIT}회)를 모두 소진하여 포스팅을 생략합니다.")
+                return
+            if not _should_publish_now_random():
+                logger.info("[랜덤 발행 판정] 이번 시각은 건너뜁니다 (다음 정각에 다시 판정).")
+                return
 
         queue = load_queue()
         if not queue.get("pending"):
@@ -2155,7 +2186,7 @@ def run() -> None:
     # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
     publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
 
-    if not manual_title:
+    if not manual_title and not is_manual_trigger:
         increment_daily_count()
 
     logger.info(f"저장 완료: docs/{post_meta['file']}, docs/{post_meta['thumb']}")
