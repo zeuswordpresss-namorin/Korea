@@ -1875,14 +1875,26 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
             f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
         )
         url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/"
-        resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, json={"title": article["title"], "content": content_html}, timeout=30)
-        if not resp.ok:
+        # [FIX] 짧은 간격으로 연달아 요청하면 토큰/권한이 멀쩡해도 구글 쪽에서 일시적으로
+        # 403/429/503을 반환하는 사례가 확인됨 (같은 토큰으로 몇 분 뒤 재시도하면 정상 발행됨).
+        # 영구적 권한 문제와 구분하기 위해 지수 백오프로 최대 3회 재시도한다.
+        last_error = None
+        for attempt in range(1, 4):
+            resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, json={"title": article["title"], "content": content_html}, timeout=30)
+            if resp.ok:
+                blogger_url = resp.json().get("url")
+                logger.info(f"[블로거] 발행 완료: {blogger_url or '(URL 확인 불가)'}")
+                return blogger_url
+            if resp.status_code in (403, 429, 503) and attempt < 3:
+                wait = 20 * attempt
+                logger.warning(f"[블로거] 일시적 오류({resp.status_code}), {wait}초 대기 후 재시도 ({attempt}/3): {resp.text[:200]}")
+                time.sleep(wait)
+                last_error = f"HTTP {resp.status_code}: {resp.text[:500]}"
+                continue
             # [FIX] "403 Client Error: Forbidden"만으로는 원인(토큰 만료/권한 부족/블로그ID 불일치)을
             # 알 수 없었음. 구글이 실제로 보낸 에러 본문을 그대로 노출해 원인 특정이 가능하게 함.
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
-        blogger_url = resp.json().get("url")
-        logger.info(f"[블로거] 발행 완료: {blogger_url or '(URL 확인 불가)'}")
-        return blogger_url
+        raise RuntimeError(last_error or "알 수 없는 오류로 3회 재시도 모두 실패")
     except Exception as e:
         logger.error(f"[블로거] 발행 실패: {e}")
         return None
