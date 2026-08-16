@@ -667,7 +667,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 {decor_html}
 <div class="content">
 <a class="back" href="../index.html">← 목록으로</a>
-<div class="hero"><img src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high"></div>
+<div class="hero"><img src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high">{hero_tts_html}</div>
 <span class="badge">{badge}</span>
 <h1>{title}</h1>
 <p class="meta">{date}</p>
@@ -999,6 +999,29 @@ def _make_gradient_background(size: Tuple[int, int], colors: List[Tuple[int, int
     mid_mask.putdata([int(80 * (1 - abs((x / w + y / h) / 2 - 0.5) * 2)) for y in range(h) for x in range(w)])
     return Image.composite(mid, blended, mid_mask)
 
+def _make_random_gradient_background(size: Tuple[int, int], colors: List[Tuple[int, int, int]], seed: int = None):
+    """[NEW] 감정컬러 랜덤배경: 매번 그라데이션 방향을 무작위로 바꿔 같은 카테고리라도
+    다른 느낌의 배경이 나오게 한다 (좌상↘우하 / 우상↙좌하 / 위↓아래 / 왼쪽→오른쪽 중 랜덤)."""
+    rnd = random.Random(seed) if seed is not None else random
+    direction = rnd.choice(["tl_br", "tr_bl", "top_bottom", "left_right"])
+    w, h = size
+
+    def t_at(x, y):
+        if direction == "tl_br": return (x / w + y / h) / 2
+        if direction == "tr_bl": return ((w - x) / w + y / h) / 2
+        if direction == "top_bottom": return y / h
+        return x / w  # left_right
+
+    base = Image.new("RGB", size, colors[0])
+    top = Image.new("RGB", size, colors[-1])
+    mask = Image.new("L", size)
+    mask.putdata([int(t_at(x, y) * 255) for y in range(h) for x in range(w)])
+    blended = Image.composite(top, base, mask)
+    mid = Image.new("RGB", size, colors[1])
+    mid_mask = Image.new("L", size)
+    mid_mask.putdata([int(80 * (1 - abs(t_at(x, y) - 0.5) * 2)) for y in range(h) for x in range(w)])
+    return Image.composite(mid, blended, mid_mask)
+
 def _wrap_notranslate(html_body: str, expression: str) -> str:
     """배우는 한글 표현은 구글 자동번역(_translate_widget)이 건너뛰도록 notranslate 처리.
     HTML 태그/속성 내부는 건드리지 않고, 텍스트 노드에 등장하는 표현만 안전하게 감싼다."""
@@ -1132,73 +1155,50 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     return lines
 
 def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "번역감정", image_keywords: str = "", expression: str = "") -> Optional[Dict[str, str]]:
+    # [전면 개편] 요청: 썸네일은 "오늘의 표현" 한글 텍스트만 메인으로, AI 캐릭터/스톡사진 없이
+    # 카테고리(감정) 컬러의 랜덤 배경 위에 크게 얹는다. 매번 그라데이션 방향이 무작위라 같은
+    # 카테고리라도 매번 다른 느낌이 난다. (외부 이미지 API 의존 제거로 실패/차단 위험도 사라짐)
     seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
-
-    # 1차: 무료 AI 시그니처 캐릭터 만화 생성 (API 키 불필요)
-    category_prompt = ILLUSTRATION_PROMPTS.get(category, ILLUSTRATION_PROMPTS["번역감정"])
-    ai_img = _generate_ai_cartoon_image(f"{category_prompt}{ILLUSTRATION_SUFFIX}", THUMB_SIZE, seed)
-
-    credit = None
-    if ai_img is not None:
-        img = ai_img.convert("RGBA")
-    else:
-        # 2차 폴백: Pexels 무료 스톡사진 (API 키가 설정된 경우만)
-        fallback_query = STOCK_SEARCH_TERMS.get(category, STOCK_SEARCH_TERMS["번역감정"])
-        photo, credit = _fetch_stock_photo(image_keywords, fallback_query, THUMB_SIZE, seed)
-        if photo is not None:
-            img = photo.convert("RGBA")
-        else:
-            # 최종 폴백: 그라데이션 배경 (파이프라인 중단 방지용)
-            img = _make_gradient_background(THUMB_SIZE, theme["gradient"]).convert("RGBA")
+    img = _make_random_gradient_background(THUMB_SIZE, theme["gradient"], seed=seed).convert("RGBA")
 
     draw = ImageDraw.Draw(img)
     accent_rgb = _hex_to_rgb(theme["accent"])
     w, h = THUMB_SIZE
 
-    # [NEW] 시그니처 텍스처: 배우는 한글 표현을 썸네일의 메인 비주얼로 크게 노출
-    # 하단부에 브랜드 그라데이션 스크림 + 카테고리 색 텍스처 라인을 깔고, 그 위에 표현을 큰 글씨로 얹는다.
+    # 시그니처 텍스처: 카테고리 accent 색 사선 줄무늬를 배경 전체에 은은하게 (마킹 요소)
+    texture = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    tex_draw = ImageDraw.Draw(texture)
+    stripe_gap = 52
+    for x in range(-h, w, stripe_gap):
+        tex_draw.line([(x, h), (x + h, 0)], fill=accent_rgb + (22,), width=6)
+    img.alpha_composite(texture)
+    draw = ImageDraw.Draw(img)
+
     expression = (expression or "").strip()
     if expression and len(expression) <= 20:
-        scrim_h = int(h * 0.42)
-        scrim = Image.new("RGBA", (w, scrim_h), (0, 0, 0, 0))
-        scrim_draw = ImageDraw.Draw(scrim)
-        for y in range(scrim_h):
-            alpha = int(200 * (y / scrim_h) ** 1.4)
-            scrim_draw.line([(0, y), (w, y)], fill=(10, 10, 14, alpha))
-        img.alpha_composite(scrim, (0, h - scrim_h))
-        draw = ImageDraw.Draw(img)
-
-        # 시그니처 텍스처: 카테고리 accent 색 사선 줄무늬를 스크림 위에 은은하게
-        texture = Image.new("RGBA", (w, scrim_h), (0, 0, 0, 0))
-        tex_draw = ImageDraw.Draw(texture)
-        stripe_gap = 46
-        for x in range(-scrim_h, w, stripe_gap):
-            tex_draw.line([(x, scrim_h), (x + scrim_h, 0)], fill=accent_rgb + (28,), width=6)
-        img.alpha_composite(texture, (0, h - scrim_h))
-        draw = ImageDraw.Draw(img)
-
         # 카테고리 accent 포인트 바 (표현 텍스트 위 짧은 밑줄 장식)
-        bar_y = h - scrim_h + 26
+        bar_y = h // 2 - 74
         draw.rounded_rectangle([w // 2 - 34, bar_y, w // 2 + 34, bar_y + 6], radius=3, fill=accent_rgb + (255,))
 
-        expr_font_size = 96 if len(expression) <= 6 else (72 if len(expression) <= 10 else 54)
+        expr_font_size = 128 if len(expression) <= 6 else (96 if len(expression) <= 10 else 68)
         expr_font = _load_font(expr_font_size)
-        max_text_w = w - 80
+        max_text_w = w - 100
         lines = _wrap_by_pixel_width(draw, expression, expr_font, max_text_w)[:2]
-        line_h = expr_font_size + 12
+        line_h = expr_font_size + 16
         total_h = line_h * len(lines)
-        ty = h - (scrim_h - 26) // 2 - total_h // 2 + 14
+        ty = h // 2 - total_h // 2 + 20
+
         # [NEW] 퍼스널컬러: 표현 텍스트를 흰색 고정이 아니라, 카테고리(감정)의 accent 색을 바탕으로
         # 채움은 accent+화이트를 섞은 밝은 톤, 외곽선은 accent+블랙을 섞은 짙은 톤으로 배색해
         # 감정마다 다른 톤앤매너의 시그니처 텍스처가 되도록 한다.
-        text_fill = _blend_rgb((255, 255, 255), accent_rgb, 0.30) + (255,)
-        text_stroke = _blend_rgb(accent_rgb, (0, 0, 0), 0.55) + (235,)
+        text_fill = _blend_rgb((255, 255, 255), accent_rgb, 0.22) + (255,)
+        text_stroke = _blend_rgb(accent_rgb, (0, 0, 0), 0.55) + (240,)
         for line in lines:
             lb = draw.textbbox((0, 0), line, font=expr_font)
             tw = lb[2] - lb[0]
             tx = (w - tw) / 2 - lb[0]
             draw.text((tx, ty - lb[1]), line, font=expr_font, fill=text_fill,
-                       stroke_width=4, stroke_fill=text_stroke)
+                       stroke_width=5, stroke_fill=text_stroke)
             ty += line_h
 
     # 카테고리 배지 (브랜드 일관성 유지용 작은 라벨)
@@ -1215,19 +1215,8 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
     bar_h = 18
     draw.rectangle([(0, THUMB_SIZE[1] - bar_h), (THUMB_SIZE[0], THUMB_SIZE[1])], fill=accent_rgb + (255,))
 
-    # 출처 표기 (무료 이미지를 실제로 가져온 경우에만) — 저작권 크레딧을 사진 위에 작게 각인
-    if credit:
-        credit_font = _load_font(20)
-        credit_text = f'Photo by {credit["name"]} on {credit["source"]}'
-        cb = draw.textbbox((0, 0), credit_text, font=credit_font)
-        cw, ch = cb[2] - cb[0], cb[3] - cb[1]
-        cx = THUMB_SIZE[0] - cw - 16
-        cy = THUMB_SIZE[1] - bar_h - ch - 14
-        draw.rectangle([cx - 8, cy - 4, cx + cw + 8, cy + ch + 8], fill=(0, 0, 0, 110))
-        draw.text((cx, cy - cb[1]), credit_text, font=credit_font, fill=(255, 255, 255, 235))
-
     img.convert("RGB").save(output_path, format="WEBP", quality=85, method=6)
-    return credit
+    return None
 
 BRAND_GRADIENT = [(15, 23, 42), (30, 41, 59), (51, 65, 85)]
 BRAND_ACCENT = (250, 204, 21)
@@ -1491,18 +1480,40 @@ def enhance_tables(html_body: str, accent: str) -> str:
 
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
-def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
-    """말풍선 아이콘 클릭 시 배우는 한글 표현을 구글 번역 음성(정확한 발음)으로 들려주는 버튼"""
+def _hero_tts_marker_html(expression: str, theme: Dict[str, Any]) -> str:
+    """[NEW] '이미지 마킹 음성지원 버튼' — 히어로 썸네일 이미지 위 우하단에
+    원형 스피커 버튼을 오버레이로 얹어, 이미지 자체에서도 바로 발음을 들을 수 있게 한다."""
     expression = (expression or "").strip()
     if not expression or len(expression) > 20:
         return ""
     escaped = expression.replace("\\", "\\\\").replace("'", "\\'")
     accent = theme["accent"]
     return (
-        '<div class="notranslate" translate="no" style="margin:2px 0 16px;">'
+        f'<button type="button" onclick="event.preventDefault();playKoreanTTS(\'{escaped}\')" '
+        f'aria-label="발음 듣기 (Google 번역)" class="notranslate" translate="no" '
+        f'style="position:absolute;right:14px;bottom:14px;width:46px;height:46px;border-radius:50%;'
+        f'background:{accent};border:2.5px solid #fff;color:#fff;font-size:1.25em;cursor:pointer;'
+        f'box-shadow:0 3px 10px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;">🔊</button>'
+    )
+
+def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
+    """말풍선 아이콘 클릭 시 배우는 한글 표현을 구글 번역 음성(정확한 발음)으로 들려주는 버튼.
+    [FIX] 기기/폰트에 따라 💬 이모지가 깨져 보이는 문제가 있어, 어디서나 또렷하게 표시되는
+    스피커 아이콘(🔊)으로 교체하고 원형 배지로 더 눈에 띄게 "마킹"했다."""
+    expression = (expression or "").strip()
+    if not expression or len(expression) > 20:
+        return ""
+    escaped = expression.replace("\\", "\\\\").replace("'", "\\'")
+    accent = theme["accent"]
+    return (
+        '<div class="notranslate" translate="no" style="margin:4px 0 18px;">'
         f'<button type="button" onclick="playKoreanTTS(\'{escaped}\')" aria-label="발음 듣기 (Google 번역)" '
-        f'style="background:#fff;border:1.5px solid {accent};color:{accent};border-radius:20px;padding:6px 14px;'
-        'font-size:0.85em;font-weight:700;cursor:pointer;">💬 발음 듣기 (Google 번역)</button>'
+        f'style="display:inline-flex;align-items:center;gap:8px;background:{accent};border:none;color:#fff;'
+        f'border-radius:24px;padding:9px 18px 9px 12px;font-size:0.9em;font-weight:700;cursor:pointer;'
+        f'box-shadow:0 2px 8px rgba(0,0,0,0.18);">'
+        f'<span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;'
+        f'border-radius:50%;background:rgba(255,255,255,0.25);font-size:1em;">🔊</span>'
+        f'발음 듣기 (Google 번역)</button>'
         '</div>'
     )
 
@@ -1636,6 +1647,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     json_ld = build_json_ld(article, post_url, thumb_url, today)
     
     html = POST_TEMPLATE.format(
+        hero_tts_html=_hero_tts_marker_html(article.get("expression", ""), theme),
         title=title,
         meta_description=article.get("meta_description", ""),
         date=today,
@@ -1855,7 +1867,10 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
         content_html = (
             f'{_translate_widget()}'
-            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;" alt="{article["title"]}">'
+            f'<div style="position:relative;margin:0;">'
+            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{article["title"]}">'
+            f'{_hero_tts_marker_html(article.get("expression", ""), theme)}'
+            f'</div>'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
             f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
         )
