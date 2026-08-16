@@ -21,10 +21,19 @@ on:
 permissions:
   contents: write
 
+# [FIX] 동시 실행 방지: git push까지 하는 파이프라인이라 이전 실행이 끝나기 전에
+# 새 실행이 겹치면 docs/keywords_queue.json 커밋이 충돌할 수 있음. 저장소별로
+# 그룹을 분리해(${{ github.repository }}) 다른 저장소의 파이프라인과는 서로 영향 없음.
+concurrency:
+  group: auto-blog-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # [FIX] 10분 제한에 실제로 걸려 실패한 사례 확인됨 (Gemini 생성+이미지+발행+push 합산 시
+    # 10분을 넘을 수 있음). 여유를 두어 20분으로 상향.
+    timeout-minutes: 20
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
