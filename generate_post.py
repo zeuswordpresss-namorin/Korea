@@ -65,6 +65,18 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 
+# --- [NEW] Canva 무료 플랜 연동 방식 ---
+# Canva의 Autofill API(템플릿 자동 채우기)는 Canva Teams(유료) 전용 기능이라 무료 플랜에서는
+# 쓸 수 없다. 대신 "배경 디자인은 Canva에서 직접 만들어 내보내고, 표현 텍스트만 코드로 자동으로
+# 얹는" 방식을 쓴다. API 키/인증이 전혀 필요 없다.
+# 준비물: 카테고리별로 Canva에서 1280x720 배경을 디자인한 뒤 PNG로 내보내(다운로드) 아래 폴더에
+# 정확히 이 파일명으로 넣어두면 된다. 없으면 기존 방식(랜덤 그라데이션)으로 자동 대체된다.
+#   canva_backgrounds/번역감정.png
+#   canva_backgrounds/일상표현.png
+#   canva_backgrounds/한국문화.png
+#   canva_backgrounds/리액션.png
+CANVA_BG_DIR = os.environ.get("CANVA_BG_DIR", "canva_backgrounds")
+
 # --- [NEW] 워드프레스 동시 자동 발행 관련 환경변수 ---
 # [FIX] *.wordpress.com 호스팅 블로그(예: kresonate.wordpress.com)는 자체 호스팅 워드프레스와
 # 완전히 다른 API(public-api.wordpress.com)를 쓰고, Basic Auth(Application Password)가 아니라
@@ -1154,27 +1166,55 @@ def _wrap_by_pixel_width(draw, text: str, font, max_width: int) -> List[str]:
     if current: lines.append(current)
     return lines
 
+# =====================================================================
+# [NEW] Canva 배경 이미지 로더 (무료 플랜 호환 — API 인증 불필요)
+# =====================================================================
+def _load_canva_background(category: str) -> Optional[Image.Image]:
+    """canva_backgrounds/{category}.png (또는 .jpg/.webp)가 있으면 불러와 THUMB_SIZE로 맞춘다.
+    없으면 None을 반환해 기존 랜덤 그라데이션 생성으로 자연스럽게 대체된다."""
+    for ext in (".png", ".jpg", ".jpeg", ".webp"):
+        path = os.path.join(CANVA_BG_DIR, f"{category}{ext}")
+        if os.path.exists(path):
+            try:
+                img = Image.open(path).convert("RGB")
+                if img.size != THUMB_SIZE:
+                    img = img.resize(THUMB_SIZE)
+                logger.info(f"[Canva 배경] {path} 사용")
+                return img
+            except Exception as e:
+                logger.warning(f"[Canva 배경] {path} 로드 실패: {e}")
+    return None
+
 def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "번역감정", image_keywords: str = "", expression: str = "") -> Optional[Dict[str, str]]:
-    # [전면 개편] 요청: 썸네일은 "오늘의 표현" 한글 텍스트만 메인으로, AI 캐릭터/스톡사진 없이
-    # 카테고리(감정) 컬러의 랜덤 배경 위에 크게 얹는다. 매번 그라데이션 방향이 무작위라 같은
-    # 카테고리라도 매번 다른 느낌이 난다. (외부 이미지 API 의존 제거로 실패/차단 위험도 사라짐)
-    seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
-    img = _make_random_gradient_background(THUMB_SIZE, theme["gradient"], seed=seed).convert("RGBA")
+    expression_clean = (expression or "").strip()
+    _generate_thumbnail_local(title, output_path, theme, expression_clean, category)
+    return None
+
+def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any], expression: str, category: str = "번역감정") -> None:
+    # [개편] Canva로 직접 디자인해 내보낸 배경(canva_backgrounds/{category}.png)이 있으면 그걸 쓰고,
+    # 없으면 기존 랜덤 그라데이션 배경으로 자동 대체한다. 표현 텍스트/배지/포인트 바는 항상 코드로 얹는다.
+    canva_bg = _load_canva_background(category)
+    used_canva = canva_bg is not None
+    if used_canva:
+        img = canva_bg.convert("RGBA")
+    else:
+        seed = int(hashlib.md5(title.encode("utf-8")).hexdigest(), 16) % 100000
+        img = _make_random_gradient_background(THUMB_SIZE, theme["gradient"], seed=seed).convert("RGBA")
 
     draw = ImageDraw.Draw(img)
     accent_rgb = _hex_to_rgb(theme["accent"])
     w, h = THUMB_SIZE
 
-    # 시그니처 텍스처: 카테고리 accent 색 사선 줄무늬를 배경 전체에 은은하게 (마킹 요소)
-    texture = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    tex_draw = ImageDraw.Draw(texture)
-    stripe_gap = 52
-    for x in range(-h, w, stripe_gap):
-        tex_draw.line([(x, h), (x + h, 0)], fill=accent_rgb + (22,), width=6)
-    img.alpha_composite(texture)
-    draw = ImageDraw.Draw(img)
+    if not used_canva:
+        # 시그니처 텍스처: 카테고리 accent 색 사선 줄무늬를 배경 전체에 은은하게 (Canva 배경이 없을 때만)
+        texture = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        tex_draw = ImageDraw.Draw(texture)
+        stripe_gap = 52
+        for x in range(-h, w, stripe_gap):
+            tex_draw.line([(x, h), (x + h, 0)], fill=accent_rgb + (22,), width=6)
+        img.alpha_composite(texture)
+        draw = ImageDraw.Draw(img)
 
-    expression = (expression or "").strip()
     if expression and len(expression) <= 20:
         # 카테고리 accent 포인트 바 (표현 텍스트 위 짧은 밑줄 장식)
         bar_y = h // 2 - 74
@@ -1216,7 +1256,6 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
     draw.rectangle([(0, THUMB_SIZE[1] - bar_h), (THUMB_SIZE[0], THUMB_SIZE[1])], fill=accent_rgb + (255,))
 
     img.convert("RGB").save(output_path, format="WEBP", quality=85, method=6)
-    return None
 
 BRAND_GRADIENT = [(15, 23, 42), (30, 41, 59), (51, 65, 85)]
 BRAND_ACCENT = (250, 204, 21)
