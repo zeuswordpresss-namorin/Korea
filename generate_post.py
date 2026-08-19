@@ -123,7 +123,7 @@ SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방
 5. 여러분의 언어에서는 어떤가요? — 반드시 참여형 질문 1~2개로 마무리해 댓글을 유도한다 (예: "여러분의 언어에도 이런 단어가 있나요?", "비슷한 감정을 뭐라고 표현하시나요?")
 
 아래 규칙을 지켜 작성하세요:
-1. 제목은 영어 검색 키워드형으로 작성한다. (예: "Why '정(Jeong)' Has No English Equivalent", "The Real Meaning of '눈치' (Nunchi)", "Why Koreans Say '수고했어요' So Often") 표현의 한국어 원문을 반드시 제목에 괄호나 따옴표로 포함시키고, 25~55자 내외로 작성한다.
+1. 제목은 영어 검색 키워드형으로 작성한다. (예: "Why "정(Jeong)" Has No English Equivalent", "The Real Meaning of "눈치" (Nunchi)", "Why Koreans Say "수고했어요" So Often") 표현의 한국어 원문을 반드시 제목에 쌍따옴표(" ")로 감싸 포함시키고, 25~55자 내외로 작성한다.
 1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 표현을 앞부분에 배치하고, "이 표현의 뜻과 왜 번역이 안 되는지를 알 수 있다"는 점이 드러나게 100~140자 내외로 작성한다.
 2. 소제목(H2)은 정확히 위 5단 구조(오늘의 표현 / 왜 영어로 직역이 안 될까? / 한국인은 어떤 상황에서 쓸까? / 문화 이야기 / 여러분의 언어에서는 어떤가요?)를 그대로 사용한다. 순서와 문구를 임의로 바꾸지 않는다.
 3. [문체/가독성 — 매우 중요] 다음 AI 특유의 어색한 말투를 피한다:
@@ -679,7 +679,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 {decor_html}
 <div class="content">
 <a class="back" href="../index.html">← 목록으로</a>
-<div class="hero"><img src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high">{hero_tts_html}</div>
+<div class="hero"><img src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high"></div>
 <span class="badge">{badge}</span>
 <h1>{title}</h1>
 <p class="meta">{date}</p>
@@ -1216,17 +1216,13 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
         draw = ImageDraw.Draw(img)
 
     if expression and len(expression) <= 20:
-        # 카테고리 accent 포인트 바 (표현 텍스트 위 짧은 밑줄 장식)
-        bar_y = h // 2 - 74
-        draw.rounded_rectangle([w // 2 - 34, bar_y, w // 2 + 34, bar_y + 6], radius=3, fill=accent_rgb + (255,))
-
         expr_font_size = 128 if len(expression) <= 6 else (96 if len(expression) <= 10 else 68)
         expr_font = _load_font(expr_font_size)
         max_text_w = w - 100
         lines = _wrap_by_pixel_width(draw, expression, expr_font, max_text_w)[:2]
         line_h = expr_font_size + 16
         total_h = line_h * len(lines)
-        ty = h // 2 - total_h // 2 + 20
+        ty = h // 2 - total_h // 2
 
         # [NEW] 퍼스널컬러: 표현 텍스트를 흰색 고정이 아니라, 카테고리(감정)의 accent 색을 바탕으로
         # 채움은 accent+화이트를 섞은 밝은 톤, 외곽선은 accent+블랙을 섞은 짙은 톤으로 배색해
@@ -1519,22 +1515,6 @@ def enhance_tables(html_body: str, accent: str) -> str:
 
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
-def _hero_tts_marker_html(expression: str, theme: Dict[str, Any]) -> str:
-    """[NEW] '이미지 마킹 음성지원 버튼' — 히어로 썸네일 이미지 위 우하단에
-    원형 스피커 버튼을 오버레이로 얹어, 이미지 자체에서도 바로 발음을 들을 수 있게 한다."""
-    expression = (expression or "").strip()
-    if not expression or len(expression) > 20:
-        return ""
-    escaped = expression.replace("\\", "\\\\").replace("'", "\\'")
-    accent = theme["accent"]
-    return (
-        f'<button type="button" onclick="event.preventDefault();playKoreanTTS(\'{escaped}\')" '
-        f'aria-label="발음 듣기 (Google 번역)" class="notranslate" translate="no" '
-        f'style="position:absolute;right:14px;bottom:14px;width:46px;height:46px;border-radius:50%;'
-        f'background:{accent};border:2.5px solid #fff;color:#fff;font-size:1.25em;cursor:pointer;'
-        f'box-shadow:0 3px 10px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;">🔊</button>'
-    )
-
 def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
     """말풍선 아이콘 클릭 시 배우는 한글 표현을 구글 번역 음성(정확한 발음)으로 들려주는 버튼.
     [FIX] 기기/폰트에 따라 💬 이모지가 깨져 보이는 문제가 있어, 어디서나 또렷하게 표시되는
@@ -1686,7 +1666,6 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     json_ld = build_json_ld(article, post_url, thumb_url, today)
     
     html = POST_TEMPLATE.format(
-        hero_tts_html=_hero_tts_marker_html(article.get("expression", ""), theme),
         title=title,
         meta_description=article.get("meta_description", ""),
         date=today,
@@ -1906,10 +1885,7 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
         content_html = (
             f'{_translate_widget()}'
-            f'<div style="position:relative;margin:0;">'
             f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{article["title"]}">'
-            f'{_hero_tts_marker_html(article.get("expression", ""), theme)}'
-            f'</div>'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
             f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
         )
