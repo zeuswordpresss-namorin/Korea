@@ -56,6 +56,13 @@
       "blogPost": [
         {
           "@type": "BlogPosting",
+          "headline": "What '그니까' Really Means: Beyond Just 'So' in Korean",
+          "url": "https://zeuswordpresss-namorin.github.io/Korea/posts/그니까-2026-08-23.html",
+          "datePublished": "2026-08-23",
+          "image": "https://zeuswordpresss-namorin.github.io/Korea/thumbs/그니까-2026-08-23.webp"
+        },
+        {
+          "@type": "BlogPosting",
           "headline": "Why Koreans Say \"죄송한데요\" for More Than Just Apologies",
           "url": "https://zeuswordpresss-namorin.github.io/Korea/posts/죄송한데요-2026-08-23.html",
           "datePublished": "2026-08-23",
@@ -116,13 +123,6 @@
           "url": "https://zeuswordpresss-namorin.github.io/Korea/posts/인정-2026-08-20.html",
           "datePublished": "2026-08-20",
           "image": "https://zeuswordpresss-namorin.github.io/Korea/thumbs/인정-2026-08-20.webp"
-        },
-        {
-          "@type": "BlogPosting",
-          "headline": "Understanding '서열 문화': Decoding Korean Hierarchy and Respect",
-          "url": "https://zeuswordpresss-namorin.github.io/Korea/posts/서열-문화-2026-08-19.html",
-          "datePublished": "2026-08-19",
-          "image": "https://zeuswordpresss-namorin.github.io/Korea/thumbs/서열-문화-2026-08-19.webp"
         }
       ]
     }
@@ -234,29 +234,34 @@ function googleTranslateElementInit() {
 <script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
 <script>
 function playKoreanTTS(text) {
+  // [FIX] 구글 번역의 비공식 음성 엔드포인트(translate_tts)가 최근 더 자주 요청을 차단(403)해
+  // "발음 듣기" 버튼이 조용히 실패하는 문제가 있었습니다. 네트워크 호출 없이 브라우저에 내장된
+  // 음성 합성 기능만 사용하도록 단순화해 차단/네트워크 오류 걱정 없이 항상 동작하게 했습니다.
   try {
-    var audio = new Audio('https://translate.google.com/translate_tts?ie=UTF-8&q=' + encodeURIComponent(text) + '&tl=ko&client=tw-ob');
-    var played = audio.play();
-    if (played && played.catch) {
-      played.catch(function(err) {
-        console.warn('[TTS] 구글 번역 음성 재생 실패, 브라우저 음성으로 대체합니다:', err);
-        _fallbackKoreanTTS(text);
-      });
+    if (!('speechSynthesis' in window)) {
+      alert('이 브라우저는 음성 재생을 지원하지 않습니다.');
+      return;
     }
-  } catch(e) {
-    console.warn('[TTS] 구글 번역 음성 호출 실패, 브라우저 음성으로 대체합니다:', e);
-    _fallbackKoreanTTS(text);
-  }
-}
-function _fallbackKoreanTTS(text) {
-  try {
-    if (!('speechSynthesis' in window)) { alert('이 브라우저는 음성 재생을 지원하지 않습니다.'); return; }
     window.speechSynthesis.cancel();
     var utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'ko-KR';
     utter.rate = 0.85;
+    utter.onerror = function(e) { console.error('[TTS 오류]', e); };
     window.speechSynthesis.speak(utter);
-  } catch(e) { console.error('[TTS 폴백 오류]', e); }
+  } catch(e) {
+    console.error('[TTS 오류]', e);
+    alert('발음 재생 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
+  }
+}
+// [FIX] git push 직후 GitHub Pages(CDN) 배포가 아직 반영되기 전에 Blogger/워드프레스가
+// 썸네일을 먼저 요청하면 일시적으로 깨져 보일 수 있음. 실패 시 몇 초 간격으로 자동 재시도.
+function _retryHeroImage(img) {
+  var tries = parseInt(img.getAttribute('data-retry') || '0', 10);
+  if (tries >= 6) return;
+  img.setAttribute('data-retry', tries + 1);
+  setTimeout(function() {
+    img.src = img.src.split('?')[0] + '?retry=' + (tries + 1) + '&t=' + Date.now();
+  }, 4000 * (tries + 1));
 }
 </script>
 <div class="masthead">
@@ -276,15 +281,16 @@ function _fallbackKoreanTTS(text) {
     <div class="pillar"><span class="pillar-emoji">😲</span><span class="pillar-title">Everyday Reactions</span><span class="pillar-sub">리액션으로 배우는 뉘앙스</span></div>
   </div>
   <div class="pill-row" id="categoryFilter"><button type="button" class="pill active" data-filter="all" style="background:#333;">🌐 All</button><button type="button" class="pill" data-filter="번역감정" style="background:#e95c84">💗 번역이 안 되는 감정 · EMOTION</button><button type="button" class="pill" data-filter="일상표현" style="background:#2e86ab">💬 매일 쓰는 말 · PHRASE</button><button type="button" class="pill" data-filter="한국문화" style="background:#96281b">🇰🇷 한국 문화 · CULTURE</button><button type="button" class="pill" data-filter="리액션" style="background:#ff9a3c">😲 한국인의 리액션 · REACTION</button></div>
-  
+  <a class="lead-magnet" href="downloads/korean-expressions-guide.pdf" download><span class="lead-magnet-emoji">📘</span><span><span class="lead-magnet-title">무료 PDF: 한국인이 매일 쓰는 표현 모음</span><div class="lead-magnet-sub">Free PDF guide of real Korean expressions</div></span><span class="lead-magnet-cta">다운로드</span></a>
   
 </div>
 
 <div class="content-wrap">
-<div class="tier-label">🔥 최신 이야기</div><a class="hero" data-category="일상표현" href="posts/죄송한데요-2026-08-23.html"><img src="thumbs/죄송한데요-2026-08-23.webp" alt="Why Koreans Say "죄송한데요" for More Than Just Apologies" loading="eager" fetchpriority="high"><div class="hero-body"><span class="hero-badge" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="hero-title">Why Koreans Say "죄송한데요" for More Than Just Apologies</div><div class="date">2026-08-23</div></div></a>
-<div class="tier-label">📖 다음 이야기</div><div class="mid-grid"><a class="mid-card" data-category="일상표현" href="posts/신세-많이-졌습니다-2026-08-22.html"><img src="thumbs/신세-많이-졌습니다-2026-08-22.webp" alt="Why "신세 많이 졌습니다" Is More Than Just 'Thank You' in Korean" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="mid-title">Why "신세 많이 졌습니다" Is More Than Just 'Thank You' in Korean</div><div class="date">2026-08-22</div></div></a>
-<a class="mid-card" data-category="일상표현" href="posts/바쁘시죠-2026-08-22.html"><img src="thumbs/바쁘시죠-2026-08-22.webp" alt="Why Koreans Ask "바쁘시죠?" (Bappeusijyo) So Often" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="mid-title">Why Koreans Ask "바쁘시죠?" (Bappeusijyo) So Often</div><div class="date">2026-08-22</div></div></a></div>
-<div class="tier-label">🗂️ 지난 글 모아보기</div><div class="bottom-grid"><a class="bottom-card" data-category="번역감정" href="posts/억울하다-2026-08-21.html"><img src="thumbs/억울하다-2026-08-21.webp" alt="Why Koreans Feel "억울하다" (Eogulhada) So Deeply" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#e95c84">💗 번역이 안 되는 감정</span><div class="bottom-title">Why Koreans Feel "억울하다" (Eogulhada) So Deeply</div></div></a>
+<div class="tier-label">🔥 최신 이야기</div><a class="hero" data-category="일상표현" href="posts/그니까-2026-08-23.html"><img src="thumbs/그니까-2026-08-23.webp" alt="What '그니까' Really Means: Beyond Just 'So' in Korean" loading="eager" fetchpriority="high"><div class="hero-body"><span class="hero-badge" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="hero-title">What '그니까' Really Means: Beyond Just 'So' in Korean</div><div class="date">2026-08-23</div></div></a>
+<div class="tier-label">📖 다음 이야기</div><div class="mid-grid"><a class="mid-card" data-category="일상표현" href="posts/죄송한데요-2026-08-23.html"><img src="thumbs/죄송한데요-2026-08-23.webp" alt="Why Koreans Say "죄송한데요" for More Than Just Apologies" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="mid-title">Why Koreans Say "죄송한데요" for More Than Just Apologies</div><div class="date">2026-08-23</div></div></a>
+<a class="mid-card" data-category="일상표현" href="posts/신세-많이-졌습니다-2026-08-22.html"><img src="thumbs/신세-많이-졌습니다-2026-08-22.webp" alt="Why "신세 많이 졌습니다" Is More Than Just 'Thank You' in Korean" loading="lazy"><div class="mid-body"><span class="badge-sm" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="mid-title">Why "신세 많이 졌습니다" Is More Than Just 'Thank You' in Korean</div><div class="date">2026-08-22</div></div></a></div>
+<div class="tier-label">🗂️ 지난 글 모아보기</div><div class="bottom-grid"><a class="bottom-card" data-category="일상표현" href="posts/바쁘시죠-2026-08-22.html"><img src="thumbs/바쁘시죠-2026-08-22.webp" alt="Why Koreans Ask "바쁘시죠?" (Bappeusijyo) So Often" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="bottom-title">Why Koreans Ask "바쁘시죠?" (Bappeusijyo) So Often</div></div></a>
+<a class="bottom-card" data-category="번역감정" href="posts/억울하다-2026-08-21.html"><img src="thumbs/억울하다-2026-08-21.webp" alt="Why Koreans Feel "억울하다" (Eogulhada) So Deeply" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#e95c84">💗 번역이 안 되는 감정</span><div class="bottom-title">Why Koreans Feel "억울하다" (Eogulhada) So Deeply</div></div></a>
 <a class="bottom-card" data-category="일상표현" href="posts/마음이-놓이다-2026-08-21.html"><img src="thumbs/마음이-놓이다-2026-08-21.webp" alt="Understanding '마음이 놓이다': More Than Just Feeling Relieved in Korean" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="bottom-title">Understanding '마음이 놓이다': More Than Just Feeling Relieved in Korean</div></div></a>
 <a class="bottom-card" data-category="일상표현" href="posts/진짜-2026-08-20.html"><img src="thumbs/진짜-2026-08-20.webp" alt="What Does "진짜?" Mean in Korean? More Than Just 'Really?'" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#2e86ab">💬 매일 쓰는 말</span><div class="bottom-title">What Does "진짜?" Mean in Korean? More Than Just 'Really?'</div></div></a>
 <a class="bottom-card" data-category="번역감정" href="posts/웃프다-2026-08-20.html"><img src="thumbs/웃프다-2026-08-20.webp" alt="The Uniquely Korean Emotion: Why Koreans Say "웃프다" (Funny-Sad)" loading="lazy"><div class="bottom-body"><span class="badge-sm" style="background:#e95c84">💗 번역이 안 되는 감정</span><div class="bottom-title">The Uniquely Korean Emotion: Why Koreans Say "웃프다" (Funny-Sad)</div></div></a>
