@@ -62,7 +62,7 @@ jobs:
           fi
 
       - name: 필요 패키지 설치
-        run: pip install requests pillow
+        run: pip install requests pillow reportlab
 
       - name: 블로그 발행 실행 (써치 및 트래픽 필터 자동 연동)
         env:
