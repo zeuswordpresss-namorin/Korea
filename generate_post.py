@@ -495,29 +495,34 @@ function googleTranslateElementInit() {
     parts.append("""
 <script>
 function playKoreanTTS(text) {
+  // [FIX] 구글 번역의 비공식 음성 엔드포인트(translate_tts)가 최근 더 자주 요청을 차단(403)해
+  // "발음 듣기" 버튼이 조용히 실패하는 문제가 있었습니다. 네트워크 호출 없이 브라우저에 내장된
+  // 음성 합성 기능만 사용하도록 단순화해 차단/네트워크 오류 걱정 없이 항상 동작하게 했습니다.
   try {
-    var audio = new Audio('https://translate.google.com/translate_tts?ie=UTF-8&q=' + encodeURIComponent(text) + '&tl=ko&client=tw-ob');
-    var played = audio.play();
-    if (played && played.catch) {
-      played.catch(function(err) {
-        console.warn('[TTS] 구글 번역 음성 재생 실패, 브라우저 음성으로 대체합니다:', err);
-        _fallbackKoreanTTS(text);
-      });
+    if (!('speechSynthesis' in window)) {
+      alert('이 브라우저는 음성 재생을 지원하지 않습니다.');
+      return;
     }
-  } catch(e) {
-    console.warn('[TTS] 구글 번역 음성 호출 실패, 브라우저 음성으로 대체합니다:', e);
-    _fallbackKoreanTTS(text);
-  }
-}
-function _fallbackKoreanTTS(text) {
-  try {
-    if (!('speechSynthesis' in window)) { alert('이 브라우저는 음성 재생을 지원하지 않습니다.'); return; }
     window.speechSynthesis.cancel();
     var utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'ko-KR';
     utter.rate = 0.85;
+    utter.onerror = function(e) { console.error('[TTS 오류]', e); };
     window.speechSynthesis.speak(utter);
-  } catch(e) { console.error('[TTS 폴백 오류]', e); }
+  } catch(e) {
+    console.error('[TTS 오류]', e);
+    alert('발음 재생 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
+  }
+}
+// [FIX] git push 직후 GitHub Pages(CDN) 배포가 아직 반영되기 전에 Blogger/워드프레스가
+// 썸네일을 먼저 요청하면 일시적으로 깨져 보일 수 있음. 실패 시 몇 초 간격으로 자동 재시도.
+function _retryHeroImage(img) {
+  var tries = parseInt(img.getAttribute('data-retry') || '0', 10);
+  if (tries >= 6) return;
+  img.setAttribute('data-retry', tries + 1);
+  setTimeout(function() {
+    img.src = img.src.split('?')[0] + '?retry=' + (tries + 1) + '&t=' + Date.now();
+  }, 4000 * (tries + 1));
 }
 </script>""")
     return "".join(parts)
@@ -695,7 +700,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 {decor_html}
 <div class="content">
 <a class="back" href="../index.html">← 목록으로</a>
-<div class="hero"><img src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high"></div>
+<div class="hero"><img id="heroThumb" src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high" onerror="_retryHeroImage(this)"></div>
 <span class="badge">{badge}</span>
 <h1>{title}</h1>
 <p class="meta">{date}</p>
@@ -1578,7 +1583,7 @@ def enhance_tables(html_body: str, accent: str) -> str:
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
 def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
-    """말풍선 아이콘 클릭 시 배우는 한글 표현을 구글 번역 음성(정확한 발음)으로 들려주는 버튼.
+    """말풍선 아이콘 클릭 시 배우는 한글 표현을 브라우저 내장 음성(Web Speech API)으로 들려주는 버튼.
     [FIX] 기기/폰트에 따라 💬 이모지가 깨져 보이는 문제가 있어, 어디서나 또렷하게 표시되는
     스피커 아이콘(🔊)으로 교체하고 원형 배지로 더 눈에 띄게 "마킹"했다."""
     expression = (expression or "").strip()
@@ -1588,13 +1593,13 @@ def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
     accent = theme["accent"]
     return (
         '<div class="notranslate" translate="no" style="margin:4px 0 18px;">'
-        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\')" aria-label="발음 듣기 (Google 번역)" '
+        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\')" aria-label="발음 듣기" '
         f'style="display:inline-flex;align-items:center;gap:8px;background:{accent};border:none;color:#fff;'
         f'border-radius:24px;padding:9px 18px 9px 12px;font-size:0.9em;font-weight:700;cursor:pointer;'
         f'box-shadow:0 2px 8px rgba(0,0,0,0.18);">'
         f'<span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;'
         f'border-radius:50%;background:rgba(255,255,255,0.25);font-size:1em;">🔊</span>'
-        f'발음 듣기 (Google 번역)</button>'
+        f'발음 듣기</button>'
         '</div>'
     )
 
@@ -2114,7 +2119,7 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
         content_html = (
             f'{_translate_widget()}'
-            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{article["title"]}">'
+            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{article["title"]}" onerror="_retryHeroImage(this)">'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
             f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
         )
