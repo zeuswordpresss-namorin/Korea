@@ -29,6 +29,15 @@ from typing import Optional, List, Dict, Any, Tuple
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as pdf_canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    _REPORTLAB_AVAILABLE = True
+except ImportError:
+    _REPORTLAB_AVAILABLE = False
+
 # =====================================================================
 # 로깅 설정
 # =====================================================================
@@ -50,6 +59,13 @@ QUEUE_FILE = "keywords_queue.json"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 SITE_TITLE = os.environ.get("SITE_TITLE", "오늘의 한국어")
 SITE_TAGLINE = os.environ.get("SITE_TAGLINE", "한국어를 배우면 한국인이 보인다 - 외국인을 위한 한국어 표현과 사고방식")
+# [NEW] 타깃(외국인 한국어 학습자)이 3초 안에 "누구를 위한 블로그인지" 파악하도록 영문 슬로건을 전면 배치
+ENGLISH_SLOGAN = os.environ.get("ENGLISH_SLOGAN", "Learn Korean, Understand Koreans: Language &amp; Cultural Insights")
+
+# --- [NEW] SNS 채널 (설정된 것만 홈페이지 하단에 아이콘으로 노출, 없으면 자동으로 숨김) ---
+SNS_PINTEREST_URL = os.environ.get("SNS_PINTEREST_URL", "")
+SNS_INSTAGRAM_URL = os.environ.get("SNS_INSTAGRAM_URL", "")
+SNS_X_URL = os.environ.get("SNS_X_URL", "")
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
 GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")
 GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")
@@ -740,8 +756,29 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   h1.site-title {{ font-family: 'Jua', sans-serif; font-size: clamp(1.2em, 4.5vw, 1.6em); margin:0; word-break: keep-all; }}
   .dash-link {{ margin-left:auto; font-size: clamp(0.7em, 2.5vw, 0.75em); color:#888; text-decoration:none; background:#eee; padding:6px 14px; border-radius:999px; }}
   .intro {{ color:#555; font-size:0.95em; margin: 4px 0 16px; line-height:1.6; word-break: keep-all; }}
-  .pill-row {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom: 10px; }}
-  .pill {{ font-size:0.78em; font-weight:700; color:#fff; padding:5px 13px; border-radius:999px; }}
+  /* [NEW] 영문 슬로건 — 3초 안에 "누구를 위한 블로그인지" 파악되도록 상단 전면 배치 */
+  .eng-slogan {{ font-size: clamp(0.82em, 3vw, 0.95em); color:#e95c84; font-weight:700; letter-spacing:0.01em; margin: 2px 0 10px; line-height:1.5; }}
+  /* [NEW] 콘텐츠 3대 축 소개 카드 */
+  .pillars {{ display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin: 4px 0 18px; }}
+  .pillar {{ background:#fafafa; border:1px solid #ececec; border-radius:14px; padding:12px 10px; text-align:center; }}
+  .pillar-emoji {{ font-size:1.5em; display:block; margin-bottom:4px; }}
+  .pillar-title {{ font-size:0.78em; font-weight:800; color:#333; word-break:keep-all; line-height:1.3; }}
+  .pillar-sub {{ font-size:0.68em; color:#999; margin-top:2px; word-break:keep-all; }}
+  @media (max-width:420px) {{ .pillars {{ grid-template-columns: 1fr; }} .pillar {{ display:flex; align-items:center; gap:10px; text-align:left; padding:10px 14px; }} .pillar-emoji {{ margin:0; }} }}
+  /* [NEW] 클릭 가능한 카테고리 필터 칩 (전체 포함) */
+  .pill-row {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom: 18px; }}
+  .pill {{ font-size:0.78em; font-weight:700; color:#fff; padding:6px 15px; border-radius:999px; border:none; cursor:pointer; opacity:0.55; transition:opacity .15s ease, transform .15s ease; font-family:inherit; }}
+  .pill.active {{ opacity:1; transform:scale(1.04); box-shadow:0 2px 8px rgba(0,0,0,0.18); }}
+  .pill:hover {{ opacity:0.85; }}
+  /* [NEW] 무료 PDF 리드마그넷 배너 */
+  .lead-magnet {{ display:flex; align-items:center; gap:14px; background:linear-gradient(135deg,#fff7ed,#fff1f2); border:1px solid #fde8e0; border-radius:16px; padding:16px 18px; margin: 22px 0 6px; text-decoration:none; }}
+  .lead-magnet-emoji {{ font-size:2em; flex-shrink:0; }}
+  .lead-magnet-title {{ font-weight:800; color:#1a1a1a; font-size:0.95em; word-break:keep-all; }}
+  .lead-magnet-sub {{ font-size:0.78em; color:#888; margin-top:2px; word-break:keep-all; }}
+  .lead-magnet-cta {{ margin-left:auto; flex-shrink:0; background:#e95c84; color:#fff; font-size:0.78em; font-weight:800; padding:8px 14px; border-radius:999px; white-space:nowrap; }}
+  /* [NEW] SNS 팔로우 아이콘 행 (설정된 경우에만 렌더링) */
+  .social-row {{ display:flex; gap:10px; margin: 14px 0 2px; }}
+  .social-row a {{ width:36px; height:36px; border-radius:50%; background:#f2f2f2; display:flex; align-items:center; justify-content:center; text-decoration:none; font-size:1.1em; }}
   .content-wrap {{ padding: 0 clamp(14px, 4vw, 20px); }}
   .tier-label {{ font-size: 0.85em; font-weight:900; color:#aaa; letter-spacing:2px; margin: 34px 0 12px; text-transform:uppercase; }}
   .tier-label:first-of-type {{ margin-top: 10px; }}
@@ -796,8 +833,16 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <h1 class="site-title">{site_title}</h1>
     <a class="dash-link" href="dashboard.html">📊 성과관리</a>
   </div>
+  <p class="eng-slogan">{eng_slogan}</p>
   <p class="intro">{site_tagline}</p>
-  <div class="pill-row">{category_pills}</div>
+  <div class="pillars">
+    <div class="pillar"><span class="pillar-emoji">💬</span><span class="pillar-title">Real Korean Phrases</span><span class="pillar-sub">실제 한국인이 쓰는 표현</span></div>
+    <div class="pillar"><span class="pillar-emoji">🇰🇷</span><span class="pillar-title">Cultural Nuances</span><span class="pillar-sub">표현 속 한국인의 정서</span></div>
+    <div class="pillar"><span class="pillar-emoji">😲</span><span class="pillar-title">Everyday Reactions</span><span class="pillar-sub">리액션으로 배우는 뉘앙스</span></div>
+  </div>
+  <div class="pill-row" id="categoryFilter">{category_pills}</div>
+  {lead_magnet_html}
+  {social_row_html}
 </div>
 
 <div class="content-wrap">
@@ -805,6 +850,23 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 {mid_html}
 {bottom_html}
 </div>
+<script>
+(function() {{
+  var pills = document.querySelectorAll('#categoryFilter .pill');
+  var cards = document.querySelectorAll('[data-category]');
+  pills.forEach(function(pill) {{
+    pill.addEventListener('click', function() {{
+      pills.forEach(function(p) {{ p.classList.remove('active'); }});
+      pill.classList.add('active');
+      var cat = pill.getAttribute('data-filter');
+      cards.forEach(function(card) {{
+        var show = (cat === 'all' || card.getAttribute('data-category') === cat);
+        card.style.display = show ? '' : 'none';
+      }});
+    }});
+  }});
+}})();
+</script>
 {footer_html}
 </body>
 </html>
@@ -1552,7 +1614,74 @@ def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     else: article["html_body"] = extra_html + article["html_body"]
     return article
 
-def _fetch_product_icon(product_name: str, seed: int, size=(160, 160)):
+# =====================================================================
+# [전면 개편] 5단 웹툰 방식 — 블로그 전체 스타일 구조 변경
+# 오늘의 표현/왜 직역이 안될까/한국인은 언제 쓸까/문화 이야기/참여형 질문, 5개 h2 섹션을
+# 각각 만화 컷(패널)처럼 감싼다. 인라인 스타일만 사용해 GitHub Pages·Blogger 어디서나 동일하게 보인다.
+# =====================================================================
+def _wrap_webtoon_panels(html_body: str, theme: Dict[str, Any]) -> str:
+    accent_rgb = _hex_to_rgb(theme["accent"])
+    sections = re.split(r"(?=<h2>)", html_body)
+    sections = [s for s in sections if s.strip()]
+    total = len(sections)
+    if total == 0:
+        return html_body
+
+    panels = []
+    for i, section in enumerate(sections, start=1):
+        is_last = (i == total)
+        # 마지막 패널("여러분의 언어에서는 어떤가요?")은 참여를 유도하는 클로징 컷이라
+        # 배경을 accent 색으로 꽉 채워 톤을 확실히 바꾼다 (웹툰 마지막 컷 강조 효과)
+        if is_last:
+            bg = theme["accent"]
+            text_color = "#ffffff"
+            border = "none"
+        else:
+            tint = 0.06 + (i - 1) * 0.02  # 뒤로 갈수록 배경이 아주 조금씩 더 진해짐 (단조로움 방지)
+            bg_rgb = _blend_rgb((255, 255, 255), accent_rgb, min(tint, 0.14))
+            bg = f"rgb({bg_rgb[0]},{bg_rgb[1]},{bg_rgb[2]})"
+            text_color = "#1a1a1a"
+            border = f"1px solid rgba({accent_rgb[0]},{accent_rgb[1]},{accent_rgb[2]},0.28)"
+
+        # h2는 패널 자체가 이미 배경/테두리를 갖고 있으므로, 기존 h2의 배경 그라데이션·좌측 보더를
+        # 인라인 스타일로 덮어써 이중으로 겹쳐 보이지 않게 한다. (Blogger/워드프레스는 외부 CSS가
+        # 적용되지 않으므로 인라인 스타일이어야 어느 플랫폼에서나 동일하게 보임)
+        section = re.sub(
+            r"^<h2>(.*?)</h2>",
+            lambda m: (
+                f'<h2 style="margin:6px 0 16px;padding:0;background:none;border:none;'
+                f'font-size:1.2em;font-weight:800;color:{text_color};">{m.group(1)}</h2>'
+            ),
+            section, count=1, flags=re.DOTALL,
+        )
+
+        # 대화 예시 목록("한국인은 어떤 상황에서 쓸까?" 섹션)만 말풍선 카드로 스타일링
+        if "어떤 상황에서" in section:
+            section = re.sub(
+                r"<li>(.*?)</li>",
+                lambda m: (
+                    '<li style="list-style:none;background:#fff;border-radius:14px;border:1px solid rgba(0,0,0,0.08);'
+                    'padding:14px 16px;margin:0 0 10px;box-shadow:0 2px 6px rgba(0,0,0,0.06);position:relative;">'
+                    f'{m.group(1)}</li>'
+                ),
+                section, flags=re.DOTALL,
+            )
+            section = section.replace("<ul>", '<ul style="padding-left:0;margin:14px 0 0;">')
+
+        panels.append(
+            f'<section style="position:relative;background:{bg};color:{text_color};border:{border};'
+            f'border-radius:18px;padding:26px 24px 28px;margin:0 0 26px;box-shadow:0 3px 14px rgba(0,0,0,0.08);">'
+            f'<span style="position:absolute;top:-13px;left:22px;background:{theme["accent"]};color:#fff;'
+            f'font-weight:800;font-size:0.72em;letter-spacing:0.03em;padding:4px 13px;border-radius:999px;'
+            f'box-shadow:0 2px 6px rgba(0,0,0,0.3);">CUT {i}/{total}</span>'
+            f'{section}</section>'
+        )
+
+    # 패널(컷) 사이에 웹툰 특유의 스크롤 연결선 (짧은 세로선)을 살짝 넣어 컷과 컷이 이어지는 느낌을 준다
+    connector = f'<div style="width:2px;height:16px;background:rgba({accent_rgb[0]},{accent_rgb[1]},{accent_rgb[2]},0.35);margin:-14px auto 0;"></div>'
+    return connector.join(panels)
+
+
     prompt = f"minimalist pencil sketch icon of {product_name}, single centered object, clean line art, simple outline, white background, no text, no watermark"
     url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
     try:
@@ -1657,6 +1786,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     article["html_body"] = cleaned_body
     article["html_body"] = enhance_tables(article["html_body"], theme["accent"])
     article = insert_content_image(article, slug)
+    article["html_body"] = _wrap_webtoon_panels(article["html_body"], theme)  # [NEW] 5단 웹툰 패널 스타일 적용
     article["html_body"] += build_faq_section_html(article, theme["accent"])
     article["html_body"] += build_product_list_html(article, slug, theme["accent"])
     
@@ -1714,14 +1844,14 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
         p = hero_posts[0]
         hero_html = (
             '<div class="tier-label">🔥 최신 이야기</div>'
-            f'<a class="hero" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="eager" fetchpriority="high">'
+            f'<a class="hero" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="eager" fetchpriority="high">'
             f'<div class="hero-body"><span class="hero-badge" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="hero-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>'
         )
     mid_html = ""
     if mid_posts:
         cards = "\n".join(
-            f'<a class="mid-card" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
+            f'<a class="mid-card" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
             f'<div class="mid-body"><span class="badge-sm" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="mid-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>' for p in mid_posts
         )
@@ -1729,19 +1859,26 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
     bottom_html = ""
     if bottom_posts:
         cards = "\n".join(
-            f'<a class="bottom-card" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
+            f'<a class="bottom-card" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
             f'<div class="bottom-body"><span class="badge-sm" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="bottom-title">{p["title"]}</div></div></a>' for p in bottom_posts
         )
         bottom_html = f'<div class="tier-label">🗂️ 지난 글 모아보기</div><div class="bottom-grid">{cards}</div>'
 
     with open(os.path.join(DOCS_DIR, "index.html"), "w", encoding="utf-8") as f:
-        category_pills = "".join(f'<span class="pill" style="background:{t["accent"]}">{t["badge"]}</span>' for t in CATEGORY_THEMES.values())
+        # [NEW] 클릭 가능한 카테고리 필터 칩. 영문 라벨을 함께 보여줘 외국인 방문자가
+        # "어떤 카테고리인지" 3초 안에 파악할 수 있게 한다. "전체(All)"를 기본 활성 상태로 둔다.
+        pill_items = [f'<button type="button" class="pill active" data-filter="all" style="background:#333;">🌐 All</button>']
+        for filter_key, t in CATEGORY_THEMES.items():
+            pill_items.append(f'<button type="button" class="pill" data-filter="{filter_key}" style="background:{t["accent"]}">{t["badge"]} · {t["label"]}</button>')
+        category_pills = "".join(pill_items)
+
         f.write(INDEX_TEMPLATE.format(
             site_title=SITE_TITLE, site_tagline=SITE_TAGLINE, site_url=SITE_URL or ".", ga_snippet=_ga_snippet(),
             adsense_snippet=_adsense_snippet(), fonts_url=_google_fonts_url(),
             hero_html=hero_html, mid_html=mid_html, bottom_html=bottom_html, blog_json_ld=build_blog_index_json_ld(posts),
             category_pills=category_pills, search_console_meta=_search_console_meta(),
+            eng_slogan=ENGLISH_SLOGAN, lead_magnet_html=_lead_magnet_html(), social_row_html=_social_row_html(),
             footer_html='<div class="site-footer"><a href="about.html">블로그 소개</a>·<a href="privacy.html">개인정보처리방침</a>·<a href="contact.html">문의하기</a>'
                         f'<div style="margin-top:8px;">© {datetime.now().year} {SITE_TITLE}</div></div>',
             translate_widget=_translate_widget(),
@@ -1762,6 +1899,98 @@ def generate_static_pages() -> None:
         if not os.path.exists(path):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
+
+# =====================================================================
+# [NEW] 무료 리드마그넷 PDF — "지금까지 발행된 표현 모음"을 매 실행마다 자동 갱신
+# 이메일 구독 시스템(뉴스레터)은 외부 서비스 연동이 필요해 이 파이프라인 범위 밖이지만,
+# 다운로드 가능한 PDF 자체는 완전히 자동으로 만들 수 있어 여기서 구현한다.
+# =====================================================================
+def _find_korean_ttf() -> Optional[str]:
+    for path in FONT_CANDIDATES:
+        if path == "font.ttf" or not os.path.exists(path):
+            continue
+        try:
+            # [FIX] .ttc(트루타입 컬렉션) 중 일부는 reportlab이 임베딩을 지원하지 않아
+            # 등록 시점에 예외가 남. 후보 폰트를 하나씩 실제로 등록해보고 성공하는 것만 채택.
+            pdfmetrics.registerFont(TTFont("KRFont_probe", path))
+            return path
+        except Exception:
+            continue
+    return None
+
+def build_lead_magnet_pdf(posts: List[Dict[str, Any]]) -> bool:
+    """발행된 글들의 표현/뜻을 모아 무료 PDF 가이드를 만든다. reportlab 미설치 시 조용히 건너뜀."""
+    if not _REPORTLAB_AVAILABLE or not posts:
+        return False
+    try:
+        font_path = _find_korean_ttf()
+        font_name = "Helvetica"
+        font_name_bold = "Helvetica-Bold"
+        if font_path:
+            try:
+                pdfmetrics.registerFont(TTFont("KRFont", font_path))
+                font_name = font_name_bold = "KRFont"
+            except Exception as e:
+                logger.warning(f"[리드마그넷] 한글 폰트 등록 실패, 영문 폰트로 대체: {e}")
+
+        out_path = os.path.join(DOCS_DIR, "downloads", "korean-expressions-guide.pdf")
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        c = pdf_canvas.Canvas(out_path, pagesize=A4)
+        w, h = A4
+
+        # 표지
+        c.setFillColorRGB(0.91, 0.36, 0.52)
+        c.rect(0, 0, w, h, fill=1, stroke=0)
+        c.setFillColorRGB(1, 1, 1)
+        c.setFont(font_name_bold, 26)
+        c.drawCentredString(w / 2, h - 160, SITE_TITLE)
+        c.setFont(font_name, 13)
+        c.drawCentredString(w / 2, h - 195, "Korean Expressions Guide")
+        c.setFont(font_name, 10)
+        c.drawCentredString(w / 2, h - 220, f"{len(posts)}개 표현 · {datetime.now().strftime('%Y-%m-%d')} 기준")
+        c.showPage()
+
+        # 목록 (표현 + 뜻 요약)
+        y = h - 60
+        c.setFillColorRGB(0.1, 0.1, 0.1)
+        for p in posts:
+            if y < 80:
+                c.showPage()
+                y = h - 60
+                c.setFillColorRGB(0.1, 0.1, 0.1)
+            c.setFont(font_name_bold, 13)
+            c.drawString(50, y, p.get("title", "")[:70])
+            y -= 26
+        c.showPage()
+        c.save()
+        logger.info(f"[리드마그넷] PDF 갱신 완료: {out_path} ({len(posts)}개 표현)")
+        return True
+    except Exception as e:
+        logger.warning(f"[리드마그넷] PDF 생성 실패(건너뜀): {e}")
+        return False
+
+def _lead_magnet_html() -> str:
+    """홈페이지에 노출할 무료 PDF 다운로드 배너. 파일이 실제로 존재할 때만 렌더링."""
+    pdf_path = os.path.join(DOCS_DIR, "downloads", "korean-expressions-guide.pdf")
+    if not os.path.exists(pdf_path):
+        return ""
+    return (
+        '<a class="lead-magnet" href="downloads/korean-expressions-guide.pdf" download>'
+        '<span class="lead-magnet-emoji">📘</span>'
+        '<span><span class="lead-magnet-title">무료 PDF: 한국인이 매일 쓰는 표현 모음</span>'
+        '<div class="lead-magnet-sub">Free PDF guide of real Korean expressions</div></span>'
+        '<span class="lead-magnet-cta">다운로드</span></a>'
+    )
+
+def _social_row_html() -> str:
+    """설정된 SNS 채널만 아이콘으로 노출 (하나도 설정 안 되어 있으면 빈 문자열)"""
+    links = []
+    if SNS_PINTEREST_URL: links.append(f'<a href="{SNS_PINTEREST_URL}" target="_blank" rel="noopener" aria-label="Pinterest">📌</a>')
+    if SNS_INSTAGRAM_URL: links.append(f'<a href="{SNS_INSTAGRAM_URL}" target="_blank" rel="noopener" aria-label="Instagram">📷</a>')
+    if SNS_X_URL: links.append(f'<a href="{SNS_X_URL}" target="_blank" rel="noopener" aria-label="X">𝕏</a>')
+    if not links:
+        return ""
+    return f'<div class="social-row">{"".join(links)}</div>'
 
 def update_dashboard(posts: List[Dict[str, Any]]) -> None:
     rows = "\n".join(f'<tr><td>{p["date"]}</td><td>{p["title"]}</td><td><a href="{p["file"]}">보기</a></td></tr>' for p in posts)
@@ -2220,6 +2449,7 @@ def run() -> None:
 
     update_dashboard(posts)
     update_seo_files(posts)
+    build_lead_magnet_pdf(posts)  # [NEW] 무료 PDF 리드마그넷 자동 갱신
 
     commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
 
