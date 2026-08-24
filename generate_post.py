@@ -2002,6 +2002,43 @@ def _get_blogger_access_token() -> str:
         raise RuntimeError(f"블로거 토큰 갱신 실패 (HTTP {resp.status_code}): {resp.text[:500]}")
     return resp.json()["access_token"]
 
+# =====================================================================
+# [NEW] Google 색인 생성 자동 요청 (Google Indexing API)
+# 새 글을 발행할 때마다 Search Console에서 손으로 누르던 "색인 생성 요청"을 자동화한다.
+# 기존 Blogger용 OAuth(GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN)를 그대로 재사용하되,
+# 리프레시 토큰 발급 시 동의한 스코프에 "indexing"이 포함되어 있어야 동작한다.
+#
+# 준비물(최초 1회):
+# 1) Google Cloud Console에서 "Web Search Indexing API" 사용 설정
+# 2) get_refresh_token.py의 SCOPES 목록에 https://www.googleapis.com/auth/indexing 추가 후 재실행
+#    (기존 blogger 스코프와 함께 재동의 → GOOGLE_REFRESH_TOKEN 갱신)
+# 3) Search Console → 설정 → 사용자 및 권한 → 이 리프레시 토큰을 발급한 Google 계정을
+#    "소유자(Owner)"로 추가 (블로그가 걸려있는 실제 속성: 예) learnkoreanseekoreans.blogspot.com)
+# 위 준비가 안 되어 있으면 조용히 건너뛰고 로그만 남기며, 파이프라인은 계속 진행된다.
+# =====================================================================
+def _google_oauth_configured() -> bool: return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN)
+
+def request_google_indexing(url: str) -> bool:
+    if not url or not _google_oauth_configured():
+        return False
+    try:
+        access_token = _get_blogger_access_token()
+        resp = requests.post(
+            "https://indexing.googleapis.com/v3/urlNotifications:publish",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"url": url, "type": "URL_UPDATED"},
+            timeout=20,
+        )
+        if resp.ok:
+            logger.info(f"[색인 요청] 완료: {url}")
+            return True
+        # [FIX] 스코프 미동의(403)나 속성 소유권 미확인(403) 등 원인이 다양해 본문을 그대로 로그에 남김
+        logger.warning(f"[색인 요청] 실패(HTTP {resp.status_code}), 발행 자체는 정상 진행됩니다: {resp.text[:300]}")
+        return False
+    except Exception as e:
+        logger.warning(f"[색인 요청] 오류(건너뜀): {e}")
+        return False
+
 def strip_interactive_widgets(html_body: str) -> str:
     """[FIX] 자체 사이트 전용 "표 크게 보기" 버튼/모달에 onclick 같은 인라인 JS가 들어있는데,
     Blogger/워드프레스 모두 보안상 이런 인라인 스크립트를 걸러내면서 태그 구조가 깨져 표가
@@ -2451,6 +2488,12 @@ def run() -> None:
     # [FIX] 워드프레스/블로거 본문 하단 "원문" 링크는 요청에 따라 완전히 제거함.
     # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
     publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
+
+    # [NEW] 발행 직후 Google에 색인 생성을 자동으로 요청한다 (Search Console에서 손으로 누르던 작업 자동화)
+    if SITE_URL:
+        request_google_indexing(post_url)  # GitHub Pages 글 주소
+    if blogger_url:
+        request_google_indexing(blogger_url)  # Blogger 글 주소 (Search Console 속성이 blogspot 도메인인 경우 이쪽이 핵심)
 
     if not manual_title and not is_manual_trigger:
         increment_daily_count()
