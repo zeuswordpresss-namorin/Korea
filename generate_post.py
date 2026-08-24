@@ -700,7 +700,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 {decor_html}
 <div class="content">
 <a class="back" href="../index.html">← 목록으로</a>
-<div class="hero"><img id="heroThumb" src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high" onerror="_retryHeroImage(this)"></div>
+<div class="hero"><img id="heroThumb" src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high" onerror="_retryHeroImage(this)">{hero_tts_html}</div>
 <span class="badge">{badge}</span>
 <h1>{title}</h1>
 <p class="meta">{date}</p>
@@ -1583,40 +1583,25 @@ def enhance_tables(html_body: str, accent: str) -> str:
     return re.sub(r"<table.*?</table>", wrap_table, html_body, flags=re.DOTALL)
 
 def _tts_buttons_html(expression: str, theme: Dict[str, Any]) -> str:
-    """말풍선 아이콘 클릭 시 배우는 한글 표현을 브라우저 내장 음성(Web Speech API)으로 들려주는 버튼.
-    [FIX] 기기/폰트에 따라 💬 이모지가 깨져 보이는 문제가 있어, 어디서나 또렷하게 표시되는
-    스피커 아이콘(🔊)으로 교체하고 원형 배지로 더 눈에 띄게 "마킹"했다."""
+    """[이전됨] "오늘의 표현" 아래가 아니라 썸네일 이미지 위 우하단에 원형 오버레이로 얹는
+    발음 듣기 버튼. 브라우저 내장 음성(Web Speech API)으로 재생되어 네트워크 의존이 없다."""
     expression = (expression or "").strip()
     if not expression or len(expression) > 20:
         return ""
     escaped = expression.replace("\\", "\\\\").replace("'", "\\'")
     accent = theme["accent"]
     return (
-        '<div class="notranslate" translate="no" style="margin:4px 0 18px;">'
-        f'<button type="button" onclick="playKoreanTTS(\'{escaped}\')" aria-label="발음 듣기" '
-        f'style="display:inline-flex;align-items:center;gap:8px;background:{accent};border:none;color:#fff;'
-        f'border-radius:24px;padding:9px 18px 9px 12px;font-size:0.9em;font-weight:700;cursor:pointer;'
-        f'box-shadow:0 2px 8px rgba(0,0,0,0.18);">'
-        f'<span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;'
-        f'border-radius:50%;background:rgba(255,255,255,0.25);font-size:1em;">🔊</span>'
-        f'발음 듣기</button>'
-        '</div>'
+        f'<button type="button" onclick="event.preventDefault();playKoreanTTS(\'{escaped}\')" '
+        f'aria-label="발음 듣기" class="notranslate" translate="no" '
+        f'style="position:absolute;right:14px;bottom:14px;width:48px;height:48px;border-radius:50%;'
+        f'background:{accent};border:2.5px solid #fff;color:#fff;font-size:1.3em;cursor:pointer;'
+        f'box-shadow:0 3px 10px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;'
+        f'z-index:2;">🔊</button>'
     )
 
 def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
-    category = article.get("category", "번역감정")
-    theme = get_theme(category)
-
-    # [FIX] 본문 중간에 별도로 넣던 삽화(figure)를 제거했습니다. 히어로 썸네일에 이미
-    # 한글 표현이 큼직하게 들어가 있어 같은 캐릭터 그림이 본문에 또 나오면 중복이었습니다.
-    # 발음 듣기 버튼만 "오늘의 표현" 바로 아래 남깁니다.
-    extra_html = _tts_buttons_html(article.get("expression", ""), theme)
-    if not extra_html:
-        return article
-
-    idx = article["html_body"].find("</h2>")
-    if idx != -1: article["html_body"] = article["html_body"][:idx + 5] + extra_html + article["html_body"][idx + 5:]
-    else: article["html_body"] = extra_html + article["html_body"]
+    # [FIX] 발음 듣기 버튼을 "오늘의 표현" 아래 → 썸네일 위 오버레이로 이전했습니다.
+    # (본문 중간 삽화도 히어로 썸네일과 중복이라 이미 제거된 상태)
     return article
 
 # =====================================================================
@@ -1801,6 +1786,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     json_ld = build_json_ld(article, post_url, thumb_url, today)
     
     html = POST_TEMPLATE.format(
+        hero_tts_html=_tts_buttons_html(article.get("expression", ""), theme),
         title=title,
         meta_description=article.get("meta_description", ""),
         date=today,
@@ -2119,7 +2105,10 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
         content_html = (
             f'{_translate_widget()}'
+            f'<div style="position:relative;margin:0;">'
             f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{article["title"]}" onerror="_retryHeroImage(this)">'
+            f'{_tts_buttons_html(article.get("expression", ""), theme)}'
+            f'</div>'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
             f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
         )
