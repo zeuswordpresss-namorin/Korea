@@ -1035,6 +1035,14 @@ def generate_article(title: str) -> Dict[str, Any]:
 
             article["keyword"] = title
             article["expression"] = (article.get("expression") or "").strip()
+            if not article["expression"]:
+                # [FIX] Gemini가 "expression" 필드를 가끔 빈 값으로 반환하는 경우가 있었음.
+                # 이 경우 썸네일 텍스트와 발음 듣기 버튼이 통째로 사라지는 문제로 이어졌으므로,
+                # 제목 규칙(쌍따옴표로 감싼 한국어 표현)에서 안전하게 폴백 추출한다.
+                title_match = re.search(r'"([가-힣][가-힣\s]{0,18})"', title)
+                if title_match:
+                    article["expression"] = title_match.group(1).strip()
+                    logger.warning(f"[FIX] expression이 비어있어 제목에서 폴백 추출: {article['expression']}")
             # [NEW] 배우는 한글 표현이 구글 자동번역으로 다른 언어로 바뀌지 않도록,
             # 본문 전체에서 해당 표현이 등장하는 모든 위치를 notranslate 처리
             article["html_body"] = _wrap_notranslate(article["html_body"], article["expression"])
@@ -1254,6 +1262,12 @@ def _load_canva_background(category: str) -> Optional[Image.Image]:
 
 def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], category: str = "번역감정", image_keywords: str = "", expression: str = "") -> Optional[Dict[str, str]]:
     expression_clean = (expression or "").strip()
+    if not expression_clean:
+        # [FIX] 2차 방어선: 상위 단계에서 expression이 비어 넘어와도 썸네일이 빈 배경으로
+        # 나가지 않도록, 제목의 쌍따옴표 안 한글 표현에서 한 번 더 폴백 추출을 시도한다.
+        title_match = re.search(r'"([가-힣][가-힣\s]{0,18})"', title or "")
+        if title_match:
+            expression_clean = title_match.group(1).strip()
     _generate_thumbnail_local(title, output_path, theme, expression_clean, category)
     return None
 
