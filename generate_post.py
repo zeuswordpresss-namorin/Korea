@@ -2427,12 +2427,15 @@ def commit_and_push_changes() -> bool:
         logger.warning(f"[git] 사전 push 실패, 외부 발행 시 이미지가 일시적으로 깨질 수 있습니다: {stderr[:300]}")
         return False
 
-def _extract_expression_from_title(title: str) -> str:
+def _extract_expression_from_title(title: str, strict: bool = False) -> str:
     """제목에서 한국어 표현을 최대한 안전하게 추출한다. 여러 제목 스타일을 순서대로 시도:
     1) 따옴표(홑/쌍) 안 내용의 앞쪽 한글(+공백) 구간 — 로마자 표기나 물음표가 섞여도 앞부분만 추출
        예) '흥', "괜찮아요(Gwaenchanayo)", "바쁘시죠?" 모두 처리
     2) 따옴표 안이 로마자뿐인 경우("Nunchi" 등), 괄호 안 한글 표기를 찾는다: (눈치)
-    3) 그래도 못 찾으면 제목 전체에서 첫 한글 어절을 최후 수단으로 추출
+    3) [strict=False일 때만] 그래도 못 찾으면 제목 전체에서 첫 한글 어절을 최후 수단으로 추출.
+       [FIX] 이 3번 단계는 "한국어 표현" 글이 아닌 예전 다른 주제 글(다이어트, 여행 등)의 제목에서도
+       아무 한글이나 집어 정상 추출된 것처럼 오판하는 원인이었다. repair_old_posts처럼 "이 글이
+       애초에 표현 글이 맞는지"를 판별해야 하는 곳에서는 strict=True로 3번 단계를 건너뛴다.
     """
     if not title:
         return ""
@@ -2443,6 +2446,8 @@ def _extract_expression_from_title(title: str) -> str:
     m = re.search(r'\(([가-힣][가-힣\s]{0,18})\)', title)
     if m:
         return m.group(1).strip()
+    if strict:
+        return ""
     m = re.search(r'([가-힣]{1,20})', title)
     return m.group(1).strip() if m else ""
 
@@ -2472,7 +2477,7 @@ def repair_old_posts() -> None:
             skipped_other_niche += 1
             continue
         theme = get_theme(category)
-        expression = _extract_expression_from_title(title)
+        expression = _extract_expression_from_title(title, strict=True)
         if not expression:
             skipped_no_expression += 1
             logger.warning(f"[복구] 제목에서 표현을 추출하지 못해 건너뜁니다: {title}")
@@ -2537,7 +2542,7 @@ def repair_old_posts() -> None:
                 content = bp.get("content", "")
                 if "playKoreanTTS" in content:
                     continue
-                expression = _extract_expression_from_title(bp.get("title", ""))
+                expression = _extract_expression_from_title(bp.get("title", ""), strict=True)
                 if not expression:
                     continue
                 theme = get_theme(local.get("category", "번역감정"))
