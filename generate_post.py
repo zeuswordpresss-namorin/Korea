@@ -2494,15 +2494,20 @@ def repair_old_posts() -> None:
                     html = f.read()
                 if "playKoreanTTS" not in html:
                     btn_html = _tts_buttons_html(expression, theme)
+                    # [FIX] id="heroThumb" 속성은 비교적 최근에 추가된 것이라, 그 이전에
+                    # 발행된 글들은 이 정규식에 하나도 안 걸려 "0개 패치"로 조용히 건너뛰어졌다.
+                    # <div class="hero"> 블록 전체(이미지 태그 형태와 무관하게)를 기준으로 넓힌다.
                     new_html = re.sub(
-                        r'(<img id="heroThumb"[^>]*>)(\s*</div>)',
+                        r'(<div class="hero">.*?<img[^>]*>)(\s*</div>)',
                         lambda m: m.group(1) + btn_html + m.group(2),
-                        html, count=1,
+                        html, count=1, flags=re.DOTALL,
                     )
                     if new_html != html:
                         with open(post_path, "w", encoding="utf-8") as f:
                             f.write(new_html)
                         fixed_buttons += 1
+                    else:
+                        logger.warning(f"[복구] 히어로 이미지 패턴을 찾지 못해 발음버튼을 못 넣었습니다: {title}")
             except Exception as e:
                 logger.warning(f"[복구] 발음버튼 패치 실패({title}): {e}")
 
