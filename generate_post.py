@@ -2429,7 +2429,120 @@ def commit_and_push_changes() -> bool:
         logger.warning(f"[git] 사전 push 실패, 외부 발행 시 이미지가 일시적으로 깨질 수 있습니다: {stderr[:300]}")
         return False
 
+def _extract_expression_from_title(title: str) -> str:
+    m = re.search(r'"([가-힣][가-힣\s]{0,18})"', title or "")
+    return m.group(1).strip() if m else ""
+
+# =====================================================================
+# [NEW] 이전 글 자동 복구 — expression 누락으로 텍스트/발음버튼이 빠진 과거 글들을 일괄 수정
+# GitHub Pages(로컬 파일)는 확실하게 복구하고, Blogger는 제목 매칭으로 최선을 다해 시도한다.
+# =====================================================================
+def repair_old_posts() -> None:
+    if not os.path.exists(POSTS_JSON):
+        logger.info("[복구] posts.json이 없어 복구할 글이 없습니다.")
+        return
+    with open(POSTS_JSON, "r", encoding="utf-8") as f:
+        posts = json.load(f)
+    logger.info(f"[복구] 총 {len(posts)}개 글의 썸네일/발음버튼 점검을 시작합니다...")
+
+    fixed_thumbs = 0
+    fixed_buttons = 0
+    for p in posts:
+        title = p.get("title", "")
+        category = p.get("category", "번역감정")
+        theme = get_theme(category)
+        expression = _extract_expression_from_title(title)
+        if not expression:
+            logger.warning(f"[복구] 제목에서 표현을 추출하지 못해 건너뜁니다: {title}")
+            continue
+
+        # 1) 썸네일 재생성 (항상 안전하게 덮어쓰기 — expression 폴백 로직이 이미 최신 버전)
+        thumb_path = os.path.join(DOCS_DIR, p["thumb"])
+        try:
+            generate_thumbnail(title, thumb_path, theme, category, "", expression)
+            fixed_thumbs += 1
+        except Exception as e:
+            logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
+
+        # 2) 본문 HTML의 히어로 영역에 발음 듣기 버튼이 없으면 삽입
+        post_path = os.path.join(DOCS_DIR, p["file"])
+        if os.path.exists(post_path):
+            try:
+                with open(post_path, "r", encoding="utf-8") as f:
+                    html = f.read()
+                if "playKoreanTTS" not in html:
+                    btn_html = _tts_buttons_html(expression, theme)
+                    new_html = re.sub(
+                        r'(<img id="heroThumb"[^>]*>)(\s*</div>)',
+                        lambda m: m.group(1) + btn_html + m.group(2),
+                        html, count=1,
+                    )
+                    if new_html != html:
+                        with open(post_path, "w", encoding="utf-8") as f:
+                            f.write(new_html)
+                        fixed_buttons += 1
+            except Exception as e:
+                logger.warning(f"[복구] 발음버튼 패치 실패({title}): {e}")
+
+    logger.info(f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 발음버튼 {fixed_buttons}개 패치")
+
+    # 3) Blogger는 제목 매칭으로 최선을 다해 복구 (실패해도 전체 복구는 계속 진행)
+    if _blogger_configured():
+        try:
+            access_token = _get_blogger_access_token()
+            resp = requests.get(
+                f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"maxResults": 500, "fetchBodies": "true"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            blogger_posts = resp.json().get("items", [])
+            local_titles = {p.get("title", ""): p for p in posts}
+            blogger_fixed = 0
+            for bp in blogger_posts:
+                local = local_titles.get(bp.get("title", ""))
+                if not local:
+                    continue
+                content = bp.get("content", "")
+                if "playKoreanTTS" in content:
+                    continue
+                expression = _extract_expression_from_title(bp.get("title", ""))
+                if not expression:
+                    continue
+                theme = get_theme(local.get("category", "번역감정"))
+                btn_html = _tts_buttons_html(expression, theme)
+                new_content = re.sub(
+                    r'(<img [^>]*>)',
+                    lambda m: m.group(1) + btn_html, content, count=1,
+                )
+                if new_content == content:
+                    continue
+                upd = requests.put(
+                    f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    json={"title": bp["title"], "content": new_content},
+                    timeout=30,
+                )
+                if upd.ok:
+                    blogger_fixed += 1
+                else:
+                    logger.warning(f"[복구] Blogger 글 패치 실패({bp.get('title')}): HTTP {upd.status_code}")
+            logger.info(f"[복구] Blogger 완료 — {blogger_fixed}개 글 발음버튼 패치")
+        except Exception as e:
+            logger.warning(f"[복구] Blogger 복구 중 오류(건너뜀): {e}")
+    else:
+        logger.info("[복구] Blogger 미설정으로 Blogger 복구는 건너뜁니다.")
+
+    commit_and_push_changes()
+    logger.info("[복구] 전체 완료, 변경사항 push 완료")
+
 def run() -> None:
+    is_repair_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "repair"
+    if is_repair_only:
+        repair_old_posts()
+        return
+
     is_refresh_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "refresh"
 
     # [개편] 트렌드 감지 대신 에버그린 주제뱅크에서 큐를 보충
@@ -2439,7 +2552,7 @@ def run() -> None:
 
     # 수동 제목 입력 여부 확인
     manual_title = ""
-    if len(sys.argv) > 1 and sys.argv[1].strip() and sys.argv[1].strip().lower() not in ["publish", "refresh"]:
+    if len(sys.argv) > 1 and sys.argv[1].strip() and sys.argv[1].strip().lower() not in ["publish", "refresh", "repair"]:
         manual_title = sys.argv[1].strip()
 
     # [NEW] 수동 실행(workflow_dispatch)은 제목 입력 여부와 무관하게 발행 한도를 적용하지 않는다.
