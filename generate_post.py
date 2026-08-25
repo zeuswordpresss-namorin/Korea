@@ -1038,11 +1038,11 @@ def generate_article(title: str) -> Dict[str, Any]:
             if not article["expression"]:
                 # [FIX] Gemini가 "expression" 필드를 가끔 빈 값으로 반환하는 경우가 있었음.
                 # 이 경우 썸네일 텍스트와 발음 듣기 버튼이 통째로 사라지는 문제로 이어졌으므로,
-                # 제목 규칙(쌍따옴표로 감싼 한국어 표현)에서 안전하게 폴백 추출한다.
-                title_match = re.search(r'"([가-힣][가-힣\s]{0,18})"', title)
-                if title_match:
-                    article["expression"] = title_match.group(1).strip()
-                    logger.warning(f"[FIX] expression이 비어있어 제목에서 폴백 추출: {article['expression']}")
+                # 제목에서 안전하게 폴백 추출한다 (홑/쌍따옴표, 로마자+괄호한글 조합까지 처리).
+                fallback_expr = _extract_expression_from_title(title)
+                if fallback_expr:
+                    article["expression"] = fallback_expr
+                    logger.warning(f"[FIX] expression이 비어있어 제목에서 폴백 추출: {fallback_expr}")
             # [NEW] 배우는 한글 표현이 구글 자동번역으로 다른 언어로 바뀌지 않도록,
             # 본문 전체에서 해당 표현이 등장하는 모든 위치를 notranslate 처리
             article["html_body"] = _wrap_notranslate(article["html_body"], article["expression"])
@@ -1264,10 +1264,8 @@ def generate_thumbnail(title: str, output_path: str, theme: Dict[str, Any], cate
     expression_clean = (expression or "").strip()
     if not expression_clean:
         # [FIX] 2차 방어선: 상위 단계에서 expression이 비어 넘어와도 썸네일이 빈 배경으로
-        # 나가지 않도록, 제목의 쌍따옴표 안 한글 표현에서 한 번 더 폴백 추출을 시도한다.
-        title_match = re.search(r'"([가-힣][가-힣\s]{0,18})"', title or "")
-        if title_match:
-            expression_clean = title_match.group(1).strip()
+        # 나가지 않도록, 제목에서 한 번 더 폴백 추출을 시도한다.
+        expression_clean = _extract_expression_from_title(title or "")
     _generate_thumbnail_local(title, output_path, theme, expression_clean, category)
     return None
 
@@ -2430,7 +2428,22 @@ def commit_and_push_changes() -> bool:
         return False
 
 def _extract_expression_from_title(title: str) -> str:
-    m = re.search(r'"([가-힣][가-힣\s]{0,18})"', title or "")
+    """제목에서 한국어 표현을 최대한 안전하게 추출한다. 여러 제목 스타일을 순서대로 시도:
+    1) 따옴표(홑/쌍) 안 내용의 앞쪽 한글(+공백) 구간 — 로마자 표기나 물음표가 섞여도 앞부분만 추출
+       예) '흥', "괜찮아요(Gwaenchanayo)", "바쁘시죠?" 모두 처리
+    2) 따옴표 안이 로마자뿐인 경우("Nunchi" 등), 괄호 안 한글 표기를 찾는다: (눈치)
+    3) 그래도 못 찾으면 제목 전체에서 첫 한글 어절을 최후 수단으로 추출
+    """
+    if not title:
+        return ""
+    for cand in re.findall(r'["\']([^"\']{1,40})["\']', title):
+        m = re.match(r'([가-힣][가-힣\s]*)', cand.strip())
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    m = re.search(r'\(([가-힣][가-힣\s]{0,18})\)', title)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'([가-힣]{1,20})', title)
     return m.group(1).strip() if m else ""
 
 # =====================================================================
@@ -2443,16 +2456,25 @@ def repair_old_posts() -> None:
         return
     with open(POSTS_JSON, "r", encoding="utf-8") as f:
         posts = json.load(f)
-    logger.info(f"[복구] 총 {len(posts)}개 글의 썸네일/발음버튼 점검을 시작합니다...")
+    logger.info(f"[복구] 총 {len(posts)}개 글 중 대상 선별을 시작합니다...")
 
     fixed_thumbs = 0
     fixed_buttons = 0
+    skipped_other_niche = 0
+    skipped_no_expression = 0
     for p in posts:
         title = p.get("title", "")
         category = p.get("category", "번역감정")
+        # [FIX] 예전(재테크/여행 등 다른 주제) 블로그 시절 글은 현재 4개 카테고리
+        # (번역감정/일상표현/한국문화/리액션)에 속하지 않으므로 "표현" 개념 자체가 없다.
+        # 이런 글까지 표현 추출을 시도하며 경고 로그를 도배하지 않도록 조용히 건너뛴다.
+        if category not in CATEGORY_THEMES:
+            skipped_other_niche += 1
+            continue
         theme = get_theme(category)
         expression = _extract_expression_from_title(title)
         if not expression:
+            skipped_no_expression += 1
             logger.warning(f"[복구] 제목에서 표현을 추출하지 못해 건너뜁니다: {title}")
             continue
 
@@ -2484,7 +2506,10 @@ def repair_old_posts() -> None:
             except Exception as e:
                 logger.warning(f"[복구] 발음버튼 패치 실패({title}): {e}")
 
-    logger.info(f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 발음버튼 {fixed_buttons}개 패치")
+    logger.info(
+        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 발음버튼 {fixed_buttons}개 패치 "
+        f"(다른 주제 글 {skipped_other_niche}개, 표현 추출 실패 {skipped_no_expression}개 건너뜀)"
+    )
 
     # 3) Blogger는 제목 매칭으로 최선을 다해 복구 (실패해도 전체 복구는 계속 진행)
     if _blogger_configured():
