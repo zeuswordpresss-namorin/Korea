@@ -11,6 +11,7 @@ on:
         options:
           - publish
           - refresh
+          - repair
       title:
         description: "발행할 한국어 표현/키워드 (비워두면 100개 주제뱅크 큐에서 자동 발췌) — 수동 실행은 하루 발행 한도의 영향을 받지 않습니다"
         required: false
@@ -94,6 +95,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "refresh" ]; then
             python generate_post.py refresh
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "repair" ]; then
+            python generate_post.py repair
           else
             python generate_post.py "${{ github.event.inputs.title }}"
           fi
