@@ -2516,21 +2516,27 @@ def repair_old_posts() -> None:
         except Exception as e:
             logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
 
-        # 2) 본문 HTML의 히어로 영역에 발음 듣기 버튼이 없으면 삽입
+        # 2) 본문 HTML의 히어로 영역에 발음 듣기 버튼이 없거나 낡은 형태면 최신 버튼으로 교체
         post_path = os.path.join(DOCS_DIR, p["file"])
         if os.path.exists(post_path):
             try:
                 with open(post_path, "r", encoding="utf-8") as f:
                     html = f.read()
-                if "playKoreanTTS" not in html:
-                    btn_html = _tts_buttons_html(expression, theme)
+                btn_html = _tts_buttons_html(expression, theme)
+                # [FIX] 단순 "playKoreanTTS 문자열 포함 여부"만 보면, 과거 다른 방식(이미지 위
+                # 오버레이 등)으로 들어간 낡은/깨진 버튼도 "이미 있음"으로 오판해 방치하게 된다.
+                # 지금 코드가 만드는 정확한 마크업이 그대로 있을 때만 "이미 있음"으로 인정한다.
+                if btn_html and btn_html in html:
+                    pass
+                else:
+                    cleaned = re.sub(r'<button\b[^>]*playKoreanTTS.*?</button>', '', html, flags=re.DOTALL)
                     # [FIX] id="heroThumb" 속성은 비교적 최근에 추가된 것이라, 그 이전에
                     # 발행된 글들은 이 정규식에 하나도 안 걸려 "0개 패치"로 조용히 건너뛰어졌다.
                     # <div class="hero"> 블록 전체(이미지 태그 형태와 무관하게)를 기준으로 넓힌다.
                     new_html = re.sub(
                         r'(<div class="hero">.*?<img[^>]*>)(\s*</div>)',
                         lambda m: m.group(1) + btn_html + m.group(2),
-                        html, count=1, flags=re.DOTALL,
+                        cleaned, count=1, flags=re.DOTALL,
                     )
                     if new_html != html:
                         with open(post_path, "w", encoding="utf-8") as f:
@@ -2582,15 +2588,13 @@ def repair_old_posts() -> None:
             already_has_button = 0
             no_expression = 0
             no_img_tag = 0
+            stale_button_replaced = 0
             for bp in blogger_posts:
                 local = local_titles.get(_normalize_title(bp.get("title", "")))
                 if not local:
                     continue
                 matched += 1
                 content = bp.get("content", "")
-                if "playKoreanTTS" in content:
-                    already_has_button += 1
-                    continue
                 expression = _extract_expression_from_title(bp.get("title", ""), strict=True)
                 if not expression:
                     no_expression += 1
@@ -2598,9 +2602,21 @@ def repair_old_posts() -> None:
                     continue
                 theme = get_theme(local.get("category", "번역감정"))
                 btn_html = _tts_buttons_html(expression, theme)
+
+                # [FIX] 단순히 "playKoreanTTS 문자열이 있는지"만 보면, 과거 다른 방식(이미지 위
+                # 오버레이 등)으로 삽입돼 지금은 안 보이거나 깨진 버튼도 "이미 있음"으로 오판해
+                # 방치하게 된다. 지금 코드가 만드는 정확한 마크업이 그대로 들어있을 때만 "이미 있음"
+                # 으로 인정하고, 그 외의 낡은/깨진 버튼 흔적은 전부 지운 뒤 최신 버튼으로 다시 넣는다.
+                if btn_html and btn_html in content:
+                    already_has_button += 1
+                    continue
+
+                cleaned = re.sub(r'<button\b[^>]*playKoreanTTS.*?</button>', '', content, flags=re.DOTALL)
+                if cleaned != content:
+                    stale_button_replaced += 1
                 new_content = re.sub(
                     r'(<img [^>]*>)',
-                    lambda m: m.group(1) + btn_html, content, count=1,
+                    lambda m: m.group(1) + btn_html, cleaned, count=1,
                 )
                 if new_content == content:
                     no_img_tag += 1
@@ -2618,7 +2634,8 @@ def repair_old_posts() -> None:
                     logger.warning(f"[복구] Blogger 글 패치 실패({bp.get('title')}): HTTP {upd.status_code}")
             logger.info(
                 f"[복구] Blogger 완료 — 매칭 {matched}개 중 {blogger_fixed}개 패치 "
-                f"(이미 버튼 있음 {already_has_button}개, 표현 추출 실패 {no_expression}개, img 태그 없음 {no_img_tag}개)"
+                f"(그 중 낡은 버튼 교체 {stale_button_replaced}개, 이미 최신 버튼 {already_has_button}개, "
+                f"표현 추출 실패 {no_expression}개, img 태그 없음 {no_img_tag}개)"
             )
         except Exception as e:
             logger.warning(f"[복구] Blogger 복구 중 오류(건너뜀): {e}")
