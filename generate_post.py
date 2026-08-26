@@ -1832,14 +1832,10 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     }
     return post_meta, json_ld, thumb_url, os.path.join(DOCS_DIR, "thumbs", thumb_filename), post_url
 
-def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
+def render_index_html(posts: List[Dict[str, Any]]) -> None:
+    """[NEW] posts 리스트를 받아 index.html을 다시 그린다. 새 글 추가(update_index)와
+    이전 글 삭제 후 재생성(repair_old_posts) 양쪽에서 공통으로 쓰는 렌더링 로직."""
     os.makedirs(DOCS_DIR, exist_ok=True)
-    posts = []
-    if os.path.exists(POSTS_JSON):
-        with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
-    posts.insert(0, new_post)
-    with open(POSTS_JSON, "w", encoding="utf-8") as f: json.dump(posts, f, ensure_ascii=False, indent=2)
-
     hero_posts, mid_posts, bottom_posts = posts[:1], posts[1:3], posts[3:]
 
     hero_html = ""
@@ -1887,6 +1883,15 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
             translate_widget=_translate_widget(),
             site_title_short=SITE_TITLE[:12],
         ))
+
+def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
+    os.makedirs(DOCS_DIR, exist_ok=True)
+    posts = []
+    if os.path.exists(POSTS_JSON):
+        with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
+    posts.insert(0, new_post)
+    with open(POSTS_JSON, "w", encoding="utf-8") as f: json.dump(posts, f, ensure_ascii=False, indent=2)
+    render_index_html(posts)
     return posts
 
 def generate_static_pages() -> None:
@@ -2439,10 +2444,18 @@ def _extract_expression_from_title(title: str, strict: bool = False) -> str:
     """
     if not title:
         return ""
+    # 1순위: 따옴표 바로 안쪽이 한글로 시작해서 한글로 끝나는 가장 명확한 패턴.
+    # [FIX] "Beyond 'If It's Okay': Unpacking '괜찮으시면' in Korean"처럼 영어 축약형의
+    # 어퍼스트로피(It's)가 따옴표 쌍 매칭을 앞에서 깨뜨리는 문제가 있었다. 한글 경계를
+    # 직접 기준으로 삼으면 이런 축약형은애초에 후보가 되지 않아 안전하게 건너뛴다.
+    m = re.search(r'["\']([가-힣][가-힣\s]{0,18})["\']', title)
+    if m:
+        return m.group(1).strip()
+    # 2순위: 따옴표 안에 로마자 표기가 뒤섞인 경우 - 따옴표 쌍 후보를 모은 뒤 앞쪽 한글만 추출
     for cand in re.findall(r'["\']([^"\']{1,40})["\']', title):
-        m = re.match(r'([가-힣][가-힣\s]*)', cand.strip())
-        if m and m.group(1).strip():
-            return m.group(1).strip()
+        mm = re.match(r'([가-힣][가-힣\s]*)', cand.strip())
+        if mm and mm.group(1).strip():
+            return mm.group(1).strip()
     m = re.search(r'\(([가-힣][가-힣\s]{0,18})\)', title)
     if m:
         return m.group(1).strip()
@@ -2465,17 +2478,29 @@ def repair_old_posts() -> None:
 
     fixed_thumbs = 0
     fixed_buttons = 0
-    skipped_other_niche = 0
+    deleted_other_niche = 0
     skipped_no_expression = 0
+    kept_posts = []
     for p in posts:
         title = p.get("title", "")
         category = p.get("category", "번역감정")
-        # [FIX] 예전(재테크/여행 등 다른 주제) 블로그 시절 글은 현재 4개 카테고리
+        # [FIX→개편] 예전(재테크/여행 등 다른 주제) 블로그 시절 글은 현재 4개 카테고리
         # (번역감정/일상표현/한국문화/리액션)에 속하지 않으므로 "표현" 개념 자체가 없다.
-        # 이런 글까지 표현 추출을 시도하며 경고 로그를 도배하지 않도록 조용히 건너뛴다.
+        # 더 이상 건너뛰기만 하지 않고, 실제로 삭제한다 (본문 HTML/썸네일 파일 + posts.json 항목).
         if category not in CATEGORY_THEMES:
-            skipped_other_niche += 1
+            deleted_other_niche += 1
+            for rel_path in (p.get("file"), p.get("thumb")):
+                if not rel_path:
+                    continue
+                full_path = os.path.join(DOCS_DIR, rel_path)
+                try:
+                    if os.path.exists(full_path):
+                        os.remove(full_path)
+                except Exception as e:
+                    logger.warning(f"[복구] 다른 주제 글 파일 삭제 실패({rel_path}): {e}")
             continue
+        kept_posts.append(p)
+
         theme = get_theme(category)
         expression = _extract_expression_from_title(title, strict=True)
         if not expression:
@@ -2516,9 +2541,16 @@ def repair_old_posts() -> None:
             except Exception as e:
                 logger.warning(f"[복구] 발음버튼 패치 실패({title}): {e}")
 
+    # [NEW] 다른 주제 글을 실제로 삭제했으므로, posts.json/index.html/sitemap을
+    # 남은 글(kept_posts) 기준으로 다시 써서 목록에서도 완전히 사라지게 한다.
+    with open(POSTS_JSON, "w", encoding="utf-8") as f:
+        json.dump(kept_posts, f, ensure_ascii=False, indent=2)
+    render_index_html(kept_posts)
+    update_seo_files(kept_posts)
+
     logger.info(
-        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 발음버튼 {fixed_buttons}개 패치 "
-        f"(다른 주제 글 {skipped_other_niche}개, 표현 추출 실패 {skipped_no_expression}개 건너뜀)"
+        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 발음버튼 {fixed_buttons}개 패치, "
+        f"다른 주제 글 {deleted_other_niche}개 삭제 (표현 추출 실패 {skipped_no_expression}개는 그대로 둠)"
     )
 
     # 3) Blogger는 제목 매칭으로 최선을 다해 복구 (실패해도 전체 복구는 계속 진행)
@@ -2533,7 +2565,7 @@ def repair_old_posts() -> None:
             )
             resp.raise_for_status()
             blogger_posts = resp.json().get("items", [])
-            local_titles = {p.get("title", ""): p for p in posts}
+            local_titles = {p.get("title", ""): p for p in kept_posts}
             blogger_fixed = 0
             for bp in blogger_posts:
                 local = local_titles.get(bp.get("title", ""))
