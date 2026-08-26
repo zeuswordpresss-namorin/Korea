@@ -2565,17 +2565,36 @@ def repair_old_posts() -> None:
             )
             resp.raise_for_status()
             blogger_posts = resp.json().get("items", [])
-            local_titles = {p.get("title", ""): p for p in kept_posts}
+            # [FIX] Blogger가 제목의 따옴표를 스마트 따옴표(" " / ' ')로 자동 변환하거나
+            # 앞뒤 공백을 바꾸는 경우가 있어, 완전히 동일한 문자열이어야 매칭되는 dict 방식은
+            # 계속 0건으로 실패했을 가능성이 높다. 양쪽 다 정규화(따옴표 통일+공백 제거) 후 비교한다.
+            def _normalize_title(t: str) -> str:
+                t = (t or "").strip()
+                for a, b in [("\u201c", '"'), ("\u201d", '"'), ("\u2018", "'"), ("\u2019", "'")]:
+                    t = t.replace(a, b)
+                return t
+
+            local_titles = {_normalize_title(p.get("title", "")): p for p in kept_posts}
+            logger.info(f"[복구] Blogger에서 글 {len(blogger_posts)}개 조회됨, 로컬 글 {len(local_titles)}개와 제목 매칭 시도")
+
             blogger_fixed = 0
+            matched = 0
+            already_has_button = 0
+            no_expression = 0
+            no_img_tag = 0
             for bp in blogger_posts:
-                local = local_titles.get(bp.get("title", ""))
+                local = local_titles.get(_normalize_title(bp.get("title", "")))
                 if not local:
                     continue
+                matched += 1
                 content = bp.get("content", "")
                 if "playKoreanTTS" in content:
+                    already_has_button += 1
                     continue
                 expression = _extract_expression_from_title(bp.get("title", ""), strict=True)
                 if not expression:
+                    no_expression += 1
+                    logger.warning(f"[복구] Blogger 글 표현 추출 실패: {bp.get('title')}")
                     continue
                 theme = get_theme(local.get("category", "번역감정"))
                 btn_html = _tts_buttons_html(expression, theme)
@@ -2584,6 +2603,8 @@ def repair_old_posts() -> None:
                     lambda m: m.group(1) + btn_html, content, count=1,
                 )
                 if new_content == content:
+                    no_img_tag += 1
+                    logger.warning(f"[복구] Blogger 글에서 <img> 태그를 못 찾아 버튼을 못 넣었습니다: {bp.get('title')}")
                     continue
                 upd = requests.put(
                     f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
@@ -2595,7 +2616,10 @@ def repair_old_posts() -> None:
                     blogger_fixed += 1
                 else:
                     logger.warning(f"[복구] Blogger 글 패치 실패({bp.get('title')}): HTTP {upd.status_code}")
-            logger.info(f"[복구] Blogger 완료 — {blogger_fixed}개 글 발음버튼 패치")
+            logger.info(
+                f"[복구] Blogger 완료 — 매칭 {matched}개 중 {blogger_fixed}개 패치 "
+                f"(이미 버튼 있음 {already_has_button}개, 표현 추출 실패 {no_expression}개, img 태그 없음 {no_img_tag}개)"
+            )
         except Exception as e:
             logger.warning(f"[복구] Blogger 복구 중 오류(건너뜀): {e}")
     else:
