@@ -12,6 +12,7 @@ GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립
 import base64
 import hashlib
 import hmac
+import html
 import io
 import json
 import logging
@@ -700,7 +701,7 @@ POST_TEMPLATE = """<!DOCTYPE html>
 {decor_html}
 <div class="content">
 <a class="back" href="../index.html">← 목록으로</a>
-<div class="hero"><img id="heroThumb" src="../thumbs/{thumb_filename}" alt="{title}" loading="eager" fetchpriority="high" onerror="_retryHeroImage(this)">{hero_tts_html}</div>
+<div class="hero"><img id="heroThumb" src="../thumbs/{thumb_filename}" alt="{title_escaped}" loading="eager" fetchpriority="high" onerror="_retryHeroImage(this)">{hero_tts_html}</div>
 <span class="badge">{badge}</span>
 <h1>{title}</h1>
 <p class="meta">{date}</p>
@@ -1758,7 +1759,7 @@ def _build_related_html(exclude_slug: str) -> str:
     posts = [p for p in posts if p.get("file") != exclude_slug][:3]
     if not posts: return ""
     cards = "\n".join(
-        f'<a class="related-card" href="../{p["file"]}"><img src="../{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
+        f'<a class="related-card" href="../{p["file"]}"><img src="../{p["thumb"]}" alt="{html.escape(p["title"], quote=True)}" loading="lazy">'
         f'<span>{p["title"]}</span></a>' for p in posts
     )
     return f'<div class="related"><h3>📌 함께 보면 좋은 글</h3><div class="related-grid">{cards}</div></div>'
@@ -1795,11 +1796,17 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     post_url = f"{SITE_URL}/posts/{post_filename}" if SITE_URL else f"posts/{post_filename}"
     thumb_url = f"{SITE_URL}/thumbs/{thumb_filename}" if SITE_URL else f"../thumbs/{thumb_filename}"
     title = article["title"]
+    # [FIX] 제목에 쌍따옴표가 포함되면(예: Why "정" Has No...) alt="{title}" 속성이 그 따옴표에서
+    # 조기 종료되어 HTML이 깨지는 버그가 있었다 (실제 발행된 글에서 alt 텍스트 잘림 확인됨).
+    # 아래에서 html.escape()로 미리 이스케이프해둔다 — 이 함수 뒤쪽에서 'html' 이름을
+    # POST_TEMPLATE 렌더링 결과(지역변수)로 재사용하므로, 표준 라이브러리 html 모듈 호출은 반드시 여기서 끝낸다.
+    title_escaped = html.escape(title, quote=True)
     json_ld = build_json_ld(article, post_url, thumb_url, today)
     
-    html = POST_TEMPLATE.format(
+    page_html = POST_TEMPLATE.format(
         hero_tts_html=_tts_buttons_html(article.get("expression", ""), theme),
         title=title,
+        title_escaped=title_escaped,
         meta_description=article.get("meta_description", ""),
         date=today,
         html_body=article["html_body"],
@@ -1824,7 +1831,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         site_title=SITE_TITLE,
     )
     with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(page_html)
         
     post_meta = {
         "title": title, "file": f"posts/{post_filename}", "thumb": f"thumbs/{thumb_filename}",
@@ -1843,14 +1850,14 @@ def render_index_html(posts: List[Dict[str, Any]]) -> None:
         p = hero_posts[0]
         hero_html = (
             '<div class="tier-label">🔥 최신 이야기</div>'
-            f'<a class="hero" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="eager" fetchpriority="high">'
+            f'<a class="hero" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{html.escape(p["title"], quote=True)}" loading="eager" fetchpriority="high">'
             f'<div class="hero-body"><span class="hero-badge" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="hero-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>'
         )
     mid_html = ""
     if mid_posts:
         cards = "\n".join(
-            f'<a class="mid-card" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
+            f'<a class="mid-card" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{html.escape(p["title"], quote=True)}" loading="lazy">'
             f'<div class="mid-body"><span class="badge-sm" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="mid-title">{p["title"]}</div><div class="date">{p["date"]}</div></div></a>' for p in mid_posts
         )
@@ -1858,7 +1865,7 @@ def render_index_html(posts: List[Dict[str, Any]]) -> None:
     bottom_html = ""
     if bottom_posts:
         cards = "\n".join(
-            f'<a class="bottom-card" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{p["title"]}" loading="lazy">'
+            f'<a class="bottom-card" data-category="{p.get("category", "")}" href="{p["file"]}"><img src="{p["thumb"]}" alt="{html.escape(p["title"], quote=True)}" loading="lazy">'
             f'<div class="bottom-body"><span class="badge-sm" style="background:{p.get("accent", "#e95c84")}">{p.get("badge", "💗 번역이 안 되는 감정")}</span>'
             f'<div class="bottom-title">{p["title"]}</div></div></a>' for p in bottom_posts
         )
@@ -2160,7 +2167,7 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         content_html = (
             f'{_translate_widget()}'
             f'<div style="position:relative;margin:0;">'
-            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{article["title"]}" onerror="_retryHeroImage(this)">'
+            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{html.escape(article["title"], quote=True)}" onerror="_retryHeroImage(this)">'
             f'{_tts_buttons_html(article.get("expression", ""), theme)}'
             f'</div>'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
@@ -2279,7 +2286,7 @@ def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_th
     safe_body = _replace_thumbs_with_wordpress_media(article["html_body"], site, access_token)
 
     hero_html = (
-        (f'<img src="{thumb_hosted_url}" alt="{article["title"]}" width="1280" height="720" /><br>' if thumb_hosted_url else "")
+        (f'<img src="{thumb_hosted_url}" alt="{html.escape(article["title"], quote=True)}" width="1280" height="720" /><br>' if thumb_hosted_url else "")
         + f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
         f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
     )
