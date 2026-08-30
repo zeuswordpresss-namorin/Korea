@@ -4,8 +4,10 @@ GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립
 
 [전면 개편] "한국어를 배우면 한국인이 보인다" - 외국인 대상 한국어 표현·한국인 사고방식 블로그
 - 주인공은 단어가 아니라 한국인의 사고방식과 문화 (번역이 어려운 감정 / 매일 쓰는 말 / 한국 문화 / 리액션)
-- 매 글 고정 5단 템플릿 사용: 오늘의 표현 -> 왜 직역이 안 될까 -> 한국인은 언제 쓸까 -> 문화 이야기 -> 참여형 질문
-- 에버그린 주제 뱅크(100개 표현/문화 주제, 4개 카테고리 요일별 로테이션) 기반, 하루 6회 발행 상한
+- H.O.L.D. 내러티브(Hook → Obstacle → Loop → Deliver)로 읽히게 하되, 소제목·순서·훅 스타일을 매 글마다 무작위로 변주
+  (고정 5단 문구/순서 반복을 피해서 AdSense "패턴화된 AI 대량생산" 리스크를 낮춤)
+- 문화 섹션은 무출처 단정 표현을 완화 ("~인 경우가 많다", "많은 한국인에게 ~로 느껴진다" 등)
+- 에버그린 주제 뱅크(100개 표현/문화 주제, 4개 카테고리 요일별 로테이션) 기반, 하루 발행 상한
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 """
 
@@ -131,32 +133,49 @@ GEMINI_URL = (
     "gemini-2.5-flash:generateContent?key={api_key}"
 )
 
-# [전면 개편] "한국어를 배우면 한국인이 보인다" - 고정 5단 템플릿 기반 한국어 표현/문화 콘텐츠
+# [전면 개편 + H.O.L.D. 업그레이드] 고정 5단 문구/순서 금지 → 매 글 변주 + 스토리텔링 구조
 SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방식을 설명하는 전문 에디터입니다.
 이 블로그의 콘셉트는 "한국어를 배우면 한국인이 보인다"입니다. 주인공은 단어가 아니라, 그 단어 뒤에 숨은 한국인의 사고방식과 문화입니다.
 독자는 한국어를 배우는 외국인이며, 사전적 정의가 아니라 "왜 이 표현이 그 나라 말로는 설명이 안 되는지", "실제 한국인은 언제 이 말을 쓰는지"를 궁금해합니다.
 
-[필수 포맷 구조 — 반드시 이 5단 구성과 순서를 그대로 지켜서 html_body를 작성한다]
-1. 오늘의 표현 — [훅으로 시작] 표현/뜻을 바로 나열하지 말고, 독자가 실제로 겪어봤을 법한 구체적 순간이나 짧은 질문 1문장으로 먼저 시작해 "어, 이거 나도 겪어본 상황인데"라는 반응이 나오게 한다. 그다음에 표현(한국어 원문), 뜻(간결한 설명), 사용 맥락(누구에게/어떤 상황에 쓰는지)을 정리한다.
-2. 왜 영어로 직역이 안 될까? — 영어(또는 다른 언어)의 가장 가까운 단어를 대며, 그 단어로는 못 담아내는 한국인만의 뉘앙스를 설명
-3. 한국인은 어떤 상황에서 쓸까? — 실제 대화체에 가까운 일상 예시 1~2개 (누가, 어떤 상황에서, 어떤 말투로 썼는지)
-4. 문화 이야기 — 이 표현이 한국 사회/관계 맺는 방식과 어떻게 연결되는지, 배경과 맥락을 짧게
-5. 여러분의 언어에서는 어떤가요? — [댓글 전환율을 높이는 CTA] 너무 막연하고 넓은 질문("어떻게 생각하세요?") 대신, 구체적이고 답하기 쉬운 질문 1~2개로 마무리한다. "여러분의 언어에도 이런 단어가 있나요?"보다 "이 감정을 한 단어로 뭐라고 부르시나요?"처럼, 딱 한 가지만 떠올리면 바로 댓글을 달 수 있는 질문이 좋다.
+[H.O.L.D. 내러티브 — 글 전체 흐름에 반드시 녹여라]
+글은 단순한 정보 나열이 아니라 짧은 스토리처럼 읽혀야 한다. 다음 4단계를 본문 흐름에 자연스럽게 반영한다.
+- H (HOOK): 첫 1~2문장에서 독자가 "멈출 이유"를 준다. 표현 뜻을 바로 나열하지 말고, 독자가 겪어봤을 법한 구체적 순간·짧은 장면·질문으로 시작한다. (예: 막연한 "작년에 차를 사고 싶었다" 대신 "첫 차를 사려고 2년을 모았다"처럼 그 사람에게 중요한 일로 느끼게 한다.)
+- O (OBSTACLE): 중간에 "문제/긴장"을 넣는다. 직역이 안 되는 이유, 오해하기 쉬운 뉘앙스, 외국인이 실제로 겪는 당황·오역 순간 등. 독자가 "그래서 어떻게 되지?"라고 궁금하게 만든다.
+- L (LOOP): 바로 답을 주지 말고, 두 가지 결말(이해하느냐 / 계속 오해하느냐, 또는 쓸 수 있느냐 / 어색해지느냐) 사이에 잠시 머무르게 한다. "그는 결국 차를 살까요?"처럼 열린 질문을 한 번 심어두어 다음 단락이 궁금하게 만든다.
+- D (DELIVER): 독자가 기다리던 핵심(표현의 진짜 뉘앙스 + 실제 사용법 + 작은 감정적 보상)을 준다. "끝까지 본 게 아깝지 않게" 정리하고, 구체적·답하기 쉬운 참여 질문으로 끝낸다.
+
+[콘텐츠 5개 기둥 — 반드시 모두 다루되, 소제목 문구·순서·개수는 매 글마다 변주한다]
+아래 5가지 내용을 글 안에 빠짐없이 담는다. 다만 H2 소제목 문구와 순서는 고정하지 않는다. 매 글마다 아래 후보 중에서 골라 섞거나 직접 비슷한 톤으로 새로 만들어, "패턴화된 동일 템플릿"이 되지 않게 한다.
+1) 표현 소개 + 훅: 한국어 원문, 간결한 뜻, 누구에게/어떤 상황에서 쓰는지. 반드시 훅으로 연다.
+2) 직역이 안 되는 이유: 영어(또는 다른 언어)의 가장 가까운 단어와 비교하고, 그 단어가 못 담는 한국인만의 뉘앙스를 설명한다. 표현의 한국어 원문을 최소 1회 <strong>으로 강조한다.
+3) 실제 사용 장면: 대화체에 가까운 일상 예시 1~2개 (누가, 어떤 상황에서, 어떤 말투로). 가능하면 <ul><li>로 정리한다.
+4) 문화/관계 맥락: 이 표현이 한국 사회·관계 맺는 방식과 어떻게 연결되는지. [중요 — 단정 완화] "한국인은 항상 ~한다", "한국 문화에서는 ~이다"처럼 무출처·절대적 단정을 쓰지 않는다. "~인 경우가 많다", "많은 한국인에게 ~로 느껴진다", "흔히 관찰되는 경향이다", "한 가지 배경으로 자주 언급된다"처럼 완화된 표현을 쓴다.
+5) 참여형 클로징: 막연한 "어떻게 생각하세요?" 대신, 한 가지만 떠올리면 바로 답할 수 있는 구체적 질문 1~2개.
+
+H2 소제목 변주 예시 (그대로 복사하지 말고, 비슷한 다양성으로 매번 새로 고른다):
+- 표현 소개: "이 말 한 마디에 담긴 것", "오늘 파헤쳐 볼 표현", "한 단어로 설명이 안 되는 그 감정", "먼저 이 상황부터"
+- 직역 불가: "왜 영어로는 이 맛이 안 날까", "가장 가까운 영어 단어의 한계", "번역기가 놓치는 뉘앙스", "직역하면 어색해지는 이유"
+- 사용 장면: "실제로는 이럴 때 쓴다", "대화 속에서 어떻게 나오는지", "한국인이 이 말을 꺼내는 순간", "말투와 상황 예시"
+- 문화 맥락: "이 표현 뒤에 있는 관계의 결", "한 가지 배경으로 자주 이야기되는 것", "사회·관계와 맞닿는 지점", "왜 이 말이 자주 쓰이는지"
+- 참여: "당신의 언어에서는?", "비슷한 말이 있나요?", "한 단어로 뭐라고 부르시나요?", "이런 순간, 당신은 뭐라고 말하나요?"
+
+섹션 순서는 고정하지 않는다. 예: 훅→직역 문제→사용 예시→문화→참여 / 훅→사용 예시→직역 문제→문화→참여 / 훅→문화 긴장→직역→사용→참여 등. 다만 글 앞부분에 훅이, 맨 끝에 참여 질문이 오는 흐름은 유지한다. H2는 4~6개 사이로 자연스럽게 나눈다.
 
 아래 규칙을 지켜 작성하세요:
-1. [클릭을 부르는 제목 — 매우 중요] 상위 1% 콘텐츠의 제목은 항상 호기심 갭(curiosity gap)과 명확한 이익 약속을 동시에 가진다. "이 표현을 모르면 어떤 뉘앙스를 놓치는지" 또는 "이 표현을 알면 한국인의 무엇을 이해하게 되는지"가 제목만 보고도 느껴져야 한다. 영어 검색 키워드형으로 작성하되 (예: "Why "정(Jeong)" Has No English Equivalent", "The Real Meaning of "눈치" (Nunchi)", "Why Koreans Say "수고했어요" So Often"), "Has No English Equivalent", "The Real Meaning of", "Why Koreans Say/Never/Always" 같은 궁금증 유발 어구를 적극 활용한다. 표현의 한국어 원문을 반드시 제목에 쌍따옴표(" ")로 감싸 포함시키고, 25~55자 내외로 작성한다.
-1-1. meta_description은 검색결과 스니펫에 노출되는 요약문이다. 표현을 앞부분에 배치하고, "이 표현의 뜻과 왜 번역이 안 되는지를 알 수 있다"는 점이 드러나게 100~140자 내외로 작성한다.
-2. 소제목(H2)은 정확히 위 5단 구조(오늘의 표현 / 왜 영어로 직역이 안 될까? / 한국인은 어떤 상황에서 쓸까? / 문화 이야기 / 여러분의 언어에서는 어떤가요?)를 그대로 사용한다. 순서와 문구를 임의로 바꾸지 않는다.
-3. [문체/가독성 — 매우 중요] 다음 AI 특유의 어색한 말투를 피한다:
+1. [클릭을 부르는 제목 — 매우 중요] 호기심 갭과 명확한 이익 약속을 동시에 가진다. 영어 검색 키워드형으로 작성하되 (예: "Why \\"정(Jeong)\\" Has No English Equivalent", "The Real Meaning of \\"눈치\\" (Nunchi)", "Why Koreans Say \\"수고했어요\\" So Often"), "Has No English Equivalent", "The Real Meaning of", "Why Koreans Say/Never/Always" 같은 궁금증 유발 어구를 활용한다. 표현의 한국어 원문을 반드시 제목에 쌍따옴표(" ")로 감싸 포함시키고, 25~55자 내외로 작성한다.
+1-1. meta_description은 검색결과 스니펫용 요약이다. 표현을 앞부분에 두고, 뜻과 번역이 안 되는 이유를 알 수 있다는 점이 드러나게 100~140자 내외로 작성한다.
+2. 소제목(H2) 문구와 순서는 위 변주 규칙을 따른다. 이전 글과 동일한 5개 고정 문구("오늘의 표현" / "왜 영어로 직역이 안 될까?" / "한국인은 어떤 상황에서 쓸까?" / "문화 이야기" / "여러분의 언어에서는 어떤가요?")를 그대로 반복하지 않는다.
+3. [문체/가독성 — 매우 중요] AI 특유의 어색한 말투를 피한다:
    - 모든 문단을 "~일까요?", "~습니다!" 같은 같은 패턴으로 끝맺지 말고 평서문/의문문/짧은 문장을 자연스럽게 섞는다.
    - 같은 내용을 표현만 바꿔 반복하지 않는다(패딩 금지). 한 문단에서 한 이야기를 하면 다음 문단은 반드시 새로운 정보로 넘어간다.
    - "정말", "충격적인", "놀라운" 같은 과장 수식어는 글 전체에서 1~2회 이하로 아껴 쓴다.
    - 문단은 2~4문장, 대략 60~90자 내외로 짧게 끊어 모바일 가독성을 높인다.
    - 친한 친구에게 설명하듯 구체적 사례·대화 예시 위주로 쓰고, 막연한 감탄으로 문단을 채우지 않는다.
-4. [친근한 톤앤매너] 전체적으로 친근하고 공감대를 형성하는 어조를 유지한다. 독자를 "여러분"으로 자연스럽게 지칭하며, 딱딱한 설명체가 아니라 대화하듯 풀어쓴다.
-5. 글자 수는 900~1400자 내외 (모바일에서 가볍게 읽히는 짧은 분량을 지향한다).
-6. "왜 영어로 직역이 안 될까?" 섹션에는 표현의 한국어 원문을 최소 1회 굵게(strong) 강조한다.
-7. "한국인은 어떤 상황에서 쓸까?" 섹션은 <ul> 목록으로 예시 1~2개를 정리한다.
+4. [친근한 톤앤매너] 친근하고 공감대를 형성하는 어조. 독자를 "여러분"으로 자연스럽게 지칭하며 대화하듯 풀어쓴다.
+5. 글자 수는 900~1400자 내외 (모바일에서 가볍게 읽히는 짧은 분량).
+6. 직역 불가 설명 구간에 표현의 한국어 원문을 최소 1회 <strong>으로 강조한다.
+7. 사용 예시 구간은 가능하면 <ul> 목록으로 1~2개를 정리한다.
 8. schema_type은 항상 "Article"로 고정한다. faq_items와 howto_steps는 항상 빈 배열로 둔다.
 9. 제목/키워드를 보고 카테고리 중 가장 알맞은 것 하나를 "category"에 고른다: ["번역감정", "일상표현", "한국문화", "리액션"]
    - 번역감정: 정, 눈치, 아쉽다처럼 영어로 옮기기 어려운 감정·정서 단어
@@ -168,7 +187,7 @@ SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방
    [매우 중요] 한국어 표현을 그대로 번역하지 말 것. 스톡사진 사이트에는 한국 특유의 단어를 나타내는 사진이 없으므로,
    그 감정/상황이 드러나는 사람들의 모습을 보편적인 영어로 묘사한다. (예: 표현이 "눈치"라면
    "friends reading social cues" 처럼, 표현이 "정"이라면 "close friends warm moment" 처럼 실제 촬영 가능한 보편적 장면으로 변환한다.)
-12. "expression"에는 "오늘의 표현"에서 다루는 한국어 표현의 순수 원문만 담는다. 설명·이모지·괄호 없이 단어/구절 그대로. (예: "민망하다", "정", "수고했어요")
+12. "expression"에는 다루는 한국어 표현의 순수 원문만 담는다. 설명·이모지·괄호 없이 단어/구절 그대로. (예: "민망하다", "정", "수고했어요")
 13. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
 {
   "title": "...",
@@ -183,7 +202,7 @@ SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방
   "image_keywords": "영어 스톡사진 검색어 2~4단어",
   "expression": "표현의 한국어 원문만"
 }
-html_body는 5단 구조를 <h2>, <p>, <ul>, <strong> 등을 사용한 HTML 조각으로 작성한다."""
+html_body는 <h2>, <p>, <ul>, <strong> 등을 사용한 HTML 조각으로 작성한다. H2 문구·순서는 매 글 변주한다."""
 
 CATEGORY_THEMES = {
     # --- [전면 개편] "한국어를 배우면 한국인이 보인다" 4대 카테고리 ---
@@ -246,7 +265,7 @@ STOCK_SEARCH_TERMS = {
 # [전면 개편] 에버그린 주제 뱅크 (100개) + 큐 관리
 # - "한국어를 배우면 한국인이 보인다" 콘셉트에 맞춰 4대 카테고리(번역감정/일상표현/한국문화/리액션)
 #   각 25개씩 총 100개 주제로 구성. 각 항목은 EVERGREEN_TOPIC_BANK의 "주제(한국어 표현/문화 키워드)"이며,
-#   실제 제목·본문은 SYSTEM_PROMPT의 5단 템플릿에 따라 생성됩니다.
+#   실제 제목·본문은 SYSTEM_PROMPT의 H.O.L.D. + 변주 가능 5개 기둥에 따라 생성됩니다.
 # - CATEGORY_WEIGHT: 4개 카테고리를 균등하게 순환시켜 특정 카테고리로 편중되지 않게 합니다.
 # =====================================================================
 EVERGREEN_TOPIC_BANK: Dict[str, List[str]] = {
@@ -984,7 +1003,7 @@ def generate_article(title: str) -> Dict[str, Any]:
     url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": f"오늘 날짜: {datetime.now().strftime('%Y년 %m월 %d일')}\n\n주제: '{title}'\n\n이 주제에 대해 검색으로 찾아온 독자가 실제로 궁금해할 조건·절차·비교·주의사항을 중심으로, 정확하고 실용적인 가이드형 블로그 글을 작성해주세요. 확실하지 않은 정보는 단정하지 말고, 공식 기관 확인이 필요한 내용은 그렇게 안내해주세요. 시점을 언급할 때는 반드시 위에 적힌 '오늘 날짜'를 기준으로 하고, 이보다 오래된 연도를 임의로 쓰지 마세요."}]}],
+        "contents": [{"role": "user", "parts": [{"text": f"오늘 날짜: {datetime.now().strftime('%Y년 %m월 %d일')}\n\n주제: '{title}'\n\n이 한국어 표현/문화 주제에 대해, H.O.L.D. 흐름(훅→긴장→열린 궁금증→핵심 전달)을 살려 외국인 학습자가 끝까지 읽고 싶어하는 글을 작성해주세요. 소제목(H2) 문구와 순서는 매 글마다 변주하고, 문화 설명은 무출처 절대 단정을 피하세요. 시점을 언급할 때는 반드시 위에 적힌 '오늘 날짜'를 기준으로 하세요."}]}],
         # [FIX] JSON 파싱 실패를 줄이기 위해 순수 JSON 출력을 강제하고 출력 토큰 한도를 명시적으로 늘림
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -1625,9 +1644,9 @@ def insert_content_image(article: Dict[str, Any], slug: str) -> Dict[str, Any]:
     return article
 
 # =====================================================================
-# [전면 개편] 5단 웹툰 방식 — 블로그 전체 스타일 구조 변경
-# 오늘의 표현/왜 직역이 안될까/한국인은 언제 쓸까/문화 이야기/참여형 질문, 5개 h2 섹션을
-# 각각 만화 컷(패널)처럼 감싼다. 인라인 스타일만 사용해 GitHub Pages·Blogger 어디서나 동일하게 보인다.
+# [전면 개편 + H.O.L.D.] 웹툰 패널 — H2 개수/문구가 매 글 변주되어도 동작
+# 각 <h2> 섹션을 만화 컷(패널)처럼 감싼다. 인라인 스타일만 사용해 GitHub Pages·Blogger 어디서나 동일하게 보인다.
+# 마지막 패널은 참여 클로징으로 보고 accent 배경으로 강조한다.
 # =====================================================================
 def _wrap_webtoon_panels(html_body: str, theme: Dict[str, Any]) -> str:
     accent_rgb = _hex_to_rgb(theme["accent"])
@@ -1640,8 +1659,7 @@ def _wrap_webtoon_panels(html_body: str, theme: Dict[str, Any]) -> str:
     panels = []
     for i, section in enumerate(sections, start=1):
         is_last = (i == total)
-        # 마지막 패널("여러분의 언어에서는 어떤가요?")은 참여를 유도하는 클로징 컷이라
-        # 배경을 accent 색으로 꽉 채워 톤을 확실히 바꾼다 (웹툰 마지막 컷 강조 효과)
+        # 마지막 패널은 참여 유도 클로징 컷 → accent 배경으로 톤을 바꾼다
         if is_last:
             bg = theme["accent"]
             text_color = "#ffffff"
@@ -1654,7 +1672,7 @@ def _wrap_webtoon_panels(html_body: str, theme: Dict[str, Any]) -> str:
             border = f"1px solid rgba({accent_rgb[0]},{accent_rgb[1]},{accent_rgb[2]},0.28)"
 
         # h2는 패널 자체가 이미 배경/테두리를 갖고 있으므로, 기존 h2의 배경 그라데이션·좌측 보더를
-        # 인라인 스타일로 덮어써 이중으로 겹쳐 보이지 않게 한다. (Blogger/워드프레스는 외부 CSS가
+        # 인라인 스타일로 덮어써 이중으로 겹쳐 보이지 않게 한다. (Blogger 등은 외부 CSS가
         # 적용되지 않으므로 인라인 스타일이어야 어느 플랫폼에서나 동일하게 보임)
         section = re.sub(
             r"^<h2>(.*?)</h2>",
@@ -1665,8 +1683,8 @@ def _wrap_webtoon_panels(html_body: str, theme: Dict[str, Any]) -> str:
             section, count=1, flags=re.DOTALL,
         )
 
-        # 대화 예시 목록("한국인은 어떤 상황에서 쓸까?" 섹션)만 말풍선 카드로 스타일링
-        if "어떤 상황에서" in section:
+        # 사용 예시 목록이 있는 섹션이면 말풍선 카드로 스타일링 (소제목 문구와 무관하게 <ul><li> 존재 여부로 판단)
+        if re.search(r"<ul[\s>]", section) and re.search(r"<li[\s>]", section):
             section = re.sub(
                 r"<li>(.*?)</li>",
                 lambda m: (
@@ -1691,18 +1709,6 @@ def _wrap_webtoon_panels(html_body: str, theme: Dict[str, Any]) -> str:
     connector = f'<div style="width:2px;height:16px;background:rgba({accent_rgb[0]},{accent_rgb[1]},{accent_rgb[2]},0.35);margin:-14px auto 0;"></div>'
     return connector.join(panels)
 
-
-    prompt = f"minimalist pencil sketch icon of {product_name}, single centered object, clean line art, simple outline, white background, no text, no watermark"
-    url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={size[0]}&height={size[1]}&seed={seed}&nologo=true"
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        if img.size != size: img = img.resize(size)
-        return img
-    except Exception as e:
-        logger.warning(f"[상품 아이콘] 생성 실패, 아이콘 없이 표시: {e}")
-        return None
 
 def build_product_list_html(article: Dict[str, Any], slug: str, accent: str) -> str:
     products = article.get("product_list") or []
@@ -2496,9 +2502,112 @@ def _extract_expression_from_title(title: str, strict: bool = False) -> str:
     m = re.search(r'([가-힣]{1,20})', title)
     return m.group(1).strip() if m else ""
 
+
 # =====================================================================
-# [NEW] 이전 글 자동 복구 — expression 누락으로 텍스트/발음버튼이 빠진 과거 글들을 일괄 수정
-# GitHub Pages(로컬 파일)는 확실하게 복구하고, Blogger는 제목 매칭으로 최선을 다해 시도한다.
+# [H.O.L.D. 리페어] 과거 글의 고정 5단 H2 문구 변주 + 문화 단정 완화
+# - 매 글마다 다른 소제목이 보이도록 title 시드 기반 결정적 변주 (재실행해도 동일)
+# - "한국인은 항상 ~" 류 무출처 단정을 완화된 표현으로 치환
+# =====================================================================
+_FIXED_H2_VARIANTS: Dict[str, List[str]] = {
+    "오늘의 표현": [
+        "이 말 한 마디에 담긴 것",
+        "오늘 파헤쳐 볼 표현",
+        "한 단어로 설명이 안 되는 그 감정",
+        "먼저 이 상황부터",
+        "이 표현, 어디서 들어보셨나요?",
+    ],
+    "왜 영어로 직역이 안 될까?": [
+        "왜 영어로는 이 맛이 안 날까",
+        "가장 가까운 영어 단어의 한계",
+        "번역기가 놓치는 뉘앙스",
+        "직역하면 어색해지는 이유",
+        "비슷한 영어 표현으로는 부족한 점",
+    ],
+    "한국인은 어떤 상황에서 쓸까?": [
+        "실제로는 이럴 때 쓴다",
+        "대화 속에서 어떻게 나오는지",
+        "한국인이 이 말을 꺼내는 순간",
+        "말투와 상황 예시",
+        "일상에서 마주치는 장면",
+    ],
+    "문화 이야기": [
+        "이 표현 뒤에 있는 관계의 결",
+        "한 가지 배경으로 자주 이야기되는 것",
+        "사회·관계와 맞닿는 지점",
+        "왜 이 말이 자주 쓰이는지",
+        "문화적 맥락을 조금 더 보면",
+    ],
+    "여러분의 언어에서는 어떤가요?": [
+        "당신의 언어에서는?",
+        "비슷한 말이 있나요?",
+        "한 단어로 뭐라고 부르시나요?",
+        "이런 순간, 당신은 뭐라고 말하나요?",
+        "한번 떠올려 보세요",
+    ],
+}
+
+
+def _pick_variant(seed: str, key: str, options: List[str]) -> str:
+    """동일 seed+key면 항상 같은 후보를 고른다 (리페어 재실행 시 소제목이 계속 바뀌지 않게)."""
+    h = int(hashlib.md5(f"{seed}::{key}".encode("utf-8")).hexdigest(), 16)
+    return options[h % len(options)]
+
+
+def _vary_fixed_h2_titles(html: str, seed: str) -> str:
+    """과거 글의 고정 5단 H2를 시드 기반 변주 문구로 교체한다. 이미 변주된 글은 그대로 둔다."""
+    if not html:
+        return html
+    out = html
+    for fixed, options in _FIXED_H2_VARIANTS.items():
+        # <h2>고정문구</h2> 또는 인라인 스타일이 붙은 h2 안 텍스트
+        pattern = re.compile(
+            r'(<h2\b[^>]*>)\s*' + re.escape(fixed) + r'\s*(</h2>)',
+            flags=re.IGNORECASE,
+        )
+        if pattern.search(out):
+            variant = _pick_variant(seed, fixed, options)
+            out = pattern.sub(rf'\1{variant}\2', out)
+    return out
+
+
+def _soften_culture_claims(html: str) -> str:
+    """문화 섹션 등에서 흔히 나오는 무출처 절대 단정을 완화된 표현으로 치환한다."""
+    if not html:
+        return html
+    replacements = [
+        (r'한국인은 항상', '많은 한국인은 종종'),
+        (r'한국인들은 항상', '많은 한국인들은 종종'),
+        (r'모든 한국인은', '많은 한국인은'),
+        (r'모든 한국인들은', '많은 한국인들은'),
+        (r'한국 문화에서는 반드시', '한국 문화에서 흔히'),
+        (r'한국 문화에서는', '한국 문화에서 흔히'),
+        (r'한국 사회에서는 반드시', '한국 사회에서 흔히'),
+        (r'한국 사회에서는', '한국 사회에서 흔히'),
+        (r'반드시 그렇게 한다', '그렇게 하는 경우가 많다'),
+        (r'절대적으로', '비교적'),
+        (r'예외 없이', '대체로'),
+        (r'언제나 그렇다', '그런 경우가 많다'),
+    ]
+    out = html
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out)
+    return out
+
+
+def _apply_hold_content_repair(html: str, seed: str) -> str:
+    """H.O.L.D. 리페어 파이프라인: H2 변주 → 문화 단정 완화."""
+    html = _vary_fixed_h2_titles(html, seed)
+    html = _soften_culture_claims(html)
+    return html
+
+
+# =====================================================================
+# [NEW + H.O.L.D.] 이전 글 자동 복구
+# - expression 누락으로 텍스트/발음버튼이 빠진 과거 글 일괄 수정
+# - 고정 5단 H2 문구를 글마다 다른 변주 소제목으로 교체 (AdSense 패턴 리스크 완화)
+# - 문화 섹션 무출처 단정 표현 완화
+# GitHub Pages(로컬 파일)는 확실하게 복구하고, Blogger는 제목 매칭 + 고아 글 H.O.L.D. 본문 패치까지 수행한다.
+# 실행: python generate_post.py repair
 # =====================================================================
 def repair_old_posts() -> None:
     if not os.path.exists(POSTS_JSON):
@@ -2576,6 +2685,9 @@ def repair_old_posts() -> None:
             try:
                 with open(post_path, "r", encoding="utf-8") as f:
                     html = f.read()
+                original_html = html
+                # [H.O.L.D. 리페어] 고정 5단 H2 변주 + 문화 단정 완화
+                html = _apply_hold_content_repair(html, title or p.get("file", ""))
                 btn_html = _tts_buttons_html(expression, theme)
                 # [FIX] 단순 "playKoreanTTS 문자열 포함 여부"만 보면, 과거 다른 방식(이미지 위
                 # 오버레이 등)으로 들어간 낡은/깨진 버튼도 "이미 있음"으로 오판해 방치하게 된다.
@@ -2592,14 +2704,16 @@ def repair_old_posts() -> None:
                         lambda m: m.group(1) + btn_html + m.group(2),
                         cleaned, count=1, flags=re.DOTALL,
                     )
-                    if new_html != html:
-                        with open(post_path, "w", encoding="utf-8") as f:
-                            f.write(new_html)
+                    if new_html != cleaned:
+                        html = new_html
                         fixed_buttons += 1
-                    else:
+                    elif btn_html and btn_html not in html:
                         logger.warning(f"[복구] 히어로 이미지 패턴을 찾지 못해 발음버튼을 못 넣었습니다: {title}")
+                if html != original_html:
+                    with open(post_path, "w", encoding="utf-8") as f:
+                        f.write(html)
             except Exception as e:
-                logger.warning(f"[복구] 발음버튼 패치 실패({title}): {e}")
+                logger.warning(f"[복구] 본문/발음버튼 패치 실패({title}): {e}")
 
     # [NEW] 다른 주제 글을 실제로 삭제했으므로, posts.json을 남은 글(kept_posts) 기준으로 다시 쓴다.
     # index.html/sitemap은 GitHub Pages를 공개 사이트로 발행할 때만 재생성한다 (지금은 Blogger 단독 발행).
@@ -2649,11 +2763,39 @@ def repair_old_posts() -> None:
             stale_button_replaced = 0
             related_link_fixed = 0
             blogger_url_bootstrapped = 0
+            hold_content_fixed = 0
+            orphan_hold_fixed = 0
             for bp in blogger_posts:
                 norm_title = _normalize_title(bp.get("title", ""))
                 local = local_titles.get(norm_title)
+                content = bp.get("content", "") or ""
+                new_content = content
+                bp_title = bp.get("title", "") or ""
+
+                # [H.O.L.D. 리페어] posts.json 매칭 여부와 무관하게, 고정 5단 H2·문화 단정이 있으면 본문 변주
+                repaired = _apply_hold_content_repair(new_content, bp_title or bp.get("id", ""))
+                if repaired != new_content:
+                    new_content = repaired
+                    if local:
+                        hold_content_fixed += 1
+                    else:
+                        orphan_hold_fixed += 1
+
                 if not local:
+                    # 매칭 안 되는 글도 H.O.L.D. 본문만 고친 뒤 필요 시 업데이트
+                    if new_content != content:
+                        upd = requests.put(
+                            f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
+                            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                            json={"title": bp["title"], "content": new_content},
+                            timeout=30,
+                        )
+                        if upd.ok:
+                            blogger_fixed += 1
+                        else:
+                            logger.warning(f"[복구] Blogger 고아 글 패치 실패({bp_title}): HTTP {upd.status_code}")
                     continue
+
                 matched += 1
 
                 # [NEW] posts.json에 이 글의 실제 Blogger 주소를 채워 넣는다 (다음 글들의
@@ -2663,25 +2805,24 @@ def repair_old_posts() -> None:
                     local["blogger_url"] = bp_url
                     blogger_url_bootstrapped += 1
 
-                expression = _extract_expression_from_title(bp.get("title", ""), strict=True)
+                expression = _extract_expression_from_title(bp_title, strict=True)
                 if not expression:
                     no_expression += 1
-                    logger.warning(f"[복구] Blogger 글 표현 추출 실패: {bp.get('title')}")
-                    continue
-                theme = get_theme(local.get("category", "번역감정"))
-                btn_html = _tts_buttons_html(expression, theme)
-                content = bp.get("content", "")
-                new_content = content
+                    logger.warning(f"[복구] Blogger 글 표현 추출 실패(본문 H.O.L.D. 패치는 계속): {bp_title}")
+                    btn_html = ""
+                else:
+                    theme = get_theme(local.get("category", "번역감정"))
+                    btn_html = _tts_buttons_html(expression, theme)
 
                 # 1) 발음 버튼 정규화: 낡거나 깨진 버튼 흔적은 지우고 최신 버튼으로 다시 넣는다
-                if not (btn_html and btn_html in new_content):
+                if btn_html and not (btn_html in new_content):
                     cleaned = re.sub(r'<button\b[^>]*playKoreanTTS.*?</button>', '', new_content, flags=re.DOTALL)
                     if cleaned != new_content:
                         stale_button_replaced += 1
                     with_btn = re.sub(r'(<img [^>]*>)', lambda m: m.group(1) + btn_html, cleaned, count=1)
                     if with_btn == cleaned:
                         no_img_tag += 1
-                        logger.warning(f"[복구] Blogger 글에서 <img> 태그를 못 찾아 버튼을 못 넣었습니다: {bp.get('title')}")
+                        logger.warning(f"[복구] Blogger 글에서 <img> 태그를 못 찾아 버튼을 못 넣었습니다: {bp_title}")
                     else:
                         new_content = with_btn
 
@@ -2718,7 +2859,7 @@ def repair_old_posts() -> None:
                 if upd.ok:
                     blogger_fixed += 1
                 else:
-                    logger.warning(f"[복구] Blogger 글 패치 실패({bp.get('title')}): HTTP {upd.status_code}")
+                    logger.warning(f"[복구] Blogger 글 패치 실패({bp_title}): HTTP {upd.status_code}")
 
             # [NEW] blogger_url이 채워진 kept_posts를 posts.json에 다시 저장 (반드시 여기서 저장해야
             # add_internal_link가 다음 글부터 이 Blogger 주소들을 관련 글 후보로 쓸 수 있다)
@@ -2727,7 +2868,8 @@ def repair_old_posts() -> None:
 
             logger.info(
                 f"[복구] Blogger 완료 — 매칭 {matched}개 중 {blogger_fixed}개 패치 "
-                f"(낡은 버튼 교체 {stale_button_replaced}개, 관련글 링크 교체 {related_link_fixed}개, "
+                f"(H.O.L.D. 본문 {hold_content_fixed}개, 고아글 H.O.L.D. {orphan_hold_fixed}개, "
+                f"낡은 버튼 교체 {stale_button_replaced}개, 관련글 링크 교체 {related_link_fixed}개, "
                 f"blogger_url 채움 {blogger_url_bootstrapped}개, 이미 최신 {already_up_to_date}개, "
                 f"표현 추출 실패 {no_expression}개, img 태그 없음 {no_img_tag}개)"
             )
