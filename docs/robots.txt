@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://zeuswordpresss-namorin.github.io/Korea/sitemap.xml
