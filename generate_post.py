@@ -2402,6 +2402,49 @@ def _blogger_site_footer_html(blog_url: str = "", page_urls: Optional[Dict[str, 
     )
 
 
+
+def _replace_policy_chrome(html_body: str, blog_url: str = "", page_urls: Optional[Dict[str, str]] = None, expression: str = "") -> str:
+    """기존 site-policy-nav / footer / reader-value 를 제거하고 올바른 URL로 다시 삽입.
+    (한 번 잘못된 /p/ 링크가 들어가면 예전 리페어는 '이미 있음'으로 건너뛰어 고치지 못했음)
+    """
+    if not html_body:
+        html_body = ""
+    page_urls = _merge_policy_page_urls(page_urls)
+    # 기존 크롬 제거 (중첩·중복 방지)
+    cleaned = re.sub(
+        r'<nav\b[^>]*class="[^"]*site-policy-nav[^"]*"[^>]*>.*?</nav>',
+        '',
+        html_body,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r'<footer\b[^>]*class="[^"]*site-policy-footer[^"]*"[^>]*>.*?</footer>',
+        '',
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r'<div\b[^>]*class="[^"]*reader-value[^"]*"[^>]*>.*?</div>',
+        '',
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # 잘못된 /p/about|/p/privacy|/p/contact 단독 링크도 교정 (크롬 밖 잔존 대비)
+    for title, url in page_urls.items():
+        if not url:
+            continue
+        cleaned = re.sub(
+            r'https?://[^\s"\']+/p/(about|privacy|privacy-policy|contact)\.html',
+            url,
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    nav = _blogger_site_nav_html(blog_url, page_urls)
+    value = _reader_value_box_html(expression)
+    foot = _blogger_site_footer_html(blog_url, page_urls)
+    return nav + value + cleaned.strip() + foot
+
+
 def _reader_value_box_html(expression: str = "") -> str:
     """본문 상단(내비 아래)에 넣는 '이 글에서 얻는 것' 박스 — 사람 편집 느낌을 보강."""
     focus = html.escape((expression or "").strip())
@@ -3215,22 +3258,19 @@ def repair_old_posts() -> None:
                     else:
                         orphan_hold_fixed += 1
 
-                # [레이아웃] 과거 글에도 About/Privacy/Contact 내비·푸터 자동 삽입
-                if "site-policy-nav" not in new_content:
-                    new_content = _blogger_site_nav_html(repair_blog_url, repair_page_urls) + new_content
-                if "site-policy-footer" not in new_content:
-                    new_content = new_content + _blogger_site_footer_html(repair_blog_url, repair_page_urls)
-                if "reader-value" not in new_content:
+                # [레이아웃] 잘못된 /p/ 링크 포함 기존 내비를 올바른 Secrets/기본 URL로 강제 교체
+                expr_for_box = ""
+                if local:
                     expr_for_box = _extract_expression_from_title(bp_title, strict=True) or ""
-                    # 내비 바로 뒤에 value box 삽입
-                    if "site-policy-nav" in new_content:
-                        new_content = new_content.replace(
-                            "</nav>",
-                            "</nav>" + _reader_value_box_html(expr_for_box),
-                            1,
-                        )
-                    else:
-                        new_content = _reader_value_box_html(expr_for_box) + new_content
+                else:
+                    expr_for_box = _extract_expression_from_title(bp_title, strict=True) or ""
+                before_chrome = new_content
+                new_content = _replace_policy_chrome(
+                    new_content, repair_blog_url, repair_page_urls, expression=expr_for_box
+                )
+                if new_content != before_chrome:
+                    # hold_content_fixed 카운트와 별도로 레이아웃 갱신으로 취급 (로그는 아래 공통)
+                    pass
 
                 if not local:
                     # 매칭 안 되는 글도 H.O.L.D. 본문만 고친 뒤 필요 시 업데이트
@@ -3311,6 +3351,41 @@ def repair_old_posts() -> None:
                     blogger_fixed += 1
                 else:
                     logger.warning(f"[복구] Blogger 글 패치 실패({bp_title}): HTTP {upd.status_code}")
+
+            # [FIX] About/Privacy/Contact 글 자체 푸터에 남아 있는 /p/ 링크를 Secrets URL로 강제 교정
+            policy_titles = {
+                "about": "About",
+                "privacy policy": "Privacy Policy",
+                "privacy": "Privacy Policy",
+                "contact": "Contact",
+            }
+            for bp in blogger_posts:
+                raw_t = (bp.get("title") or "").strip()
+                key = policy_titles.get(raw_t.lower())
+                if not key:
+                    continue
+                content = bp.get("content", "") or ""
+                fixed = _replace_policy_chrome(content, repair_blog_url, repair_page_urls, expression="")
+                # 정책 글에는 reader-value(표현 학습 박스)가 어색할 수 있어 제거
+                fixed = re.sub(
+                    r'<div\b[^>]*class="[^"]*reader-value[^"]*"[^>]*>.*?</div>',
+                    '',
+                    fixed,
+                    flags=re.DOTALL | re.IGNORECASE,
+                )
+                if fixed == content:
+                    continue
+                upd = requests.put(
+                    f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    json={"title": bp["title"], "content": fixed},
+                    timeout=30,
+                )
+                if upd.ok:
+                    blogger_fixed += 1
+                    logger.info(f"[복구] 정책 글 링크 교정: {raw_t}")
+                else:
+                    logger.warning(f"[복구] 정책 글 교정 실패({raw_t}): HTTP {upd.status_code}")
 
             # [NEW] blogger_url이 채워진 kept_posts를 posts.json에 다시 저장 (반드시 여기서 저장해야
             # add_internal_link가 다음 글부터 이 Blogger 주소들을 관련 글 후보로 쓸 수 있다)
