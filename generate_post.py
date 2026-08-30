@@ -120,6 +120,10 @@ FONT_CANDIDATES = [
 
 DOCS_DIR = "docs"
 POSTS_DIR = os.path.join(DOCS_DIR, "posts")
+# [NEW] 구글 블로그(Blogger)만 메인으로 발행하고, GitHub Pages는 이미지 호스팅(docs/thumbs)과
+# posts.json(내부 상태) 용도로만 남긴다. 개별 글 페이지·홈페이지(index.html)·sitemap.xml처럼
+# "공개 사이트"로 보일 수 있는 산출물은 더 이상 만들지 않는다 (중복 콘텐츠 방지).
+PUBLISH_GITHUB_PAGES_SITE = False
 POSTS_JSON = os.path.join(DOCS_DIR, "posts.json")
 
 GEMINI_URL = (
@@ -1498,6 +1502,9 @@ def _relevance_score(article: Dict[str, Any], candidate: Dict[str, Any]) -> floa
 def add_internal_link(article: Dict[str, Any]) -> Dict[str, Any]:
     if not os.path.exists(POSTS_JSON): return article
     with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
+    # [FIX] Blogger 단독 발행으로 전환하면서, 더 이상 존재하지 않는 GitHub Pages 글 주소
+    # 대신 실제 Blogger 주소가 있는 글만 관련 글 후보로 삼는다 (죽은 링크 방지).
+    posts = [p for p in posts if p.get("blogger_url")]
     if not posts: return article
     scored = [(p, _relevance_score(article, p)) for p in posts]
     scored.sort(key=lambda x: x[1], reverse=True)
@@ -1505,7 +1512,7 @@ def add_internal_link(article: Dict[str, Any]) -> Dict[str, Any]:
     if not top_pool: return article
     weights = [max(s, 0.5) for p, s in scored[:len(top_pool)]]
     pick = random.choices(top_pool, weights=weights, k=1)[0]
-    article["html_body"] += f'<p style="margin-top:2em;padding-top:1em;border-top:1px dashed #ddd;">🔗 이 글도 함께 보면 좋아요: <a href="../{pick["file"]}">{pick["title"]}</a></p>'
+    article["html_body"] += f'<p style="margin-top:2em;padding-top:1em;border-top:1px dashed #ddd;">🔗 이 글도 함께 보면 좋아요: <a href="{pick["blogger_url"]}">{pick["title"]}</a></p>'
     return article
 
 def _manual_ad_unit() -> str:
@@ -1802,40 +1809,42 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     # POST_TEMPLATE 렌더링 결과(지역변수)로 재사용하므로, 표준 라이브러리 html 모듈 호출은 반드시 여기서 끝낸다.
     title_escaped = html.escape(title, quote=True)
     json_ld = build_json_ld(article, post_url, thumb_url, today)
-    
-    page_html = POST_TEMPLATE.format(
-        hero_tts_html=_tts_buttons_html(article.get("expression", ""), theme),
-        title=title,
-        title_escaped=title_escaped,
-        meta_description=article.get("meta_description", ""),
-        date=today,
-        html_body=article["html_body"],
-        thumb_filename=thumb_filename,
-        canonical_url=post_url,
-        thumb_url=thumb_url,
-        json_ld=json_ld,
-        ga_snippet=_ga_snippet(),
-        adsense_snippet=_adsense_snippet(),
-        font=theme["font"],
-        font_family=_font_family_name(theme["font"]),
-        accent=theme["accent"],
-        badge=theme["badge"],
-        related_html=_build_related_html(exclude_slug=f"posts/{post_filename}"),
-        post_nav=_build_post_nav_html(),
-        decor_html=build_decor_html(theme, seed=slug),
-        bottom_ad=_manual_ad_unit(),
-        search_console_meta=_search_console_meta(),
-        translate_widget=_translate_widget(),
-        photo_credit_html=photo_credit_html,
-        site_title_short=SITE_TITLE[:12],
-        site_title=SITE_TITLE,
-    )
-    with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
-        f.write(page_html)
-        
+
+    if PUBLISH_GITHUB_PAGES_SITE:
+        page_html = POST_TEMPLATE.format(
+            hero_tts_html=_tts_buttons_html(article.get("expression", ""), theme),
+            title=title,
+            title_escaped=title_escaped,
+            meta_description=article.get("meta_description", ""),
+            date=today,
+            html_body=article["html_body"],
+            thumb_filename=thumb_filename,
+            canonical_url=post_url,
+            thumb_url=thumb_url,
+            json_ld=json_ld,
+            ga_snippet=_ga_snippet(),
+            adsense_snippet=_adsense_snippet(),
+            font=theme["font"],
+            font_family=_font_family_name(theme["font"]),
+            accent=theme["accent"],
+            badge=theme["badge"],
+            related_html=_build_related_html(exclude_slug=f"posts/{post_filename}"),
+            post_nav=_build_post_nav_html(),
+            decor_html=build_decor_html(theme, seed=slug),
+            bottom_ad=_manual_ad_unit(),
+            search_console_meta=_search_console_meta(),
+            translate_widget=_translate_widget(),
+            photo_credit_html=photo_credit_html,
+            site_title_short=SITE_TITLE[:12],
+            site_title=SITE_TITLE,
+        )
+        with open(os.path.join(POSTS_DIR, post_filename), "w", encoding="utf-8") as f:
+            f.write(page_html)
+
     post_meta = {
         "title": title, "file": f"posts/{post_filename}", "thumb": f"thumbs/{thumb_filename}",
         "date": today, "category": category, "accent": theme["accent"], "badge": theme["badge"],
+        "blogger_url": "",  # [NEW] Blogger 발행 성공 후 run()에서 채워 넣는다 (관련글 링크에 사용)
     }
     return post_meta, json_ld, thumb_url, os.path.join(DOCS_DIR, "thumbs", thumb_filename), post_url
 
@@ -1898,8 +1907,24 @@ def update_index(new_post: Dict[str, Any]) -> List[Dict[str, Any]]:
         with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
     posts.insert(0, new_post)
     with open(POSTS_JSON, "w", encoding="utf-8") as f: json.dump(posts, f, ensure_ascii=False, indent=2)
-    render_index_html(posts)
+    if PUBLISH_GITHUB_PAGES_SITE:
+        render_index_html(posts)
     return posts
+
+def update_post_blogger_url(post_file: str, blogger_url: str) -> None:
+    """[NEW] Blogger 발행이 성공한 뒤, 그 글의 posts.json 항목에 실제 Blogger 주소를 채워 넣는다.
+    이후 다른 글의 '관련 글' 링크가 (더 이상 존재하지 않는) GitHub Pages 주소 대신
+    이 Blogger 주소를 가리키도록 하기 위함."""
+    if not blogger_url or not os.path.exists(POSTS_JSON):
+        return
+    with open(POSTS_JSON, "r", encoding="utf-8") as f:
+        posts = json.load(f)
+    for p in posts:
+        if p.get("file") == post_file:
+            p["blogger_url"] = blogger_url
+            break
+    with open(POSTS_JSON, "w", encoding="utf-8") as f:
+        json.dump(posts, f, ensure_ascii=False, indent=2)
 
 def generate_static_pages() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
@@ -2483,6 +2508,28 @@ def repair_old_posts() -> None:
         posts = json.load(f)
     logger.info(f"[복구] 총 {len(posts)}개 글 중 대상 선별을 시작합니다...")
 
+    # [NEW] Blogger 단독 발행으로 전환하면서, GitHub Pages에 남아있던 공개 산출물(개별 글
+    # HTML·홈페이지·sitemap·robots)을 정리한다. 이미지(docs/thumbs)와 posts.json(내부 상태),
+    # dashboard.html(비공개 관리용)은 그대로 둔다.
+    if not PUBLISH_GITHUB_PAGES_SITE:
+        removed_public_files = 0
+        if os.path.isdir(POSTS_DIR):
+            for fname in os.listdir(POSTS_DIR):
+                try:
+                    os.remove(os.path.join(POSTS_DIR, fname))
+                    removed_public_files += 1
+                except Exception as e:
+                    logger.warning(f"[복구] 공개 글 페이지 삭제 실패({fname}): {e}")
+        for fname in ("index.html", "sitemap.xml", "robots.txt"):
+            fpath = os.path.join(DOCS_DIR, fname)
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                    removed_public_files += 1
+                except Exception as e:
+                    logger.warning(f"[복구] {fname} 삭제 실패: {e}")
+        logger.info(f"[복구] GitHub Pages 공개 산출물 정리 완료 — {removed_public_files}개 파일 삭제 (이미지·posts.json·대시보드는 유지)")
+
     fixed_thumbs = 0
     fixed_buttons = 0
     deleted_other_niche = 0
@@ -2554,12 +2601,13 @@ def repair_old_posts() -> None:
             except Exception as e:
                 logger.warning(f"[복구] 발음버튼 패치 실패({title}): {e}")
 
-    # [NEW] 다른 주제 글을 실제로 삭제했으므로, posts.json/index.html/sitemap을
-    # 남은 글(kept_posts) 기준으로 다시 써서 목록에서도 완전히 사라지게 한다.
+    # [NEW] 다른 주제 글을 실제로 삭제했으므로, posts.json을 남은 글(kept_posts) 기준으로 다시 쓴다.
+    # index.html/sitemap은 GitHub Pages를 공개 사이트로 발행할 때만 재생성한다 (지금은 Blogger 단독 발행).
     with open(POSTS_JSON, "w", encoding="utf-8") as f:
         json.dump(kept_posts, f, ensure_ascii=False, indent=2)
-    render_index_html(kept_posts)
-    update_seo_files(kept_posts)
+    if PUBLISH_GITHUB_PAGES_SITE:
+        render_index_html(kept_posts)
+        update_seo_files(kept_posts)
 
     logger.info(
         f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 발음버튼 {fixed_buttons}개 패치, "
@@ -2590,18 +2638,31 @@ def repair_old_posts() -> None:
             local_titles = {_normalize_title(p.get("title", "")): p for p in kept_posts}
             logger.info(f"[복구] Blogger에서 글 {len(blogger_posts)}개 조회됨, 로컬 글 {len(local_titles)}개와 제목 매칭 시도")
 
+            # bp["url"]로 blogger_url 매핑을 먼저 전부 만들어둔다 (관련글 링크 교체에 사용)
+            blogger_url_by_title = {_normalize_title(bp.get("title", "")): bp.get("url", "") for bp in blogger_posts}
+
             blogger_fixed = 0
             matched = 0
-            already_has_button = 0
+            already_up_to_date = 0
             no_expression = 0
             no_img_tag = 0
             stale_button_replaced = 0
+            related_link_fixed = 0
+            blogger_url_bootstrapped = 0
             for bp in blogger_posts:
-                local = local_titles.get(_normalize_title(bp.get("title", "")))
+                norm_title = _normalize_title(bp.get("title", ""))
+                local = local_titles.get(norm_title)
                 if not local:
                     continue
                 matched += 1
-                content = bp.get("content", "")
+
+                # [NEW] posts.json에 이 글의 실제 Blogger 주소를 채워 넣는다 (다음 글들의
+                # "관련 글" 링크가 이 글을 추천할 때 쓸 수 있도록 — 없으면 매번 후보에서 빠진다)
+                bp_url = bp.get("url", "")
+                if bp_url and local.get("blogger_url") != bp_url:
+                    local["blogger_url"] = bp_url
+                    blogger_url_bootstrapped += 1
+
                 expression = _extract_expression_from_title(bp.get("title", ""), strict=True)
                 if not expression:
                     no_expression += 1
@@ -2609,26 +2670,45 @@ def repair_old_posts() -> None:
                     continue
                 theme = get_theme(local.get("category", "번역감정"))
                 btn_html = _tts_buttons_html(expression, theme)
+                content = bp.get("content", "")
+                new_content = content
 
-                # [FIX] 단순히 "playKoreanTTS 문자열이 있는지"만 보면, 과거 다른 방식(이미지 위
-                # 오버레이 등)으로 삽입돼 지금은 안 보이거나 깨진 버튼도 "이미 있음"으로 오판해
-                # 방치하게 된다. 지금 코드가 만드는 정확한 마크업이 그대로 들어있을 때만 "이미 있음"
-                # 으로 인정하고, 그 외의 낡은/깨진 버튼 흔적은 전부 지운 뒤 최신 버튼으로 다시 넣는다.
-                if btn_html and btn_html in content:
-                    already_has_button += 1
-                    continue
+                # 1) 발음 버튼 정규화: 낡거나 깨진 버튼 흔적은 지우고 최신 버튼으로 다시 넣는다
+                if not (btn_html and btn_html in new_content):
+                    cleaned = re.sub(r'<button\b[^>]*playKoreanTTS.*?</button>', '', new_content, flags=re.DOTALL)
+                    if cleaned != new_content:
+                        stale_button_replaced += 1
+                    with_btn = re.sub(r'(<img [^>]*>)', lambda m: m.group(1) + btn_html, cleaned, count=1)
+                    if with_btn == cleaned:
+                        no_img_tag += 1
+                        logger.warning(f"[복구] Blogger 글에서 <img> 태그를 못 찾아 버튼을 못 넣었습니다: {bp.get('title')}")
+                    else:
+                        new_content = with_btn
 
-                cleaned = re.sub(r'<button\b[^>]*playKoreanTTS.*?</button>', '', content, flags=re.DOTALL)
-                if cleaned != content:
-                    stale_button_replaced += 1
-                new_content = re.sub(
-                    r'(<img [^>]*>)',
-                    lambda m: m.group(1) + btn_html, cleaned, count=1,
+                # 2) [NEW] "이 글도 함께 보면 좋아요" 관련 글 링크가 (더 이상 없는) GitHub Pages
+                # 주소를 가리키고 있으면, 같은 글의 실제 Blogger 주소로 교체한다.
+                def _fix_related_link(m):
+                    old_href = m.group(1)
+                    if "github.io" not in old_href:
+                        return m.group(0)
+                    link_text = m.group(2)
+                    replacement_url = blogger_url_by_title.get(_normalize_title(link_text), "")
+                    if not replacement_url:
+                        return ""  # 대응하는 Blogger 글을 못 찾으면 죽은 링크를 남기느니 통째로 제거
+                    return m.group(0).replace(old_href, replacement_url)
+
+                relinked = re.sub(
+                    r'🔗 이 글도 함께 보면 좋아요: <a href="([^"]*)">([^<]*)</a>',
+                    _fix_related_link, new_content,
                 )
+                if relinked != new_content:
+                    related_link_fixed += 1
+                    new_content = relinked
+
                 if new_content == content:
-                    no_img_tag += 1
-                    logger.warning(f"[복구] Blogger 글에서 <img> 태그를 못 찾아 버튼을 못 넣었습니다: {bp.get('title')}")
+                    already_up_to_date += 1
                     continue
+
                 upd = requests.put(
                     f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
                     headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
@@ -2639,9 +2719,16 @@ def repair_old_posts() -> None:
                     blogger_fixed += 1
                 else:
                     logger.warning(f"[복구] Blogger 글 패치 실패({bp.get('title')}): HTTP {upd.status_code}")
+
+            # [NEW] blogger_url이 채워진 kept_posts를 posts.json에 다시 저장 (반드시 여기서 저장해야
+            # add_internal_link가 다음 글부터 이 Blogger 주소들을 관련 글 후보로 쓸 수 있다)
+            with open(POSTS_JSON, "w", encoding="utf-8") as f:
+                json.dump(kept_posts, f, ensure_ascii=False, indent=2)
+
             logger.info(
                 f"[복구] Blogger 완료 — 매칭 {matched}개 중 {blogger_fixed}개 패치 "
-                f"(그 중 낡은 버튼 교체 {stale_button_replaced}개, 이미 최신 버튼 {already_has_button}개, "
+                f"(낡은 버튼 교체 {stale_button_replaced}개, 관련글 링크 교체 {related_link_fixed}개, "
+                f"blogger_url 채움 {blogger_url_bootstrapped}개, 이미 최신 {already_up_to_date}개, "
                 f"표현 추출 실패 {no_expression}개, img 태그 없음 {no_img_tag}개)"
             )
         except Exception as e:
@@ -2721,21 +2808,22 @@ def run() -> None:
     posts = update_index(post_meta)
 
     update_dashboard(posts)
-    update_seo_files(posts)
+    if PUBLISH_GITHUB_PAGES_SITE:
+        update_seo_files(posts)
     build_lead_magnet_pdf(posts)  # [NEW] 무료 PDF 리드마그넷 자동 갱신
 
     commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
 
     blogger_url = publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
-    # [FIX] 워드프레스/블로거 본문 하단 "원문" 링크는 요청에 따라 완전히 제거함.
-    # source_url 인자는 더 이상 본문에 노출되지 않지만, 추후 필요시를 대비해 시그니처는 유지.
-    publish_to_wordpress(article, blogger_url or post_url, thumb_url, local_thumb_path)
+    if blogger_url:
+        # [NEW] 이 글의 실제 Blogger 주소를 posts.json에 저장해, 다음 글들의 "관련 글" 링크가
+        # 이 글을 가리킬 때 (더 이상 없는) GitHub Pages 주소가 아닌 이 주소를 쓰게 한다.
+        update_post_blogger_url(post_meta["file"], blogger_url)
+    # [FIX] 구글 블로그(Blogger)만 메인으로 발행한다. 워드프레스는 더 이상 병행 발행하지 않는다.
 
     # [NEW] 발행 직후 Google에 색인 생성을 자동으로 요청한다 (Search Console에서 손으로 누르던 작업 자동화)
-    if SITE_URL:
-        request_google_indexing(post_url)  # GitHub Pages 글 주소
     if blogger_url:
-        request_google_indexing(blogger_url)  # Blogger 글 주소 (Search Console 속성이 blogspot 도메인인 경우 이쪽이 핵심)
+        request_google_indexing(blogger_url)  # Blogger가 메인 발행처이므로 이 주소만 색인 요청
 
     if not manual_title and not is_manual_trigger:
         increment_daily_count()
