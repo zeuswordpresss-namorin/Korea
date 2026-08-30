@@ -9,6 +9,8 @@ GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립
 - 문화 섹션은 무출처 단정 표현을 완화 ("~인 경우가 많다", "많은 한국인에게 ~로 느껴진다" 등)
 - 에버그린 주제 뱅크(100개 표현/문화 주제, 4개 카테고리 요일별 로테이션) 기반, 하루 발행 상한
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
+- [AdSense] 심사 모드(ADSENSE_REVIEW_MODE): 본문 수동광고·제휴 블록 생략, 품질 게이트,
+  편집 고지, Blogger About/Privacy/Contact 페이지 동기화, 라벨 구조화
 """
 
 import base64
@@ -74,6 +76,14 @@ GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")
 GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")
 ADSENSE_CLIENT_ID = os.environ.get("ADSENSE_CLIENT_ID", "")
 ADSENSE_SLOT_ID = os.environ.get("ADSENSE_SLOT_ID", "")
+# [AdSense] 심사·초기 운영: true면 본문 수동 광고 유닛·제휴 마크업을 넣지 않음.
+# Blogger "자동 광고"만 쓰는 편이 심사에 유리. 승인 후 GitHub Secrets에서 false로 전환.
+ADSENSE_REVIEW_MODE = os.environ.get("ADSENSE_REVIEW_MODE", "true").strip().lower() in ("1", "true", "yes", "y")
+# 본문 텍스트(HTML 태그 제외) 최소 글자 수 — 미달 시 1회 재생성
+ADSENSE_MIN_BODY_CHARS = int(os.environ.get("ADSENSE_MIN_BODY_CHARS", "700"))
+CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "")
+# true면 하루에 최대 1회 repair_old_posts()를 발행 파이프라인 시작 시 자동 실행 (고정 템플릿 잔존 정리)
+AUTO_REPAIR_ONCE_PER_DAY = os.environ.get("AUTO_REPAIR_ONCE_PER_DAY", "true").strip().lower() in ("1", "true", "yes", "y")
 
 COUPANG_PARTNER_TAG = os.environ.get("COUPANG_PARTNER_TAG", "")
 COUPANG_ACCESS_KEY = os.environ.get("COUPANG_ACCESS_KEY", "")
@@ -188,6 +198,8 @@ H2 소제목 변주 예시 (그대로 복사하지 말고, 비슷한 다양성�
    그 감정/상황이 드러나는 사람들의 모습을 보편적인 영어로 묘사한다. (예: 표현이 "눈치"라면
    "friends reading social cues" 처럼, 표현이 "정"이라면 "close friends warm moment" 처럼 실제 촬영 가능한 보편적 장면으로 변환한다.)
 12. "expression"에는 다루는 한국어 표현의 순수 원문만 담는다. 설명·이모지·괄호 없이 단어/구절 그대로. (예: "민망하다", "정", "수고했어요")
+14. [AdSense·품질] 검색 키워드 나열·동의어 반복으로 분량을 채우지 않는다. 각 글은 그 표현만의 구체적 대화 예시·상황 1~2개를 반드시 포함한다. 다른 글과 문장 구조를 복붙한 듯한 도입부("오늘은 ~를 알아보겠습니다" 상투구)를 피한다.
+15. [학습 가치] 독자가 읽고 나서 "언제 이 말을 쓰면 되는지"를 실천할 수 있을 정도로 구체적으로 쓴다. 추상적 감탄만으로 끝내지 않는다.
 13. 출력은 반드시 아래 JSON 형식만 반환한다. 다른 설명, 코드블록 기호(```) 없이 순수 JSON만 출력한다:
 {
   "title": "...",
@@ -1535,20 +1547,78 @@ def add_internal_link(article: Dict[str, Any]) -> Dict[str, Any]:
     return article
 
 def _manual_ad_unit() -> str:
-    if not (ADSENSE_CLIENT_ID and ADSENSE_SLOT_ID): return ""
+    """수동 광고 유닛. 심사 모드이거나 클라이언트/슬롯 미설정 시 빈 문자열."""
+    if ADSENSE_REVIEW_MODE:
+        return ""
+    if not (ADSENSE_CLIENT_ID and ADSENSE_SLOT_ID):
+        return ""
     return (
-        '<div style="margin:28px 0;text-align:center;">'
+        '<div style="margin:32px 0;text-align:center;clear:both;" class="ad-unit" data-nosnippet>'
+        '<div style="font-size:0.7em;color:#999;margin-bottom:6px;letter-spacing:0.04em;">ADVERTISEMENT</div>'
         f'<ins class="adsbygoogle" style="display:block" data-ad-client="{ADSENSE_CLIENT_ID}" '
         f'data-ad-slot="{ADSENSE_SLOT_ID}" data-ad-format="auto" data-full-width-responsive="true"></ins>'
         '<script>(adsbygoogle = window.adsbygoogle || []).push({});</script></div>'
     )
 
 def insert_manual_ads(article: Dict[str, Any]) -> Dict[str, Any]:
+    """본문 중·후반에만 광고 1개 삽입. 첫 화면(첫 H2 앞)에는 넣지 않아 UX·심사에 유리."""
     ad_html = _manual_ad_unit()
-    if not ad_html: return article
-    idx = article["html_body"].find("<h2")
-    if idx != -1: article["html_body"] = article["html_body"][:idx] + ad_html + article["html_body"][idx:]
-    else: article["html_body"] += ad_html
+    if not ad_html:
+        return article
+    body = article.get("html_body", "")
+    # 두 번째 <h2> 앞에 삽입 (콘텐츠가 충분히 보인 뒤)
+    matches = list(re.finditer(r"<h2\b", body, flags=re.IGNORECASE))
+    if len(matches) >= 2:
+        idx = matches[1].start()
+        article["html_body"] = body[:idx] + ad_html + body[idx:]
+    elif len(matches) == 1:
+        # H2가 하나뿐이면 본문 끝(참여 질문 직전)보다는 그 H2 뒤에 가깝게 — 여기선 끝에 가깝게
+        article["html_body"] = body + ad_html
+    else:
+        article["html_body"] = body + ad_html
+    return article
+
+
+def _strip_html_text(html_body: str) -> str:
+    text_only = re.sub(r"<script\b[^>]*>.*?</script>", " ", html_body or "", flags=re.DOTALL | re.IGNORECASE)
+    text_only = re.sub(r"<style\b[^>]*>.*?</style>", " ", text_only, flags=re.DOTALL | re.IGNORECASE)
+    text_only = re.sub(r"<[^>]+>", " ", text_only)
+    text_only = re.sub(r"\s+", " ", text_only)
+    return text_only.strip()
+
+
+def validate_article_quality(article: Dict[str, Any]) -> Tuple[bool, str]:
+    """AdSense에 불리한 초단문·표현 누락·고정 템플릿 잔존을 검사한다."""
+    body = article.get("html_body", "") or ""
+    text_only = _strip_html_text(body)
+    if len(text_only) < ADSENSE_MIN_BODY_CHARS:
+        return False, f"본문 텍스트 {len(text_only)}자 < 최소 {ADSENSE_MIN_BODY_CHARS}자"
+    if not (article.get("expression") or "").strip():
+        return False, "expression 필드 비어 있음"
+    # 고정 5단 소제목이 한 글에 3개 이상이면 패턴 잔존으로 간주
+    fixed_hits = sum(1 for k in ("오늘의 표현", "왜 영어로 직역이 안 될까?", "한국인은 어떤 상황에서 쓸까?", "문화 이야기", "여러분의 언어에서는 어떤가요?") if k in body)
+    if fixed_hits >= 3:
+        return False, f"고정 5단 H2 잔존 {fixed_hits}개"
+    return True, "ok"
+
+
+def add_editorial_footer(article: Dict[str, Any]) -> Dict[str, Any]:
+    """학습 목적·편집 고지. YMYL 금융 고지가 아니라 언어 학습 블로그용 짧은 신뢰 푸터."""
+    expr = html.escape((article.get("expression") or "").strip())
+    footer = (
+        '<div style="margin-top:2.2em;padding:14px 16px;border-radius:10px;'
+        'background:#f7f7f8;border:1px solid #e8e8ea;font-size:0.88em;color:#555;line-height:1.55;">'
+        '<b style="color:#333;">About this note</b><br>'
+        'This article explains a Korean expression for language learners. '
+        'Nuance can vary by region, age, and relationship — treat examples as common patterns, not rigid rules.'
+    )
+    if expr:
+        footer += f' Focus expression: <span class="notranslate">{expr}</span>.'
+    footer += (
+        ' Content is editorially reviewed against a fixed teaching outline; '
+        'AI drafting tools may assist production.</div>'
+    )
+    article["html_body"] = (article.get("html_body") or "") + footer
     return article
 
 def _fetch_content_photo(image_keywords: str, category: str, seed: int, size=(1000, 560)):
@@ -1736,6 +1806,8 @@ def build_product_list_html(article: Dict[str, Any], slug: str, accent: str) -> 
     return '<h2 style="margin-top:2em;">한눈에 보는 상품 목록</h2>' + "".join(cards)
 
 def add_coupang_markup(article: Dict[str, Any]) -> Dict[str, Any]:
+    if ADSENSE_REVIEW_MODE:
+        return article  # 심사 기간에는 제휴 블록을 본문에 넣지 않음
     product_keyword = (article.get("product_keyword") or "").strip()
     if not product_keyword: return article
     search_url = f"https://www.coupang.com/np/search?q={urllib.parse.quote(product_keyword)}"
@@ -1935,16 +2007,49 @@ def update_post_blogger_url(post_file: str, blogger_url: str) -> None:
 def generate_static_pages() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     common_kwargs = dict(site_title=SITE_TITLE, search_console_meta=_search_console_meta(), ga_snippet=_ga_snippet(), adsense_snippet=_adsense_snippet())
+    contact_block = (
+        f"<p><b>Email:</b> {html.escape(CONTACT_EMAIL)}</p>"
+        if CONTACT_EMAIL else
+        "<p><b>Email:</b> Set the CONTACT_EMAIL secret, then re-run once to refresh this page.</p>"
+    )
+    about_body = f"""
+<p><b>{html.escape(SITE_TITLE)}</b> — {ENGLISH_SLOGAN}</p>
+<p>{html.escape(SITE_TAGLINE)}</p>
+<h2>Who this blog is for</h2>
+<p>Foreign learners of Korean who want more than dictionary definitions: when Koreans actually use an expression, what nuance translation loses, and how it connects to everyday culture.</p>
+<h2>How posts are made</h2>
+<p>Each article follows an editorial outline (hook, untranslatable nuance, real usage, cultural context, reader prompt). Drafting may be assisted by AI tools; examples and structure are checked against a teaching checklist so posts stay useful for learners—not keyword filler.</p>
+<h2>Categories</h2>
+<ul>
+<li>Untranslatable feelings (e.g. 정, 눈치)</li>
+<li>Everyday phrases Koreans use often</li>
+<li>Cultural background behind the language</li>
+<li>Typical Korean reactions / interjections</li>
+</ul>
+<p>Information is for learning purposes. Social nuance varies by age, region, and relationship.</p>
+"""
+    privacy_body = """
+<p>This blog may use Google Analytics (GA4) and Google AdSense for statistics and advertising. Cookies may be used; they are not intended to collect information that directly identifies you as an individual.</p>
+<h2>Cookies &amp; ads</h2>
+<p>Third-party vendors, including Google, use cookies to serve ads based on prior visits. You can opt out of personalized advertising at <a href="https://adssettings.google.com" target="_blank" rel="noopener">Google Ads Settings</a>.</p>
+<h2>Contact</h2>
+<p>For privacy questions, use the Contact page.</p>
+"""
+    contact_body = f"""
+<p>Questions about an article, corrections, or collaboration ideas are welcome.</p>
+{contact_block}
+<p>We read messages about factual mistakes in explanations of Korean expressions and update posts when needed.</p>
+"""
     pages = {
-        "about.html": ("블로그 소개", f"<p>{SITE_TITLE}에 오신 것을 환영합니다.</p><p>{SITE_TAGLINE}</p><p>이 블로그는 다양한 주제의 정보를 정리해서 소개하며, 콘텐츠 제작 과정 일부에 AI 도구를 활용하고 있습니다. 게시된 정보는 참고용이며, 중요한 결정을 내리실 때는 반드시 공식 출처를 함께 확인해주세요.</p>"),
-        "privacy.html": ("개인정보처리방침", "<p>본 블로그는 구글 애널리틱스(GA4) 및 구글 애드센스를 통해 방문자 통계와 광고를 제공할 수 있습니다. 이 과정에서 쿠키(Cookie)가 사용될 수 있으며, 쿠키를 통해 수집되는 정보에는 개인을 직접 식별할 수 있는 정보는 포함되지 않습니다.</p><h2>쿠키 및 광고</h2><p>구글을 포함한 제3자 광고 공급업체는 쿠키를 사용하여 사용자의 이전 방문 기록을 기반으로 광고를 게재합니다. 이용자는 <a href=\"https://adssettings.google.com\" target=\"_blank\">구글 광고 설정</a>에서 맞춤 광고를 비활성화할 수 있습니다.</p><h2>문의</h2><p>개인정보 관련 문의사항은 문의하기 페이지를 통해 연락 주시기 바랍니다.</p>"),
-        "contact.html": ("문의하기", "<p>블로그 콘텐츠 관련 문의, 협업 제안, 오류 신고 등은 아래 이메일로 연락 주세요.</p><p><b>이메일:</b> 이 페이지의 문구를 직접 열어 본인의 연락처로 수정해주세요.</p>"),
+        "about.html": ("About", about_body),
+        "privacy.html": ("Privacy Policy", privacy_body),
+        "contact.html": ("Contact", contact_body),
     }
     for filename, (page_title, page_body) in pages.items():
         path = os.path.join(DOCS_DIR, filename)
-        if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
+        # 심사 대비: 소개/개인정보/문의 페이지는 내용이 바뀌면 덮어써 최신 고지를 유지
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(STATIC_PAGE_TEMPLATE.format(page_title=page_title, page_body=page_body, **common_kwargs))
 
 # =====================================================================
 # [NEW] 무료 리드마그넷 PDF — "지금까지 발행된 표현 모음"을 매 실행마다 자동 갱신
@@ -2175,6 +2280,218 @@ def _make_blogger_safe_html(html_body: str) -> str:
         html_body = re.sub(r'<a href="\.\./(posts|thumbs)/[^"]*"[^>]*>(.*?)</a>', r"\2", html_body)
     return html_body
 
+
+
+# =====================================================================
+# [AdSense / Blogger 레이아웃] 매 글·정책 페이지에 공통 내비/푸터 자동 삽입
+# 테마 메뉴를 API로 직접 바꾸기는 어렵기 때문에, 본문 상·하단에 고정 링크 바를 넣어
+# About / Privacy / Contact 가 항상 보이게 한다.
+# =====================================================================
+_BLOGGER_PAGE_SLUGS = {
+    "About": "about",
+    "Privacy Policy": "privacy",
+    "Contact": "contact",
+}
+
+
+def _get_blogger_blog_url(access_token: str) -> str:
+    """블로그 홈 URL (끝 슬래시 제거). 실패 시 빈 문자열."""
+    try:
+        resp = requests.get(
+            f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=20,
+        )
+        if not resp.ok:
+            return ""
+        return (resp.json().get("url") or "").rstrip("/")
+    except Exception as e:
+        logger.warning(f"[블로거] 블로그 URL 조회 실패: {e}")
+        return ""
+
+
+def _blogger_page_href(blog_url: str, title: str, page_url_from_api: str = "") -> str:
+    if page_url_from_api:
+        return page_url_from_api
+    slug = _BLOGGER_PAGE_SLUGS.get(title, title.lower().replace(" ", "-"))
+    if blog_url:
+        return f"{blog_url}/p/{slug}.html"
+    return f"/p/{slug}.html"
+
+
+def _blogger_site_nav_html(blog_url: str = "", page_urls: Optional[Dict[str, str]] = None) -> str:
+    """글 상단 고정 내비 — About / Privacy / Contact + Home."""
+    page_urls = page_urls or {}
+    home = blog_url or "/"
+    about = _blogger_page_href(blog_url, "About", page_urls.get("About", ""))
+    privacy = _blogger_page_href(blog_url, "Privacy Policy", page_urls.get("Privacy Policy", ""))
+    contact = _blogger_page_href(blog_url, "Contact", page_urls.get("Contact", ""))
+    link_style = (
+        "color:#333;text-decoration:none;font-size:0.85em;font-weight:600;"
+        "padding:6px 10px;border-radius:999px;background:#f3f4f6;display:inline-block;"
+    )
+    return (
+        '<nav class="site-policy-nav" style="margin:0 0 18px;padding:12px 14px;border-radius:12px;'
+        'background:linear-gradient(180deg,#fafafa,#f3f4f6);border:1px solid #e5e7eb;'
+        'display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-family:system-ui,sans-serif;">'
+        f'<a href="{html.escape(home, quote=True)}" style="{link_style}">Home</a>'
+        f'<a href="{html.escape(about, quote=True)}" style="{link_style}">About</a>'
+        f'<a href="{html.escape(privacy, quote=True)}" style="{link_style}">Privacy</a>'
+        f'<a href="{html.escape(contact, quote=True)}" style="{link_style}">Contact</a>'
+        '<span style="margin-left:auto;font-size:0.75em;color:#6b7280;">Learn Korean · Understand Koreans</span>'
+        '</nav>'
+    )
+
+
+def _blogger_site_footer_html(blog_url: str = "", page_urls: Optional[Dict[str, str]] = None) -> str:
+    """글 하단 레이아웃 문구 + 정책 링크 (심사·신뢰용)."""
+    page_urls = page_urls or {}
+    about = _blogger_page_href(blog_url, "About", page_urls.get("About", ""))
+    privacy = _blogger_page_href(blog_url, "Privacy Policy", page_urls.get("Privacy Policy", ""))
+    contact = _blogger_page_href(blog_url, "Contact", page_urls.get("Contact", ""))
+    home = blog_url or "/"
+    return (
+        '<footer class="site-policy-footer" style="margin-top:2.5em;padding:18px 16px;border-top:1px solid #e5e7eb;'
+        'font-size:0.86em;color:#4b5563;line-height:1.6;font-family:system-ui,sans-serif;">'
+        f'<p style="margin:0 0 8px;"><b style="color:#111;">{html.escape(SITE_TITLE)}</b> — '
+        'practical notes on Korean expressions, nuance, and everyday culture for learners.</p>'
+        '<p style="margin:0 0 10px;">We aim for concrete examples you can use in real conversations—not keyword filler. '
+        'Nuance still varies by age, region, and relationship.</p>'
+        '<p style="margin:0;display:flex;flex-wrap:wrap;gap:10px;">'
+        f'<a href="{html.escape(home, quote=True)}" style="color:#2563eb;">Home</a>'
+        f'<a href="{html.escape(about, quote=True)}" style="color:#2563eb;">About</a>'
+        f'<a href="{html.escape(privacy, quote=True)}" style="color:#2563eb;">Privacy Policy</a>'
+        f'<a href="{html.escape(contact, quote=True)}" style="color:#2563eb;">Contact</a>'
+        '</p></footer>'
+    )
+
+
+def _reader_value_box_html(expression: str = "") -> str:
+    """본문 상단(내비 아래)에 넣는 '이 글에서 얻는 것' 박스 — 사람 편집 느낌을 보강."""
+    focus = html.escape((expression or "").strip())
+    focus_line = f' <span class="notranslate">“{focus}”</span>' if focus else ""
+    return (
+        '<div class="reader-value" style="margin:0 0 20px;padding:14px 16px;border-left:4px solid #2563eb;'
+        'background:#eff6ff;border-radius:0 10px 10px 0;font-size:0.92em;color:#1e3a5f;line-height:1.55;">'
+        f'<b>What you will get</b>{focus_line}<br>'
+        '1) When Koreans actually say it &nbsp;·&nbsp; 2) Why a direct translation falls short &nbsp;·&nbsp; '
+        '3) A short cultural cue you can remember</div>'
+    )
+
+
+def _maybe_auto_repair_once() -> None:
+    """하루 1회 한도로 과거 글 고정 템플릿/단정 표현 리페어를 자동 실행."""
+    if not AUTO_REPAIR_ONCE_PER_DAY:
+        return
+    marker = os.path.join(DOCS_DIR, ".last_auto_repair_date")
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        if os.path.exists(marker):
+            with open(marker, "r", encoding="utf-8") as f:
+                if f.read().strip() == today:
+                    logger.info("[자동 리페어] 오늘 이미 실행됨 — 건너뜁니다.")
+                    return
+        logger.info("[자동 리페어] 하루 1회 한도로 repair_old_posts() 실행을 시작합니다.")
+        repair_old_posts()
+        os.makedirs(DOCS_DIR, exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(today)
+        logger.info("[자동 리페어] 완료 및 날짜 마커 저장")
+    except Exception as e:
+        logger.warning(f"[자동 리페어] 실패(발행은 계속): {e}")
+
+
+def ensure_blogger_policy_pages() -> Dict[str, str]:
+    """AdSense용 About / Privacy / Contact 페이지를 Blogger에 동기화하고 {제목: url} 맵을 반환.
+    각 페이지 본문에도 공통 내비/푸터를 넣어 메뉴처럼 보이게 한다.
+    """
+    page_urls: Dict[str, str] = {}
+    if not _blogger_configured():
+        return page_urls
+    try:
+        access_token = _get_blogger_access_token()
+        blog_url = _get_blogger_blog_url(access_token)
+        # 1차: 기존 페이지 URL 수집
+        list_url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/pages/"
+        resp = requests.get(
+            list_url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"fetchBodies": "false", "maxResults": 50},
+            timeout=30,
+        )
+        existing: Dict[str, Dict[str, str]] = {}
+        if resp.ok:
+            for item in resp.json().get("items") or []:
+                t = (item.get("title") or "").strip()
+                existing[t.lower()] = {"id": item.get("id", ""), "url": item.get("url", "")}
+                if t in ("About", "Privacy Policy", "Contact") and item.get("url"):
+                    page_urls[t] = item["url"]
+
+        contact_block = (
+            f"<p><b>Email:</b> {html.escape(CONTACT_EMAIL)}</p>"
+            if CONTACT_EMAIL else
+            "<p><b>Email:</b> Contact via the form or email listed in blog settings.</p>"
+        )
+        bodies = {
+            "About": (
+                f"<p><b>{html.escape(SITE_TITLE)}</b></p>"
+                f"<p>{ENGLISH_SLOGAN}</p>"
+                f"<p>{html.escape(SITE_TAGLINE)}</p>"
+                "<h2>Who this is for</h2>"
+                "<p>Learners of Korean who want usage, nuance, and cultural context—not only dictionary definitions.</p>"
+                "<h2>Editorial process</h2>"
+                "<p>Posts follow a teaching outline. AI may assist drafting; content is checked for concrete examples and clear explanations.</p>"
+                "<h2>Site menu</h2>"
+                "<p>Use the links at the top of every post: Home · About · Privacy · Contact.</p>"
+            ),
+            "Privacy Policy": (
+                "<p>This blog may use Google Analytics and Google AdSense. Cookies may be used for stats and ads.</p>"
+                "<p>You can control personalized ads at "
+                '<a href="https://adssettings.google.com" target="_blank" rel="noopener">Google Ads Settings</a>.</p>'
+            ),
+            "Contact": (
+                "<p>Corrections, questions, and collaboration ideas are welcome.</p>" + contact_block
+            ),
+        }
+        for title, core_body in bodies.items():
+            nav = _blogger_site_nav_html(blog_url, page_urls)
+            foot = _blogger_site_footer_html(blog_url, page_urls)
+            payload = {"title": title, "content": nav + core_body + foot}
+            meta = existing.get(title.lower())
+            if meta and meta.get("id"):
+                upd = requests.put(
+                    f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/pages/{meta['id']}",
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=30,
+                )
+                if upd.ok:
+                    url = (upd.json() or {}).get("url") or meta.get("url") or ""
+                    if url:
+                        page_urls[title] = url
+                    logger.info(f"[블로거 페이지] 갱신: {title} → {page_urls.get(title, '')}")
+                else:
+                    logger.warning(f"[블로거 페이지] 갱신 실패({title}): HTTP {upd.status_code}")
+            else:
+                cre = requests.post(
+                    list_url,
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    json={**payload, "isDraft": False},
+                    timeout=30,
+                )
+                if cre.ok:
+                    data = cre.json() or {}
+                    if data.get("url"):
+                        page_urls[title] = data["url"]
+                    logger.info(f"[블로거 페이지] 생성: {title} → {page_urls.get(title, '')}")
+                else:
+                    logger.warning(f"[블로거 페이지] 생성 실패({title}): HTTP {cre.status_code} {cre.text[:200]}")
+        return page_urls
+    except Exception as e:
+        logger.warning(f"[블로거 페이지] 동기화 건너뜀: {e}")
+        return page_urls
+
+
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
     if not _blogger_configured():
         # [FIX] 기존에는 미설정 시 아무 로그 없이 조용히 건너뛰어, 파이프라인이 "성공"으로 표시돼도
@@ -2195,22 +2512,64 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         blogger_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="blogger")
         # [FIX] base64는 요약 스니펫 글자수 제한 안에서 이미지가 아예 안 뜨는 원인이었음.
         # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
+        blog_url = _get_blogger_blog_url(access_token)
+        # 정책 페이지 URL (가능하면 API에서 수집한 실제 URL)
+        page_urls: Dict[str, str] = {}
+        try:
+            pages_resp = requests.get(
+                f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/pages/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"fetchBodies": "false", "maxResults": 50},
+                timeout=20,
+            )
+            if pages_resp.ok:
+                for item in pages_resp.json().get("items") or []:
+                    t = (item.get("title") or "").strip()
+                    if t in ("About", "Privacy Policy", "Contact") and item.get("url"):
+                        page_urls[t] = item["url"]
+        except Exception as e:
+            logger.warning(f"[블로거] 페이지 URL 조회 실패(내비는 추정 경로 사용): {e}")
+
+        nav_html = _blogger_site_nav_html(blog_url, page_urls)
+        value_html = _reader_value_box_html(article.get("expression", ""))
+        footer_html = _blogger_site_footer_html(blog_url, page_urls)
         content_html = (
             f'{_translate_widget()}'
+            f'{nav_html}'
+            f'{value_html}'
             f'<div style="position:relative;margin:0;">'
             f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{html.escape(article["title"], quote=True)}" onerror="_retryHeroImage(this)">'
             f'{_tts_buttons_html(article.get("expression", ""), theme)}'
             f'</div>'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
-            f'{_make_blogger_safe_html(article["html_body"])}<script type="application/ld+json">{blogger_json_ld}</script>'
+            f'{_make_blogger_safe_html(article["html_body"])}'
+            f'{footer_html}'
+            f'<script type="application/ld+json">{blogger_json_ld}</script>'
         )
         url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/"
+        # 라벨: 카테고리 + 고정 주제 라벨 → Blogger 사이드바/탐색에 구조가 보이게 (심사·체류에 도움)
+        labels = []
+        cat = (article.get("category") or "").strip()
+        if cat:
+            labels.append(cat)
+        labels.append("Learn Korean")
+        labels.append("Korean Culture")
+        expr = (article.get("expression") or "").strip()
+        if expr and expr not in labels:
+            labels.append(expr[:50])
+        post_payload = {
+            "title": article["title"],
+            "content": content_html,
+            "labels": labels[:5],
+        }
+        if ADSENSE_REVIEW_MODE:
+            logger.info("[블로거] ADSENSE_REVIEW_MODE=ON — 본문 수동 광고/제휴 블록 없이 발행합니다. Blogger 자동 광고만 사용하세요.")
         # [FIX] 짧은 간격으로 연달아 요청하면 토큰/권한이 멀쩡해도 구글 쪽에서 일시적으로
         # 403/429/503을 반환하는 사례가 확인됨 (같은 토큰으로 몇 분 뒤 재시도하면 정상 발행됨).
         # 영구적 권한 문제와 구분하기 위해 지수 백오프로 최대 3회 재시도한다.
         last_error = None
         for attempt in range(1, 4):
-            resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, json={"title": article["title"], "content": content_html}, timeout=30)
+            resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, json=post_payload, timeout=30)
             if resp.ok:
                 blogger_url = resp.json().get("url")
                 logger.info(f"[블로거] 발행 완료: {blogger_url or '(URL 확인 불가)'}")
@@ -2732,6 +3091,22 @@ def repair_old_posts() -> None:
     if _blogger_configured():
         try:
             access_token = _get_blogger_access_token()
+            repair_blog_url = _get_blogger_blog_url(access_token)
+            repair_page_urls: Dict[str, str] = {}
+            try:
+                pg = requests.get(
+                    f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/pages/",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"fetchBodies": "false", "maxResults": 50},
+                    timeout=20,
+                )
+                if pg.ok:
+                    for item in pg.json().get("items") or []:
+                        t = (item.get("title") or "").strip()
+                        if t in ("About", "Privacy Policy", "Contact") and item.get("url"):
+                            repair_page_urls[t] = item["url"]
+            except Exception:
+                pass
             resp = requests.get(
                 f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -2780,6 +3155,23 @@ def repair_old_posts() -> None:
                         hold_content_fixed += 1
                     else:
                         orphan_hold_fixed += 1
+
+                # [레이아웃] 과거 글에도 About/Privacy/Contact 내비·푸터 자동 삽입
+                if "site-policy-nav" not in new_content:
+                    new_content = _blogger_site_nav_html(repair_blog_url, repair_page_urls) + new_content
+                if "site-policy-footer" not in new_content:
+                    new_content = new_content + _blogger_site_footer_html(repair_blog_url, repair_page_urls)
+                if "reader-value" not in new_content:
+                    expr_for_box = _extract_expression_from_title(bp_title, strict=True) or ""
+                    # 내비 바로 뒤에 value box 삽입
+                    if "site-policy-nav" in new_content:
+                        new_content = new_content.replace(
+                            "</nav>",
+                            "</nav>" + _reader_value_box_html(expr_for_box),
+                            1,
+                        )
+                    else:
+                        new_content = _reader_value_box_html(expr_for_box) + new_content
 
                 if not local:
                     # 매칭 안 되는 글도 H.O.L.D. 본문만 고친 뒤 필요 시 업데이트
@@ -2932,19 +3324,35 @@ def run() -> None:
 
     logger.info(f"[처리 시작] 제목: {title}")
 
+    # [AdSense] 하루 1회: 과거 글 고정 템플릿·단정 표현 자동 리페어
+    # (repair 전용 실행이 아닐 때만 — is_repair_only 분기는 위에서 이미 return)
+    _maybe_auto_repair_once()
+
     ensure_nojekyll()
     ensure_brand_assets()
     ensure_pwa_assets()  # [NEW] PWA 매니페스트/아이콘/서비스워커
     generate_static_pages()
+    ensure_blogger_policy_pages()  # AdSense: About/Privacy/Contact + 내비 문구 동기화
 
     article = generate_article(title)
     article = fix_character_count_claims(article)  # [NEW] AI의 글자 수 오기재를 Python이 강제 교정
+    ok, reason = validate_article_quality(article)
+    if not ok:
+        logger.warning(f"[품질] 1차 생성 미달({reason}) — 1회 재생성 시도")
+        article = generate_article(title)
+        article = fix_character_count_claims(article)
+        ok2, reason2 = validate_article_quality(article)
+        if not ok2:
+            logger.warning(f"[품질] 재생성 후에도 미달({reason2}) — 발행은 계속하되 로그에 남김")
+        else:
+            logger.info("[품질] 재생성 후 기준 통과")
     logger.info(f"글 생성 완료: {article['title']}")
 
     article = add_internal_link(article)
-    article = insert_manual_ads(article)
-    article = add_coupang_markup(article)
+    article = insert_manual_ads(article)  # ADSENSE_REVIEW_MODE=true면 내부에서 no-op
+    article = add_coupang_markup(article)  # 심사 모드면 no-op
     article = add_ymyl_disclaimer(article)
+    article = add_editorial_footer(article)  # 학습 목적·편집 고지 (AdSense 신뢰)
 
     post_meta, json_ld, thumb_url, local_thumb_path, post_url = save_post(article)
     posts = update_index(post_meta)
