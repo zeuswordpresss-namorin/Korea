@@ -84,6 +84,20 @@ ADSENSE_MIN_BODY_CHARS = int(os.environ.get("ADSENSE_MIN_BODY_CHARS", "700"))
 CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "")
 # true면 하루에 최대 1회 repair_old_posts()를 발행 파이프라인 시작 시 자동 실행 (고정 템플릿 잔존 정리)
 AUTO_REPAIR_ONCE_PER_DAY = os.environ.get("AUTO_REPAIR_ONCE_PER_DAY", "true").strip().lower() in ("1", "true", "yes", "y")
+# 실제 Blogger About/Privacy/Contact URL (Posts로 올라간 경우 /p/ 경로가 아님)
+# 기본값: learnkoreanseekoreans.blogspot.com 현재 주소. 다른 블로그면 Secrets로 덮어쓰기.
+BLOGGER_ABOUT_URL = os.environ.get(
+    "BLOGGER_ABOUT_URL",
+    "https://learnkoreanseekoreans.blogspot.com/2026/08/about.html",
+).rstrip("/")
+BLOGGER_PRIVACY_URL = os.environ.get(
+    "BLOGGER_PRIVACY_URL",
+    "https://learnkoreanseekoreans.blogspot.com/2026/08/privacy-policy.html",
+).rstrip("/")
+BLOGGER_CONTACT_URL = os.environ.get(
+    "BLOGGER_CONTACT_URL",
+    "https://learnkoreanseekoreans.blogspot.com/2026/08/contact.html",
+).rstrip("/")
 
 COUPANG_PARTNER_TAG = os.environ.get("COUPANG_PARTNER_TAG", "")
 COUPANG_ACCESS_KEY = os.environ.get("COUPANG_ACCESS_KEY", "")
@@ -2289,9 +2303,27 @@ def _make_blogger_safe_html(html_body: str) -> str:
 # =====================================================================
 _BLOGGER_PAGE_SLUGS = {
     "About": "about",
-    "Privacy Policy": "privacy",
+    "Privacy Policy": "privacy-policy",
     "Contact": "contact",
 }
+
+
+def _default_policy_page_urls() -> Dict[str, str]:
+    """Secrets/기본값으로 고정된 실제 About·Privacy·Contact URL."""
+    return {
+        "About": BLOGGER_ABOUT_URL,
+        "Privacy Policy": BLOGGER_PRIVACY_URL,
+        "Contact": BLOGGER_CONTACT_URL,
+    }
+
+
+def _merge_policy_page_urls(discovered: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """기본 URL을 깔고, API에서 찾은 URL이 있으면 덮어쓴다."""
+    merged = _default_policy_page_urls()
+    for k, v in (discovered or {}).items():
+        if v:
+            merged[k] = v.rstrip("/")
+    return merged
 
 
 def _get_blogger_blog_url(access_token: str) -> str:
@@ -2311,8 +2343,12 @@ def _get_blogger_blog_url(access_token: str) -> str:
 
 
 def _blogger_page_href(blog_url: str, title: str, page_url_from_api: str = "") -> str:
+    """우선순위: 인자 URL → 기본(Secrets) URL → /p/slug 추정."""
     if page_url_from_api:
         return page_url_from_api
+    defaults = _default_policy_page_urls()
+    if title in defaults and defaults[title]:
+        return defaults[title]
     slug = _BLOGGER_PAGE_SLUGS.get(title, title.lower().replace(" ", "-"))
     if blog_url:
         return f"{blog_url}/p/{slug}.html"
@@ -2405,7 +2441,7 @@ def ensure_blogger_policy_pages() -> Dict[str, str]:
     """AdSense용 About / Privacy / Contact 페이지를 Blogger에 동기화하고 {제목: url} 맵을 반환.
     각 페이지 본문에도 공통 내비/푸터를 넣어 메뉴처럼 보이게 한다.
     """
-    page_urls: Dict[str, str] = {}
+    page_urls: Dict[str, str] = _default_policy_page_urls()
     if not _blogger_configured():
         return page_urls
     try:
@@ -2530,6 +2566,28 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         except Exception as e:
             logger.warning(f"[블로거] 페이지 URL 조회 실패(내비는 추정 경로 사용): {e}")
 
+        page_urls = _merge_policy_page_urls(page_urls)
+        # Posts로 올라간 About/Privacy/Contact 도 제목으로 한 번 더 탐색
+        try:
+            posts_scan = requests.get(
+                f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"maxResults": 50, "fetchBodies": "false"},
+                timeout=20,
+            )
+            if posts_scan.ok:
+                for item in posts_scan.json().get("items") or []:
+                    t = (item.get("title") or "").strip()
+                    if t in ("About", "Privacy Policy", "Contact", "Privacy", "About this blog") and item.get("url"):
+                        key = "Privacy Policy" if t in ("Privacy", "Privacy Policy") else ("About" if "About" in t else "Contact")
+                        if t == "Contact":
+                            key = "Contact"
+                        if t in ("About", "About this blog"):
+                            key = "About"
+                        page_urls[key] = item["url"]
+        except Exception as e:
+            logger.warning(f"[블로거] 정책 글(Posts) URL 스캔 실패: {e}")
+        page_urls = _merge_policy_page_urls(page_urls)
         nav_html = _blogger_site_nav_html(blog_url, page_urls)
         value_html = _reader_value_box_html(article.get("expression", ""))
         footer_html = _blogger_site_footer_html(blog_url, page_urls)
@@ -3107,6 +3165,7 @@ def repair_old_posts() -> None:
                             repair_page_urls[t] = item["url"]
             except Exception:
                 pass
+            repair_page_urls = _merge_policy_page_urls(repair_page_urls)
             resp = requests.get(
                 f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/",
                 headers={"Authorization": f"Bearer {access_token}"},
