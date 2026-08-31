@@ -2324,6 +2324,46 @@ def update_post_blogger_url(post_file: str, blogger_url: str) -> None:
     with open(POSTS_JSON, "w", encoding="utf-8") as f:
         json.dump(posts, f, ensure_ascii=False, indent=2)
 
+
+# GitHub Pages용 정적 About/Privacy/Contact (Blogger 정책 페이지와 별개, 선택 산출물)
+STATIC_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{page_title} | {site_title}</title>
+<meta name="description" content="{page_title} — {site_title}">
+<link rel="icon" type="image/png" href="favicon.png">{search_console_meta}
+<meta name="robots" content="index,follow">
+{ga_snippet}{adsense_snippet}
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ max-width: 720px; margin: 0 auto; padding: 24px 16px 60px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans KR', 'Segoe UI', sans-serif;
+    line-height: 1.75; color: #1a1a1a; background: #fafafa; }}
+  h1 {{ font-size: 1.6em; margin: 0 0 16px; }}
+  h2 {{ font-size: 1.2em; margin-top: 1.6em; border-left: 4px solid #2563eb; padding-left: 10px; }}
+  a {{ color: #2563eb; }}
+  .back {{ display: inline-block; margin-bottom: 20px; font-weight: 700; text-decoration: none; }}
+  footer {{ margin-top: 3em; padding-top: 1em; border-top: 1px solid #e5e7eb; font-size: 0.9em; color: #6b7280; }}
+</style>
+</head>
+<body>
+<a class="back" href="index.html">← Home</a>
+<h1>{page_title}</h1>
+{page_body}
+<footer>
+  <p>{site_title}</p>
+  <p>
+    <a href="about.html">About</a> ·
+    <a href="privacy.html">Privacy</a> ·
+    <a href="contact.html">Contact</a>
+  </p>
+</footer>
+</body>
+</html>
+"""
+
 def generate_static_pages() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     common_kwargs = dict(site_title=SITE_TITLE, search_console_meta=_search_console_meta(), ga_snippet=_ga_snippet(), adsense_snippet=_adsense_snippet())
