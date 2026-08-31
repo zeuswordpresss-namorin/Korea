@@ -163,7 +163,7 @@ FONT_CANDIDATES = [
 DOCS_DIR = "docs"
 POSTS_DIR = os.path.join(DOCS_DIR, "posts")
 # [카드뉴스] Instagram/Threads 1080x1080 슬라이드 — 로컬 다운로드 + GitHub Pages 공개 URL
-CARD_NEWS_SIZE = (1080, 1080)
+CARD_NEWS_SIZE = (1080, 1920)  # 모바일 9:16 스토리/릴스 비율
 CARD_NEWS_PUBLIC_DIR = os.path.join(DOCS_DIR, "card_news")  # SITE_URL/card_news/... (API용 공개)
 CARD_NEWS_DOWNLOAD_DIR = os.environ.get("CARD_NEWS_DOWNLOAD_DIR", "downloads/card_news")  # 로컬 다운로드 폴더
 CARD_NEWS_SLIDE_COUNT = int(os.environ.get("CARD_NEWS_SLIDE_COUNT", "4"))
@@ -1526,48 +1526,53 @@ def _card_news_copy(article: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+
 def _draw_card_slide(
     theme: Dict[str, Any],
     *,
     slide_no: int,
     total: int,
     expression: str,
+    hold_letter: str,
+    hold_label: str,
     headline: str,
     subtext: str,
     footer: str,
 ) -> Image.Image:
-    """1080x1080 카드뉴스 1장."""
+    """1080x1920 (9:16) 카드뉴스 1장. 하단 여백에 H.O.L.D. 단계 표시."""
     w, h = CARD_NEWS_SIZE
-    seed = int(hashlib.md5(f"{expression}-{slide_no}".encode()).hexdigest(), 16) % 100000
+    seed = int(hashlib.md5(f"{expression}-{slide_no}-{hold_letter}".encode()).hexdigest(), 16) % 100000
     colors = theme.get("gradient") or [(30, 41, 59), (51, 65, 85), (71, 85, 105)]
     img = _make_random_gradient_background((w, h), colors, seed=seed).convert("RGBA")
     draw = ImageDraw.Draw(img)
     accent = _hex_to_rgb(theme.get("accent") or "#e95c84")
 
     # 상단 배지
-    badge_font = _load_font(28)
+    badge_font = _load_font(30)
     badge = f"{theme.get('label', 'KOREAN')}  ·  {slide_no}/{total}"
     bb = draw.textbbox((0, 0), badge, font=badge_font)
-    pad = 14
+    pad = 16
     draw.rounded_rectangle(
-        [40, 40, 40 + (bb[2] - bb[0]) + pad * 2, 40 + (bb[3] - bb[1]) + pad],
-        radius=20,
+        [48, 56, 48 + (bb[2] - bb[0]) + pad * 2, 56 + (bb[3] - bb[1]) + pad],
+        radius=22,
         fill=accent + (230,),
     )
-    draw.text((40 + pad, 40 + pad // 2 - bb[1]), badge, font=badge_font, fill=(255, 255, 255, 255))
+    draw.text((48 + pad, 56 + pad // 2 - bb[1]), badge, font=badge_font, fill=(255, 255, 255, 255))
 
-    # 본문 카드 영역
-    card_m = 48
+    # 본문 카드 (하단 H.O.L.D. 영역 확보: 아래쪽 280px 비움)
+    card_m = 52
+    card_top = 200
+    card_bottom = h - 320
     draw.rounded_rectangle(
-        [card_m, 160, w - card_m, h - 160],
-        radius=36,
-        fill=(255, 255, 255, 235),
+        [card_m, card_top, w - card_m, card_bottom],
+        radius=40,
+        fill=(255, 255, 255, 240),
     )
 
-    y = 200
+    y = card_top + 48
     if expression and slide_no == 1:
-        ef = _load_font(96 if len(expression) <= 6 else (72 if len(expression) <= 12 else 56))
-        lines = _wrap_by_pixel_width(draw, expression, ef, w - card_m * 2 - 60)[:2]
+        ef = _load_font(110 if len(expression) <= 6 else (84 if len(expression) <= 12 else 64))
+        lines = _wrap_by_pixel_width(draw, expression, ef, w - card_m * 2 - 70)[:2]
         for line in lines:
             lb = draw.textbbox((0, 0), line, font=ef)
             tw = lb[2] - lb[0]
@@ -1576,56 +1581,122 @@ def _draw_card_slide(
                 line,
                 font=ef,
                 fill=accent + (255,),
-                stroke_width=2,
+                stroke_width=3,
                 stroke_fill=_blend_rgb(accent, (0, 0, 0), 0.4) + (200,),
             )
-            y += (lb[3] - lb[1]) + 12
-        y += 24
+            y += (lb[3] - lb[1]) + 14
+        y += 28
 
-    hf = _load_font(44 if slide_no != 1 else 36)
-    h_lines = _wrap_by_pixel_width(draw, headline, hf, w - card_m * 2 - 80)[:4]
+    hf = _load_font(48 if slide_no != 1 else 40)
+    h_lines = _wrap_by_pixel_width(draw, headline, hf, w - card_m * 2 - 80)[:5]
     for line in h_lines:
         lb = draw.textbbox((0, 0), line, font=hf)
         tw = lb[2] - lb[0]
-        draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=hf, fill=(30, 30, 30, 255))
-        y += (lb[3] - lb[1]) + 10
+        draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=hf, fill=(28, 28, 28, 255))
+        y += (lb[3] - lb[1]) + 12
 
     if subtext:
-        y += 20
-        sf = _load_font(30)
-        s_lines = _wrap_by_pixel_width(draw, subtext, sf, w - card_m * 2 - 80)[:5]
+        y += 24
+        sf = _load_font(32)
+        s_lines = _wrap_by_pixel_width(draw, subtext, sf, w - card_m * 2 - 80)[:7]
         for line in s_lines:
             lb = draw.textbbox((0, 0), line, font=sf)
             tw = lb[2] - lb[0]
-            draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=sf, fill=(70, 70, 70, 255))
-            y += (lb[3] - lb[1]) + 8
+            draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=sf, fill=(75, 75, 75, 255))
+            y += (lb[3] - lb[1]) + 10
 
-    # 하단 브랜드
-    ff = _load_font(26)
-    foot = footer or SITE_TITLE
-    fb = draw.textbbox((0, 0), foot, font=ff)
-    draw.text(((w - (fb[2] - fb[0])) / 2, h - 100), foot, font=ff, fill=(255, 255, 255, 240))
-    draw.rectangle([0, h - 16, w, h], fill=accent + (255,))
+    # ===== 하단 여백 H.O.L.D. 바 =====
+    hold_y = h - 280
+    # 반투명 하단 패널
+    draw.rounded_rectangle(
+        [40, hold_y, w - 40, h - 48],
+        radius=28,
+        fill=(0, 0, 0, 120),
+    )
+    hold_steps = [
+        ("H", "HOOK"),
+        ("O", "OBSTACLE"),
+        ("L", "LOOP"),
+        ("D", "DELIVER"),
+    ]
+    step_w = (w - 100) // 4
+    base_x = 50
+    letter_font = _load_font(36)
+    label_font = _load_font(20)
+    for i, (letter, lab) in enumerate(hold_steps):
+        cx = base_x + step_w * i + step_w // 2
+        active = letter == hold_letter
+        circle_r = 28
+        cy = hold_y + 70
+        fill_c = accent + (255,) if active else (255, 255, 255, 60)
+        outline = (255, 255, 255, 255) if active else (255, 255, 255, 80)
+        draw.ellipse(
+            [cx - circle_r, cy - circle_r, cx + circle_r, cy + circle_r],
+            fill=fill_c,
+            outline=outline,
+            width=3,
+        )
+        lb = draw.textbbox((0, 0), letter, font=letter_font)
+        draw.text(
+            (cx - (lb[2] - lb[0]) / 2 - lb[0], cy - (lb[3] - lb[1]) / 2 - lb[1]),
+            letter,
+            font=letter_font,
+            fill=(255, 255, 255, 255) if active else (255, 255, 255, 180),
+        )
+        lab_b = draw.textbbox((0, 0), lab, font=label_font)
+        draw.text(
+            (cx - (lab_b[2] - lab_b[0]) / 2, cy + circle_r + 10),
+            lab,
+            font=label_font,
+            fill=(255, 255, 255, 240) if active else (255, 255, 255, 140),
+        )
+        # 연결선
+        if i < 3:
+            x1 = cx + circle_r + 6
+            x2 = base_x + step_w * (i + 1) + step_w // 2 - circle_r - 6
+            draw.line([(x1, cy), (x2, cy)], fill=(255, 255, 255, 90), width=3)
+
+    # 현재 단계 한 줄 설명
+    stage_font = _load_font(26)
+    stage_line = f"{hold_letter} · {hold_label}"
+    sb = draw.textbbox((0, 0), stage_line, font=stage_font)
+    draw.text(
+        ((w - (sb[2] - sb[0])) / 2, hold_y + 175),
+        stage_line,
+        font=stage_font,
+        fill=(255, 255, 255, 230),
+    )
+
+    # 최하단 브랜드 스트립
+    ff = _load_font(24)
+    foot = footer or SITE_TITLE or "Learn Korean → See Koreans"
+    # 긴 URL은 줄바꿈
+    foot_lines = _wrap_by_pixel_width(draw, foot, ff, w - 80)[:2]
+    fy = h - 42
+    for line in reversed(foot_lines):
+        fb = draw.textbbox((0, 0), line, font=ff)
+        fy -= (fb[3] - fb[1]) + 4
+    # 실제로는 hold 패널 안이 아니라 맨 아래 액센트 바 위
+    draw.rectangle([0, h - 14, w, h], fill=accent + (255,))
     return img.convert("RGB")
 
 
 def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """카드뉴스 슬라이드 PNG를 downloads/ + docs/card_news/ 에 생성.
-    반환: {slug, local_paths, public_urls, download_dir}
-    """
+    """H.O.L.D. 4장 카드뉴스 (9:16). downloads/ + docs/card_news/ 저장."""
     category = article.get("category") or "번역감정"
     theme = get_theme(category)
     copy = _card_news_copy(article)
     expr = copy["expression"]
     slug = _card_news_slug(expr, article.get("title") or "")
-    n = max(2, min(CARD_NEWS_SLIDE_COUNT, 5))
+    n = 4  # H.O.L.D. 고정 4장
 
+    # Hook / Obstacle / Loop / Deliver
     slides_spec = [
-        (1, expr, copy["meaning"], "Korean expression of the day"),
-        (2, "Meaning", copy["meaning"], "Nuance learners often miss"),
-        (3, "When to use it", copy["usage"], "Real conversation context"),
-        (4, "Read more", blogger_url or SITE_URL or "learnkoreanseekoreans.blogspot.com", copy["cta"]),
-    ][:n]
+        ("H", "HOOK — Stop scrolling", expr, copy["meaning"][:100], "Korean expression of the day"),
+        ("O", "OBSTACLE — Why English falls short", "The translation gap", copy["meaning"], "Nuance gets lost"),
+        ("L", "LOOP — When do Koreans say it?", "Real situations", copy["usage"], "Stay curious…"),
+        ("D", "DELIVER — Takeaway + link", "Read the full story", blogger_url or SITE_URL or "learnkoreanseekoreans.blogspot.com", copy["cta"]),
+    ]
 
     public_dir = os.path.join(CARD_NEWS_PUBLIC_DIR, slug)
     download_dir = os.path.join(CARD_NEWS_DOWNLOAD_DIR, slug)
@@ -1635,12 +1706,14 @@ def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") ->
     local_paths: List[str] = []
     public_urls: List[str] = []
 
-    for i, (num, headline, sub, foot) in enumerate(slides_spec, start=1):
+    for i, (letter, hold_label, headline, sub, foot) in enumerate(slides_spec, start=1):
         img = _draw_card_slide(
             theme,
             slide_no=i,
             total=n,
             expression=expr if i == 1 else "",
+            hold_letter=letter,
+            hold_label=hold_label,
             headline=headline if i != 1 else copy["cta"],
             subtext=sub if i != 1 else copy["meaning"],
             footer=foot if i == n else (SITE_TITLE or "Learn Korean See Koreans"),
@@ -1653,11 +1726,9 @@ def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") ->
         local_paths.append(dl_path)
         if SITE_URL:
             public_urls.append(f"{SITE_URL.rstrip('/')}/card_news/{slug}/{fname}")
-        else:
-            public_urls.append("")
-        logger.info(f"[카드뉴스] 저장: {dl_path}")
+        logger.info(f"[카드뉴스] 저장({letter}): {dl_path}")
 
-    logger.info(f"[카드뉴스] {n}장 생성 → 다운로드 폴더: {download_dir}")
+    logger.info(f"[카드뉴스] H.O.L.D. 9:16 {n}장 → {download_dir}")
     return {
         "slug": slug,
         "local_paths": local_paths,
@@ -1665,6 +1736,7 @@ def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") ->
         "download_dir": download_dir,
         "public_dir": public_dir,
     }
+
 
 
 BRAND_GRADIENT = [(15, 23, 42), (30, 41, 59), (51, 65, 85)]
@@ -3266,6 +3338,37 @@ def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) ->
 
 
 
+
+def _repair_blogger_hero_image(html_content: str, local_thumb_path: str, title: str, public_thumb_url: str = "") -> str:
+    """Blogger 본문 첫 이미지/깨진 히어로를 새 JPEG(+data-URI 폴백)으로 교체."""
+    if not html_content:
+        return html_content
+    hero = _blogger_hero_img_html(public_thumb_url, local_thumb_path, title)
+    # 기존 첫 <img ...> 를 히어로로 교체 (nav 아이콘 등 작은 이미지 제외: max-width 스타일 또는 상단부)
+    def _repl_first_img(m):
+        return hero
+    new_html, n = re.subn(
+        r'<img\b[^>]*(?:max-width:\s*100%|heroThumb|thumbs/)[^>]*>',
+        _repl_first_img,
+        html_content,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if n:
+        return new_html
+    # 패턴 못 찾으면 nav 다음 / value box 다음에 삽입
+    if "site-policy-nav" in html_content and hero not in html_content:
+        new_html = re.sub(
+            r'(</nav>)',
+            r'\1' + hero,
+            html_content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        return new_html
+    return html_content
+
+
 def _blogger_hero_img_html(thumb_url: str, local_thumb_path: str, title: str) -> str:
     """Blogger 본문 히어로 이미지. 공개 URL + 실패 시 JPEG data-URI 폴백(미리보기 깨짐 방지)."""
     alt = html.escape(title, quote=True)
@@ -3927,11 +4030,30 @@ def repair_old_posts() -> None:
             title = new_title
             logger.info(f"[복구][SEO 제목] {expression} → {new_title}")
 
-        # 1) 썸네일 재생성 (항상 안전하게 덮어쓰기 — expression 폴백 로직이 이미 최신 버전)
-        thumb_path = os.path.join(DOCS_DIR, p["thumb"])
+        # 1) 썸네일 재생성 — 항상 JPEG로 저장하고 posts.json 경로를 .jpg로 통일
+        old_thumb_rel = (p.get("thumb") or "").strip()
+        base_name = os.path.splitext(os.path.basename(old_thumb_rel) or "thumb")[0]
+        if not base_name or base_name == "thumb":
+            base_name = slugify(expression or title)[:40] or "thumb"
+        new_thumb_rel = f"thumbs/{base_name}.jpg"
+        thumb_path = os.path.join(DOCS_DIR, new_thumb_rel)
+        os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
         try:
             generate_thumbnail(title, thumb_path, theme, category, "", expression)
-            fixed_thumbs += 1
+            if not os.path.isfile(thumb_path):
+                # 생성기가 다른 확장자로 쓴 경우 흡수
+                for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                    alt = os.path.join(DOCS_DIR, "thumbs", base_name + ext)
+                    if os.path.isfile(alt):
+                        if ext != ".jpg":
+                            Image.open(alt).convert("RGB").save(thumb_path, format="JPEG", quality=88)
+                        break
+            if os.path.isfile(thumb_path):
+                p["thumb"] = new_thumb_rel
+                fixed_thumbs += 1
+                logger.info(f"[복구] 썸네일 재생성: {new_thumb_rel}")
+            else:
+                logger.warning(f"[복구] 썸네일 파일이 생성되지 않음: {title}")
         except Exception as e:
             logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
 
@@ -4072,8 +4194,19 @@ def repair_old_posts() -> None:
                     new_content, repair_blog_url, repair_page_urls, expression=expr_for_box
                 )
                 if new_content != before_chrome:
-                    # hold_content_fixed 카운트와 별도로 레이아웃 갱신으로 취급 (로그는 아래 공통)
                     pass
+                # [FIX] 리페어 시 이전 글 썸네일(JPEG) 복구 — Blogger 본문 히어로 교체
+                if local:
+                    rel = (local.get("thumb") or "").strip()
+                    local_thumb = os.path.join(DOCS_DIR, rel) if rel else ""
+                    pub = f"{SITE_URL.rstrip('/')}/{rel}" if (SITE_URL and rel) else ""
+                    if local_thumb and os.path.isfile(local_thumb):
+                        before_img = new_content
+                        new_content = _repair_blogger_hero_image(
+                            new_content, local_thumb, new_bp_title or bp_title, pub
+                        )
+                        if new_content != before_img:
+                            logger.info(f"[복구] Blogger 썸네일 복구: {rel}")
 
                 if not local:
                     # 매칭 안 되는 글도 H.O.L.D. 본문만 고친 뒤 필요 시 업데이트
