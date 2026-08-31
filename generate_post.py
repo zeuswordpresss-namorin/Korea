@@ -162,11 +162,11 @@ FONT_CANDIDATES = [
 
 DOCS_DIR = "docs"
 POSTS_DIR = os.path.join(DOCS_DIR, "posts")
-# [카드뉴스] Instagram/Threads 1080x1080 슬라이드 — 로컬 다운로드 + GitHub Pages 공개 URL
-CARD_NEWS_SIZE = (1080, 1920)  # 모바일 9:16 스토리/릴스 비율
-CARD_NEWS_PUBLIC_DIR = os.path.join(DOCS_DIR, "card_news")  # SITE_URL/card_news/... (API용 공개)
-CARD_NEWS_DOWNLOAD_DIR = os.environ.get("CARD_NEWS_DOWNLOAD_DIR", "downloads/card_news")  # 로컬 다운로드 폴더
-CARD_NEWS_SLIDE_COUNT = int(os.environ.get("CARD_NEWS_SLIDE_COUNT", "4"))
+# [인스타툰] Instagram/Threads 5컷 대화 툰 (1080x1080 캐러셀)
+INSTATOON_SIZE = (1080, 1080)
+INSTATOON_PUBLIC_DIR = os.path.join(DOCS_DIR, "instatoon")
+INSTATOON_DOWNLOAD_DIR = os.environ.get("INSTATOON_DOWNLOAD_DIR", "downloads/instatoon")
+INSTATOON_CUTS = 5
 # [NEW] 구글 블로그(Blogger)만 메인으로 발행하고, GitHub Pages는 이미지 호스팅(docs/thumbs)과
 # posts.json(내부 상태) 용도로만 남긴다. 개별 글 페이지·홈페이지(index.html)·sitemap.xml처럼
 # "공개 사이트"로 보일 수 있는 산출물은 더 이상 만들지 않는다 (중복 콘텐츠 방지).
@@ -1505,225 +1505,194 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
             pass
 
 
-def _card_news_slug(expression: str, title: str) -> str:
+
+def _instatoon_slug(expression: str, title: str) -> str:
     base = (expression or title or "post").strip()
     base = re.sub(r"[^\w가-힣\-]+", "_", base)[:40].strip("_") or "post"
     return base
 
 
-def _card_news_copy(article: Dict[str, Any]) -> Dict[str, str]:
-    """카드뉴스 슬라이드용 짧은 문구."""
+def _instatoon_dialogue(article: Dict[str, Any]) -> List[Dict[str, str]]:
+    """표현 주제에 맞는 5컷 대화 스크립트 (인스타툰)."""
     expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
+    if not expr:
+        expr = "이 표현"
     title = (article.get("title") or "").strip()
     meta = (article.get("meta_description") or "").strip()
-    # HTML 본문에서 첫 문단 힌트
-    body = re.sub(r"<[^>]+>", " ", article.get("html_body") or "")
-    body = re.sub(r"\s+", " ", body).strip()
-    meaning = meta[:120] if meta else (title[:100] if title else "")
-    usage = ""
-    if body:
-        # 짧은 사용 힌트
-        usage = body[:140] + ("…" if len(body) > 140 else "")
-    return {
-        "expression": expr or "한국어 표현",
-        "meaning": meaning or f'What does "{expr}" mean in Korean?',
-        "usage": usage or "See real situations and cultural nuance on the blog.",
-        "cta": "Learn Korean → See Koreans",
-    }
+    # 컷별: speaker(A/B/N=나레이션), ko, en
+    cuts = [
+        {
+            "cut": "1",
+            "label": "CUT 1 · Setup",
+            "speaker": "N",
+            "bubble": f"오늘 배울 말: 「{expr}」",
+            "sub": "A real moment where this word shows up.",
+        },
+        {
+            "cut": "2",
+            "label": "CUT 2 · Awkward try",
+            "speaker": "A",
+            "bubble": "Direct translation… feels weird, right?",
+            "sub": f"Foreigner tries to say something near 「{expr}」.",
+        },
+        {
+            "cut": "3",
+            "label": "CUT 3 · Native line",
+            "speaker": "B",
+            "bubble": f"아, 그럴 땐 「{expr}」 라고 해.",
+            "sub": "A Korean friend drops the natural line.",
+        },
+        {
+            "cut": "4",
+            "label": "CUT 4 · Nuance",
+            "speaker": "B",
+            "bubble": "뜻만 외우지 말고, 언제 쓰는지가 포인트야.",
+            "sub": (meta[:90] + "…") if len(meta) > 90 else (meta or "Meaning + situation matter together."),
+        },
+        {
+            "cut": "5",
+            "label": "CUT 5 · Takeaway",
+            "speaker": "N",
+            "bubble": f"「{expr}」 — use it in the right moment.",
+            "sub": title[:80] if title else "Learn Korean → See Koreans",
+        },
+    ]
+    return cuts
 
 
+def _draw_speech_bubble(draw, xy, text, font, *, fill=(255, 255, 255, 245), stroke=(40, 40, 40, 255), max_w=700):
+    x, y = xy
+    lines = _wrap_by_pixel_width(draw, text, font, max_w)[:4]
+    if not lines:
+        return y
+    pads = 18
+    line_gap = 8
+    heights = []
+    widths = []
+    for line in lines:
+        b = draw.textbbox((0, 0), line, font=font)
+        widths.append(b[2] - b[0])
+        heights.append(b[3] - b[1])
+    box_w = max(widths) + pads * 2
+    box_h = sum(heights) + line_gap * (len(lines) - 1) + pads * 2
+    draw.rounded_rectangle([x, y, x + box_w, y + box_h], radius=22, fill=fill, outline=stroke, width=3)
+    # tail
+    draw.polygon([(x + 36, y + box_h - 2), (x + 20, y + box_h + 22), (x + 58, y + box_h - 2)], fill=fill, outline=stroke)
+    cy = y + pads
+    for i, line in enumerate(lines):
+        draw.text((x + pads, cy), line, font=font, fill=(25, 25, 25, 255))
+        cy += heights[i] + line_gap
+    return y + box_h + 28
 
-def _draw_card_slide(
+
+def _draw_character(draw, cx, cy, *, label: str, accent, mirror=False):
+    """간단한 툰 캐릭터 (원형 머리 + 몸)."""
+    r = 52
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 255, 255, 255), outline=accent + (255,), width=4)
+    # eyes
+    eye_y = cy - 8
+    for ex in (cx - 18, cx + 18):
+        draw.ellipse([ex - 6, eye_y - 6, ex + 6, eye_y + 6], fill=(30, 30, 30, 255))
+    # smile
+    draw.arc([cx - 20, cy + 2, cx + 20, cy + 28], 20, 160, fill=(30, 30, 30, 255), width=3)
+    # body
+    draw.rounded_rectangle([cx - 40, cy + r - 4, cx + 40, cy + r + 70], radius=20, fill=accent + (200,))
+    lf = _load_font(22)
+    b = draw.textbbox((0, 0), label, font=lf)
+    draw.text((cx - (b[2] - b[0]) / 2, cy + r + 78), label, font=lf, fill=(255, 255, 255, 255))
+
+
+def _draw_instatoon_cut(
     theme: Dict[str, Any],
     *,
-    slide_no: int,
-    total: int,
+    cut: Dict[str, str],
     expression: str,
-    hold_letter: str,
-    hold_label: str,
-    headline: str,
-    subtext: str,
-    footer: str,
+    total: int = 5,
 ) -> Image.Image:
-    """1080x1920 (9:16) 카드뉴스 1장. 하단 여백에 H.O.L.D. 단계 표시."""
-    w, h = CARD_NEWS_SIZE
-    seed = int(hashlib.md5(f"{expression}-{slide_no}-{hold_letter}".encode()).hexdigest(), 16) % 100000
-    colors = theme.get("gradient") or [(30, 41, 59), (51, 65, 85), (71, 85, 105)]
+    """인스타툰 1컷 (1080x1080)."""
+    w, h = INSTATOON_SIZE
+    seed = int(hashlib.md5(f"{expression}-{cut.get('cut')}".encode()).hexdigest(), 16) % 100000
+    colors = theme.get("gradient") or [(233, 92, 132), (247, 158, 173), (255, 205, 210)]
     img = _make_random_gradient_background((w, h), colors, seed=seed).convert("RGBA")
     draw = ImageDraw.Draw(img)
     accent = _hex_to_rgb(theme.get("accent") or "#e95c84")
 
-    # 상단 배지
-    badge_font = _load_font(30)
-    badge = f"{theme.get('label', 'KOREAN')}  ·  {slide_no}/{total}"
+    # 상단 라벨
+    badge_font = _load_font(28)
+    badge = cut.get("label") or f"CUT {cut.get('cut')}"
     bb = draw.textbbox((0, 0), badge, font=badge_font)
-    pad = 16
+    pad = 14
     draw.rounded_rectangle(
-        [48, 56, 48 + (bb[2] - bb[0]) + pad * 2, 56 + (bb[3] - bb[1]) + pad],
-        radius=22,
-        fill=accent + (230,),
+        [36, 36, 36 + (bb[2] - bb[0]) + pad * 2, 36 + (bb[3] - bb[1]) + pad],
+        radius=18,
+        fill=(0, 0, 0, 160),
     )
-    draw.text((48 + pad, 56 + pad // 2 - bb[1]), badge, font=badge_font, fill=(255, 255, 255, 255))
+    draw.text((36 + pad, 36 + pad // 2 - bb[1]), badge, font=badge_font, fill=(255, 255, 255, 255))
 
-    # 본문 카드 (하단 H.O.L.D. 영역 확보: 아래쪽 280px 비움)
-    card_m = 52
-    card_top = 200
-    card_bottom = h - 320
-    draw.rounded_rectangle(
-        [card_m, card_top, w - card_m, card_bottom],
-        radius=40,
-        fill=(255, 255, 255, 240),
-    )
+    # 패널 프레임
+    draw.rounded_rectangle([40, 110, w - 40, h - 120], radius=28, fill=(255, 255, 255, 235), outline=accent + (255,), width=5)
 
-    y = card_top + 48
-    if expression and slide_no == 1:
-        ef = _load_font(110 if len(expression) <= 6 else (84 if len(expression) <= 12 else 64))
-        lines = _wrap_by_pixel_width(draw, expression, ef, w - card_m * 2 - 70)[:2]
-        for line in lines:
-            lb = draw.textbbox((0, 0), line, font=ef)
-            tw = lb[2] - lb[0]
-            draw.text(
-                ((w - tw) / 2 - lb[0], y - lb[1]),
-                line,
-                font=ef,
-                fill=accent + (255,),
-                stroke_width=3,
-                stroke_fill=_blend_rgb(accent, (0, 0, 0), 0.4) + (200,),
-            )
+    speaker = cut.get("speaker") or "N"
+    bubble = cut.get("bubble") or ""
+    sub = cut.get("sub") or ""
+
+    if speaker == "N":
+        # 나레이션 중앙
+        nf = _load_font(48)
+        y = 280
+        for line in _wrap_by_pixel_width(draw, bubble, nf, w - 160)[:4]:
+            lb = draw.textbbox((0, 0), line, font=nf)
+            draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=nf, fill=accent + (255,))
             y += (lb[3] - lb[1]) + 14
-        y += 28
+        if sub:
+            sf = _load_font(30)
+            y += 20
+            for line in _wrap_by_pixel_width(draw, sub, sf, w - 180)[:4]:
+                lb = draw.textbbox((0, 0), line, font=sf)
+                draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=sf, fill=(60, 60, 60, 255))
+                y += (lb[3] - lb[1]) + 10
+    else:
+        # 캐릭터 + 말풍선
+        if speaker == "A":
+            _draw_character(draw, 200, 720, label="A", accent=_blend_rgb(accent, (80, 80, 120), 0.3))
+            _draw_speech_bubble(draw, (120, 200), bubble, _load_font(40), max_w=780)
+        else:
+            _draw_character(draw, 880, 720, label="B", accent=accent)
+            _draw_speech_bubble(draw, (100, 200), bubble, _load_font(40), max_w=780)
+        if sub:
+            sf = _load_font(28)
+            for i, line in enumerate(_wrap_by_pixel_width(draw, sub, sf, w - 160)[:3]):
+                lb = draw.textbbox((0, 0), line, font=sf)
+                draw.text(((w - (lb[2] - lb[0])) / 2, 880 + i * 34), line, font=sf, fill=(70, 70, 70, 255))
 
-    hf = _load_font(48 if slide_no != 1 else 40)
-    h_lines = _wrap_by_pixel_width(draw, headline, hf, w - card_m * 2 - 80)[:5]
-    for line in h_lines:
-        lb = draw.textbbox((0, 0), line, font=hf)
-        tw = lb[2] - lb[0]
-        draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=hf, fill=(28, 28, 28, 255))
-        y += (lb[3] - lb[1]) + 12
-
-    if subtext:
-        y += 24
-        sf = _load_font(32)
-        s_lines = _wrap_by_pixel_width(draw, subtext, sf, w - card_m * 2 - 80)[:7]
-        for line in s_lines:
-            lb = draw.textbbox((0, 0), line, font=sf)
-            tw = lb[2] - lb[0]
-            draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=sf, fill=(75, 75, 75, 255))
-            y += (lb[3] - lb[1]) + 10
-
-    # ===== 하단 여백 H.O.L.D. 바 =====
-    hold_y = h - 280
-    # 반투명 하단 패널
-    draw.rounded_rectangle(
-        [40, hold_y, w - 40, h - 48],
-        radius=28,
-        fill=(0, 0, 0, 120),
-    )
-    hold_steps = [
-        ("H", "HOOK"),
-        ("O", "OBSTACLE"),
-        ("L", "LOOP"),
-        ("D", "DELIVER"),
-    ]
-    step_w = (w - 100) // 4
-    base_x = 50
-    letter_font = _load_font(36)
-    label_font = _load_font(20)
-    for i, (letter, lab) in enumerate(hold_steps):
-        cx = base_x + step_w * i + step_w // 2
-        active = letter == hold_letter
-        circle_r = 28
-        cy = hold_y + 70
-        fill_c = accent + (255,) if active else (255, 255, 255, 60)
-        outline = (255, 255, 255, 255) if active else (255, 255, 255, 80)
-        draw.ellipse(
-            [cx - circle_r, cy - circle_r, cx + circle_r, cy + circle_r],
-            fill=fill_c,
-            outline=outline,
-            width=3,
-        )
-        lb = draw.textbbox((0, 0), letter, font=letter_font)
-        draw.text(
-            (cx - (lb[2] - lb[0]) / 2 - lb[0], cy - (lb[3] - lb[1]) / 2 - lb[1]),
-            letter,
-            font=letter_font,
-            fill=(255, 255, 255, 255) if active else (255, 255, 255, 180),
-        )
-        lab_b = draw.textbbox((0, 0), lab, font=label_font)
-        draw.text(
-            (cx - (lab_b[2] - lab_b[0]) / 2, cy + circle_r + 10),
-            lab,
-            font=label_font,
-            fill=(255, 255, 255, 240) if active else (255, 255, 255, 140),
-        )
-        # 연결선
-        if i < 3:
-            x1 = cx + circle_r + 6
-            x2 = base_x + step_w * (i + 1) + step_w // 2 - circle_r - 6
-            draw.line([(x1, cy), (x2, cy)], fill=(255, 255, 255, 90), width=3)
-
-    # 현재 단계 한 줄 설명
-    stage_font = _load_font(26)
-    stage_line = f"{hold_letter} · {hold_label}"
-    sb = draw.textbbox((0, 0), stage_line, font=stage_font)
-    draw.text(
-        ((w - (sb[2] - sb[0])) / 2, hold_y + 175),
-        stage_line,
-        font=stage_font,
-        fill=(255, 255, 255, 230),
-    )
-
-    # 최하단 브랜드 스트립
+    # 하단 브랜드
+    foot = f"{expression}  ·  {cut.get('cut')}/{total}  ·  Learn Korean → See Koreans"
     ff = _load_font(24)
-    foot = footer or SITE_TITLE or "Learn Korean → See Koreans"
-    # 긴 URL은 줄바꿈
-    foot_lines = _wrap_by_pixel_width(draw, foot, ff, w - 80)[:2]
-    fy = h - 42
-    for line in reversed(foot_lines):
-        fb = draw.textbbox((0, 0), line, font=ff)
-        fy -= (fb[3] - fb[1]) + 4
-    # 실제로는 hold 패널 안이 아니라 맨 아래 액센트 바 위
-    draw.rectangle([0, h - 14, w, h], fill=accent + (255,))
+    fb = draw.textbbox((0, 0), foot, font=ff)
+    draw.rectangle([0, h - 48, w, h], fill=accent + (255,))
+    draw.text(((w - (fb[2] - fb[0])) / 2, h - 36), foot, font=ff, fill=(255, 255, 255, 255))
     return img.convert("RGB")
 
 
-def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """H.O.L.D. 4장 카드뉴스 (9:16). downloads/ + docs/card_news/ 저장."""
+def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
+    """표현 주제 대화체 인스타툰 5컷 → downloads/instatoon + docs/instatoon."""
     category = article.get("category") or "번역감정"
     theme = get_theme(category)
-    copy = _card_news_copy(article)
-    expr = copy["expression"]
-    slug = _card_news_slug(expr, article.get("title") or "")
-    n = 4  # H.O.L.D. 고정 4장
+    expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
+    slug = _instatoon_slug(expr, article.get("title") or "")
+    cuts = _instatoon_dialogue(article)
+    if blogger_url and cuts:
+        cuts[-1]["sub"] = blogger_url
 
-    # Hook / Obstacle / Loop / Deliver
-    slides_spec = [
-        ("H", "HOOK — Stop scrolling", expr, copy["meaning"][:100], "Korean expression of the day"),
-        ("O", "OBSTACLE — Why English falls short", "The translation gap", copy["meaning"], "Nuance gets lost"),
-        ("L", "LOOP — When do Koreans say it?", "Real situations", copy["usage"], "Stay curious…"),
-        ("D", "DELIVER — Takeaway + link", "Read the full story", blogger_url or SITE_URL or "learnkoreanseekoreans.blogspot.com", copy["cta"]),
-    ]
-
-    public_dir = os.path.join(CARD_NEWS_PUBLIC_DIR, slug)
-    download_dir = os.path.join(CARD_NEWS_DOWNLOAD_DIR, slug)
+    public_dir = os.path.join(INSTATOON_PUBLIC_DIR, slug)
+    download_dir = os.path.join(INSTATOON_DOWNLOAD_DIR, slug)
     os.makedirs(public_dir, exist_ok=True)
     os.makedirs(download_dir, exist_ok=True)
 
     local_paths: List[str] = []
     public_urls: List[str] = []
-
-    for i, (letter, hold_label, headline, sub, foot) in enumerate(slides_spec, start=1):
-        img = _draw_card_slide(
-            theme,
-            slide_no=i,
-            total=n,
-            expression=expr if i == 1 else "",
-            hold_letter=letter,
-            hold_label=hold_label,
-            headline=headline if i != 1 else copy["cta"],
-            subtext=sub if i != 1 else copy["meaning"],
-            footer=foot if i == n else (SITE_TITLE or "Learn Korean See Koreans"),
-        )
+    for i, cut in enumerate(cuts[:INSTATOON_CUTS], start=1):
+        img = _draw_instatoon_cut(theme, cut=cut, expression=expr or "한국어", total=INSTATOON_CUTS)
         fname = f"{i:02d}.png"
         pub_path = os.path.join(public_dir, fname)
         dl_path = os.path.join(download_dir, fname)
@@ -1731,10 +1700,10 @@ def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") ->
         img.save(dl_path, format="PNG", optimize=True)
         local_paths.append(dl_path)
         if SITE_URL:
-            public_urls.append(f"{SITE_URL.rstrip('/')}/card_news/{slug}/{fname}")
-        logger.info(f"[카드뉴스] 저장({letter}): {dl_path}")
+            public_urls.append(f"{SITE_URL.rstrip('/')}/instatoon/{slug}/{fname}")
+        logger.info(f"[인스타툰] CUT {i}/5 저장: {dl_path}")
 
-    logger.info(f"[카드뉴스] H.O.L.D. 9:16 {n}장 → {download_dir}")
+    logger.info(f"[인스타툰] 5컷 완료 → {download_dir}")
     return {
         "slug": slug,
         "local_paths": local_paths,
@@ -1742,6 +1711,15 @@ def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") ->
         "download_dir": download_dir,
         "public_dir": public_dir,
     }
+
+
+# 하위 호환 별칭 (옛 호출부 방지)
+def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
+    return generate_instatoon_images(article, blogger_url)
+
+
+def _card_news_slug(expression: str, title: str) -> str:
+    return _instatoon_slug(expression, title)
 
 
 
@@ -3307,17 +3285,17 @@ def _publish_instagram_carousel(article: Dict[str, Any], blogger_url: str, image
 
 
 def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) -> None:
-    """Blogger 성공 후: 카드뉴스(사전 생성분 재사용/보강) → Threads/Instagram 업로드."""
+    """Blogger 성공 후: 인스타툰 5컷 → Threads/Instagram 캐러셀 업로드."""
     if not blogger_url:
         return
     card = article.get("_card_news") if isinstance(article.get("_card_news"), dict) else None
     try:
         # 블로그 URL이 생긴 뒤 CTA 슬라이드 보강 위해 1회 더 생성(덮어쓰기)
-        card = generate_card_news_images(article, blogger_url)
-        article["_card_news"] = card
+        card = generate_instatoon_images(article, blogger_url)
+        article["_card_news"] = card  # 키 유지(하위호환)
         commit_and_push_changes()
     except Exception as e:
-        logger.warning(f"[카드뉴스] 생성 실패(썸네일 폴백): {e}")
+        logger.warning(f"[인스타툰] 생성 실패(썸네일 폴백): {e}")
 
     urls = (card or {}).get("public_urls") or []
     if not urls:
@@ -3340,7 +3318,7 @@ def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) ->
         publish_to_instagram(article, blogger_url, urls[0])
 
     if card and card.get("download_dir"):
-        logger.info(f"[카드뉴스] 로컬 다운로드 폴더: {card['download_dir']}")
+        logger.info(f"[인스타툰] 로컬 다운로드 폴더: {card['download_dir']}")
 
 
 
@@ -4050,11 +4028,11 @@ def repair_old_posts() -> None:
         except Exception as e:
             logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
 
-        # 1-b) 이전 글 카드뉴스 없으면 자동 생성 (9:16 H.O.L.D.)
+        # 1-b) 이전 글 인스타툰 5컷 없으면 자동 생성
         try:
-            slug_cn = _card_news_slug(expression, title)
+            slug_cn = _instatoon_slug(expression, title)
             need_card = True
-            for base in (CARD_NEWS_DOWNLOAD_DIR, CARD_NEWS_PUBLIC_DIR):
+            for base in (INSTATOON_DOWNLOAD_DIR, INSTATOON_PUBLIC_DIR):
                 folder = os.path.join(base, slug_cn)
                 if os.path.isdir(folder):
                     try:
@@ -4071,11 +4049,11 @@ def repair_old_posts() -> None:
                     "meta_description": (p.get("meta_description") or title),
                     "html_body": "",
                 }
-                generate_card_news_images(article_stub, (p.get("blogger_url") or "").strip())
+                generate_instatoon_images(article_stub, (p.get("blogger_url") or "").strip())
                 fixed_card_news += 1
-                logger.info(f"[복구] 카드뉴스 신규 생성: {slug_cn}")
+                logger.info(f"[복구] 인스타툰 5컷 생성: {slug_cn}")
         except Exception as e:
-            logger.warning(f"[복구] 카드뉴스 생성 실패({title}): {e}")
+            logger.warning(f"[복구] 인스타툰 생성 실패({title}): {e}")
 
         # 2) 본문 HTML의 히어로 영역에 발음 듣기 버튼이 없거나 낡은 형태면 최신 버튼으로 교체
         post_path = os.path.join(DOCS_DIR, p["file"])
@@ -4122,7 +4100,7 @@ def repair_old_posts() -> None:
         update_seo_files(kept_posts)
 
     logger.info(
-        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 카드뉴스 {fixed_card_news}개, 발음버튼 {fixed_buttons}개 패치, "
+        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 인스타툰 {fixed_card_news}개, 발음버튼 {fixed_buttons}개 패치, "
         f"다른 주제 글 {deleted_other_niche}개 삭제 (표현 추출 실패 {skipped_no_expression}개는 그대로 둠)"
     )
 
@@ -4458,13 +4436,13 @@ def run() -> None:
         update_seo_files(posts)
     build_lead_magnet_pdf(posts)  # [NEW] 무료 PDF 리드마그넷 자동 갱신
 
-    # [카드뉴스] Blogger/SNS 전에 항상 생성 → downloads/ + docs/card_news/ (push에 포함)
+    # [인스타툰] Blogger/SNS 전 5컷 생성 → downloads/instatoon + docs/instatoon
     try:
-        card_meta = generate_card_news_images(article, blogger_url="")
+        card_meta = generate_instatoon_images(article, blogger_url="")
         article["_card_news"] = card_meta
-        logger.info(f"[카드뉴스] 사전 생성 완료: {card_meta.get('download_dir')}")
+        logger.info(f"[인스타툰] 사전 생성 완료: {card_meta.get('download_dir')}")
     except Exception as e:
-        logger.warning(f"[카드뉴스] 사전 생성 실패: {e}")
+        logger.warning(f"[인스타툰] 사전 생성 실패: {e}")
         article["_card_news"] = {}
 
     commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
