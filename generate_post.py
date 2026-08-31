@@ -162,6 +162,11 @@ FONT_CANDIDATES = [
 
 DOCS_DIR = "docs"
 POSTS_DIR = os.path.join(DOCS_DIR, "posts")
+# [카드뉴스] Instagram/Threads 1080x1080 슬라이드 — 로컬 다운로드 + GitHub Pages 공개 URL
+CARD_NEWS_SIZE = (1080, 1080)
+CARD_NEWS_PUBLIC_DIR = os.path.join(DOCS_DIR, "card_news")  # SITE_URL/card_news/... (API용 공개)
+CARD_NEWS_DOWNLOAD_DIR = os.environ.get("CARD_NEWS_DOWNLOAD_DIR", "downloads/card_news")  # 로컬 다운로드 폴더
+CARD_NEWS_SLIDE_COUNT = int(os.environ.get("CARD_NEWS_SLIDE_COUNT", "4"))
 # [NEW] 구글 블로그(Blogger)만 메인으로 발행하고, GitHub Pages는 이미지 호스팅(docs/thumbs)과
 # posts.json(내부 상태) 용도로만 남긴다. 개별 글 페이지·홈페이지(index.html)·sitemap.xml처럼
 # "공개 사이트"로 보일 수 있는 산출물은 더 이상 만들지 않는다 (중복 콘텐츠 방지).
@@ -1480,6 +1485,175 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
     draw.rectangle([(0, THUMB_SIZE[1] - bar_h), (THUMB_SIZE[0], THUMB_SIZE[1])], fill=accent_rgb + (255,))
 
     img.convert("RGB").save(output_path, format="WEBP", quality=85, method=6)
+
+
+def _card_news_slug(expression: str, title: str) -> str:
+    base = (expression or title or "post").strip()
+    base = re.sub(r"[^\w가-힣\-]+", "_", base)[:40].strip("_") or "post"
+    return base
+
+
+def _card_news_copy(article: Dict[str, Any]) -> Dict[str, str]:
+    """카드뉴스 슬라이드용 짧은 문구."""
+    expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
+    title = (article.get("title") or "").strip()
+    meta = (article.get("meta_description") or "").strip()
+    # HTML 본문에서 첫 문단 힌트
+    body = re.sub(r"<[^>]+>", " ", article.get("html_body") or "")
+    body = re.sub(r"\s+", " ", body).strip()
+    meaning = meta[:120] if meta else (title[:100] if title else "")
+    usage = ""
+    if body:
+        # 짧은 사용 힌트
+        usage = body[:140] + ("…" if len(body) > 140 else "")
+    return {
+        "expression": expr or "한국어 표현",
+        "meaning": meaning or f'What does "{expr}" mean in Korean?',
+        "usage": usage or "See real situations and cultural nuance on the blog.",
+        "cta": "Learn Korean → See Koreans",
+    }
+
+
+def _draw_card_slide(
+    theme: Dict[str, Any],
+    *,
+    slide_no: int,
+    total: int,
+    expression: str,
+    headline: str,
+    subtext: str,
+    footer: str,
+) -> Image.Image:
+    """1080x1080 카드뉴스 1장."""
+    w, h = CARD_NEWS_SIZE
+    seed = int(hashlib.md5(f"{expression}-{slide_no}".encode()).hexdigest(), 16) % 100000
+    colors = theme.get("gradient") or [(30, 41, 59), (51, 65, 85), (71, 85, 105)]
+    img = _make_random_gradient_background((w, h), colors, seed=seed).convert("RGBA")
+    draw = ImageDraw.Draw(img)
+    accent = _hex_to_rgb(theme.get("accent") or "#e95c84")
+
+    # 상단 배지
+    badge_font = _load_font(28)
+    badge = f"{theme.get('label', 'KOREAN')}  ·  {slide_no}/{total}"
+    bb = draw.textbbox((0, 0), badge, font=badge_font)
+    pad = 14
+    draw.rounded_rectangle(
+        [40, 40, 40 + (bb[2] - bb[0]) + pad * 2, 40 + (bb[3] - bb[1]) + pad],
+        radius=20,
+        fill=accent + (230,),
+    )
+    draw.text((40 + pad, 40 + pad // 2 - bb[1]), badge, font=badge_font, fill=(255, 255, 255, 255))
+
+    # 본문 카드 영역
+    card_m = 48
+    draw.rounded_rectangle(
+        [card_m, 160, w - card_m, h - 160],
+        radius=36,
+        fill=(255, 255, 255, 235),
+    )
+
+    y = 200
+    if expression and slide_no == 1:
+        ef = _load_font(96 if len(expression) <= 6 else (72 if len(expression) <= 12 else 56))
+        lines = _wrap_by_pixel_width(draw, expression, ef, w - card_m * 2 - 60)[:2]
+        for line in lines:
+            lb = draw.textbbox((0, 0), line, font=ef)
+            tw = lb[2] - lb[0]
+            draw.text(
+                ((w - tw) / 2 - lb[0], y - lb[1]),
+                line,
+                font=ef,
+                fill=accent + (255,),
+                stroke_width=2,
+                stroke_fill=_blend_rgb(accent, (0, 0, 0), 0.4) + (200,),
+            )
+            y += (lb[3] - lb[1]) + 12
+        y += 24
+
+    hf = _load_font(44 if slide_no != 1 else 36)
+    h_lines = _wrap_by_pixel_width(draw, headline, hf, w - card_m * 2 - 80)[:4]
+    for line in h_lines:
+        lb = draw.textbbox((0, 0), line, font=hf)
+        tw = lb[2] - lb[0]
+        draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=hf, fill=(30, 30, 30, 255))
+        y += (lb[3] - lb[1]) + 10
+
+    if subtext:
+        y += 20
+        sf = _load_font(30)
+        s_lines = _wrap_by_pixel_width(draw, subtext, sf, w - card_m * 2 - 80)[:5]
+        for line in s_lines:
+            lb = draw.textbbox((0, 0), line, font=sf)
+            tw = lb[2] - lb[0]
+            draw.text(((w - tw) / 2 - lb[0], y - lb[1]), line, font=sf, fill=(70, 70, 70, 255))
+            y += (lb[3] - lb[1]) + 8
+
+    # 하단 브랜드
+    ff = _load_font(26)
+    foot = footer or SITE_TITLE
+    fb = draw.textbbox((0, 0), foot, font=ff)
+    draw.text(((w - (fb[2] - fb[0])) / 2, h - 100), foot, font=ff, fill=(255, 255, 255, 240))
+    draw.rectangle([0, h - 16, w, h], fill=accent + (255,))
+    return img.convert("RGB")
+
+
+def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
+    """카드뉴스 슬라이드 PNG를 downloads/ + docs/card_news/ 에 생성.
+    반환: {slug, local_paths, public_urls, download_dir}
+    """
+    category = article.get("category") or "번역감정"
+    theme = get_theme(category)
+    copy = _card_news_copy(article)
+    expr = copy["expression"]
+    slug = _card_news_slug(expr, article.get("title") or "")
+    n = max(2, min(CARD_NEWS_SLIDE_COUNT, 5))
+
+    slides_spec = [
+        (1, expr, copy["meaning"], "Korean expression of the day"),
+        (2, "Meaning", copy["meaning"], "Nuance learners often miss"),
+        (3, "When to use it", copy["usage"], "Real conversation context"),
+        (4, "Read more", blogger_url or SITE_URL or "learnkoreanseekoreans.blogspot.com", copy["cta"]),
+    ][:n]
+
+    public_dir = os.path.join(CARD_NEWS_PUBLIC_DIR, slug)
+    download_dir = os.path.join(CARD_NEWS_DOWNLOAD_DIR, slug)
+    os.makedirs(public_dir, exist_ok=True)
+    os.makedirs(download_dir, exist_ok=True)
+
+    local_paths: List[str] = []
+    public_urls: List[str] = []
+
+    for i, (num, headline, sub, foot) in enumerate(slides_spec, start=1):
+        img = _draw_card_slide(
+            theme,
+            slide_no=i,
+            total=n,
+            expression=expr if i == 1 else "",
+            headline=headline if i != 1 else copy["cta"],
+            subtext=sub if i != 1 else copy["meaning"],
+            footer=foot if i == n else (SITE_TITLE or "Learn Korean See Koreans"),
+        )
+        fname = f"{i:02d}.png"
+        pub_path = os.path.join(public_dir, fname)
+        dl_path = os.path.join(download_dir, fname)
+        img.save(pub_path, format="PNG", optimize=True)
+        img.save(dl_path, format="PNG", optimize=True)
+        local_paths.append(dl_path)
+        if SITE_URL:
+            public_urls.append(f"{SITE_URL.rstrip('/')}/card_news/{slug}/{fname}")
+        else:
+            public_urls.append("")
+        logger.info(f"[카드뉴스] 저장: {dl_path}")
+
+    logger.info(f"[카드뉴스] {n}장 생성 → 다운로드 폴더: {download_dir}")
+    return {
+        "slug": slug,
+        "local_paths": local_paths,
+        "public_urls": [u for u in public_urls if u],
+        "download_dir": download_dir,
+        "public_dir": public_dir,
+    }
+
 
 BRAND_GRADIENT = [(15, 23, 42), (30, 41, 59), (51, 65, 85)]
 BRAND_ACCENT = (250, 204, 21)
@@ -2861,16 +3035,161 @@ def publish_to_instagram(article: Dict[str, Any], blogger_url: str, image_url: s
         return None
 
 
+def _publish_threads_carousel(article: Dict[str, Any], blogger_url: str, image_urls: List[str]) -> Optional[str]:
+    """Threads 캐러셀(카드뉴스). 실패 시 None."""
+    if not (THREADS_ENABLED and THREADS_USER_ID and THREADS_ACCESS_TOKEN):
+        return None
+    if len(image_urls) < 2:
+        return None
+    caption = _sns_caption(article, blogger_url, platform="threads")
+    try:
+        child_ids = []
+        for url in image_urls[:10]:
+            r = requests.post(
+                f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads",
+                data={
+                    "media_type": "IMAGE",
+                    "image_url": url,
+                    "is_carousel_item": "true",
+                    "access_token": THREADS_ACCESS_TOKEN,
+                },
+                timeout=60,
+            )
+            if not r.ok:
+                logger.warning(f"[Threads] 캐러셀 자식 실패: {r.status_code} {r.text[:200]}")
+                return None
+            cid = (r.json() or {}).get("id")
+            if not cid:
+                return None
+            child_ids.append(cid)
+            _wait_media_container_ready(f"{THREADS_API_BASE}/{cid}", THREADS_ACCESS_TOKEN, label="Threads-child")
+        parent = requests.post(
+            f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads",
+            data={
+                "media_type": "CAROUSEL",
+                "children": ",".join(child_ids),
+                "text": caption,
+                "access_token": THREADS_ACCESS_TOKEN,
+            },
+            timeout=60,
+        )
+        if not parent.ok:
+            logger.warning(f"[Threads] 캐러셀 부모 실패: {parent.status_code} {parent.text[:300]}")
+            return None
+        creation_id = (parent.json() or {}).get("id")
+        if not creation_id:
+            return None
+        _wait_media_container_ready(f"{THREADS_API_BASE}/{creation_id}", THREADS_ACCESS_TOKEN, label="Threads-carousel")
+        pub = requests.post(
+            f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads_publish",
+            data={"creation_id": creation_id, "access_token": THREADS_ACCESS_TOKEN},
+            timeout=60,
+        )
+        if not pub.ok:
+            logger.warning(f"[Threads] 캐러셀 발행 실패: {pub.status_code} {pub.text[:300]}")
+            return None
+        mid = (pub.json() or {}).get("id", "")
+        logger.info(f"[Threads] 카드뉴스 캐러셀 발행 완료 id={mid}")
+        return mid or creation_id
+    except Exception as e:
+        logger.warning(f"[Threads] 캐러셀 예외: {e}")
+        return None
+
+
+def _publish_instagram_carousel(article: Dict[str, Any], blogger_url: str, image_urls: List[str]) -> Optional[str]:
+    """Instagram 캐러셀(카드뉴스)."""
+    if not (INSTAGRAM_ENABLED and INSTAGRAM_USER_ID and INSTAGRAM_ACCESS_TOKEN):
+        return None
+    if len(image_urls) < 2:
+        return None
+    caption = _sns_caption(article, blogger_url, platform="instagram")
+    try:
+        child_ids = []
+        for url in image_urls[:10]:
+            r = requests.post(
+                f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media",
+                data={
+                    "image_url": url,
+                    "is_carousel_item": "true",
+                    "access_token": INSTAGRAM_ACCESS_TOKEN,
+                },
+                timeout=60,
+            )
+            if not r.ok:
+                logger.warning(f"[Instagram] 캐러셀 자식 실패: {r.status_code} {r.text[:200]}")
+                return None
+            cid = (r.json() or {}).get("id")
+            if not cid:
+                return None
+            child_ids.append(cid)
+            _wait_media_container_ready(f"{INSTAGRAM_API_BASE}/{cid}", INSTAGRAM_ACCESS_TOKEN, label="IG-child")
+        parent = requests.post(
+            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media",
+            data={
+                "media_type": "CAROUSEL",
+                "children": ",".join(child_ids),
+                "caption": caption,
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            },
+            timeout=60,
+        )
+        if not parent.ok:
+            logger.warning(f"[Instagram] 캐러셀 부모 실패: {parent.status_code} {parent.text[:300]}")
+            return None
+        creation_id = (parent.json() or {}).get("id")
+        if not creation_id:
+            return None
+        _wait_media_container_ready(f"{INSTAGRAM_API_BASE}/{creation_id}", INSTAGRAM_ACCESS_TOKEN, label="IG-carousel")
+        pub = requests.post(
+            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media_publish",
+            data={"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=60,
+        )
+        if not pub.ok:
+            logger.warning(f"[Instagram] 캐러셀 발행 실패: {pub.status_code} {pub.text[:300]}")
+            return None
+        mid = (pub.json() or {}).get("id", "")
+        logger.info(f"[Instagram] 카드뉴스 캐러셀 발행 완료 id={mid}")
+        return mid or creation_id
+    except Exception as e:
+        logger.warning(f"[Instagram] 캐러셀 예외: {e}")
+        return None
+
+
 def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) -> None:
-    """Blogger 성공 후 Threads·Instagram 순차 발행."""
+    """Blogger 성공 후: 카드뉴스 생성(다운로드 폴더) → push → Threads/Instagram 업로드."""
     if not blogger_url:
         return
-    # 공개 URL이 아니면 Meta가 이미지를 다운로드하지 못함
-    if not (image_url.startswith("http://") or image_url.startswith("https://")):
-        logger.warning(f"[SNS] 공개 image_url 이 아니라 스킵: {image_url[:80]}")
-        return
-    publish_to_threads(article, blogger_url, image_url)
-    publish_to_instagram(article, blogger_url, image_url)
+    card = None
+    try:
+        card = generate_card_news_images(article, blogger_url)
+        # 공개 URL이 GitHub Pages에 올라가도록 즉시 push
+        commit_and_push_changes()
+    except Exception as e:
+        logger.warning(f"[카드뉴스] 생성 실패(썸네일 폴백): {e}")
+
+    urls = (card or {}).get("public_urls") or []
+    if not urls:
+        # 폴백: 기존 썸네일 단일 이미지
+        if image_url and (image_url.startswith("http://") or image_url.startswith("https://")):
+            urls = [image_url]
+        else:
+            logger.warning("[SNS] 업로드할 공개 이미지 URL 없음 — 스킵")
+            return
+
+    if len(urls) >= 2:
+        th = _publish_threads_carousel(article, blogger_url, urls)
+        if not th:
+            publish_to_threads(article, blogger_url, urls[0])
+        ig = _publish_instagram_carousel(article, blogger_url, urls)
+        if not ig:
+            publish_to_instagram(article, blogger_url, urls[0])
+    else:
+        publish_to_threads(article, blogger_url, urls[0])
+        publish_to_instagram(article, blogger_url, urls[0])
+
+    if card and card.get("download_dir"):
+        logger.info(f"[카드뉴스] 로컬 다운로드 폴더: {card['download_dir']}")
 
 
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
@@ -3217,7 +3536,7 @@ def commit_and_push_changes() -> bool:
     try:
         subprocess.run(["git", "config", "user.name", "auto-blog-bot"], check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "auto-blog-bot@users.noreply.github.com"], check=True, capture_output=True)
-        subprocess.run(["git", "add", "docs", "keywords_queue.json"], check=True, capture_output=True)
+        subprocess.run(["git", "add", "docs", "keywords_queue.json", "downloads"], check=False, capture_output=True)
         diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
         if diff_check.returncode == 0:
             logger.info("[git] 변경사항 없음, 사전 push 생략")
