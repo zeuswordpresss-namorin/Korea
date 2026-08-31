@@ -1454,12 +1454,13 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
         max_text_w = w - 100
         lines = _wrap_by_pixel_width(draw, expression, expr_font, max_text_w)[:2]
         line_h = expr_font_size + 16
-        total_h = line_h * len(lines)
+        # 영문 한 줄 서브타이틀(빈 썸네일처럼 보이지 않게)
+        sub = 'Korean expression · Learn the nuance'
+        sub_font = _load_font(28)
+        sub_h = 36
+        total_h = line_h * len(lines) + sub_h + 20
         ty = h // 2 - total_h // 2
 
-        # [NEW] 퍼스널컬러: 표현 텍스트를 흰색 고정이 아니라, 카테고리(감정)의 accent 색을 바탕으로
-        # 채움은 accent+화이트를 섞은 밝은 톤, 외곽선은 accent+블랙을 섞은 짙은 톤으로 배색해
-        # 감정마다 다른 톤앤매너의 시그니처 텍스처가 되도록 한다.
         text_fill = _blend_rgb((255, 255, 255), accent_rgb, 0.22) + (255,)
         text_stroke = _blend_rgb(accent_rgb, (0, 0, 0), 0.55) + (240,)
         for line in lines:
@@ -1469,6 +1470,9 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
             draw.text((tx, ty - lb[1]), line, font=expr_font, fill=text_fill,
                        stroke_width=5, stroke_fill=text_stroke)
             ty += line_h
+        sb = draw.textbbox((0, 0), sub, font=sub_font)
+        draw.text(((w - (sb[2] - sb[0])) / 2 - sb[0], ty + 12 - sb[1]), sub, font=sub_font,
+                  fill=(255, 255, 255, 230))
 
     # 카테고리 배지 (브랜드 일관성 유지용 작은 라벨)
     label_font = _load_font(30)
@@ -1484,19 +1488,21 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
     bar_h = 18
     draw.rectangle([(0, THUMB_SIZE[1] - bar_h), (THUMB_SIZE[0], THUMB_SIZE[1])], fill=accent_rgb + (255,))
 
-    # [FIX] Blogger·모바일 편집기는 WEBP 미리보기가 깨지는 경우가 많아 JPEG를 기본으로 저장.
-    # 확장자가 .webp로 넘어와도 실제 포맷은 JPEG로 맞춤(하위 호환: 경로 확장자 교정).
+    # [FIX] 항상 JPEG로 저장 (Blogger·사이드바 썸네일 호환). 경장이 .webp면 .jpg로 바꿔 저장.
     rgb = img.convert("RGB")
     out = output_path
     if out.lower().endswith(".webp"):
         out = out[:-5] + ".jpg"
-    rgb.save(out, format="JPEG", quality=88, optimize=True)
-    if out != output_path:
+    elif not out.lower().endswith((".jpg", ".jpeg")):
+        out = os.path.splitext(out)[0] + ".jpg"
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    rgb.save(out, format="JPEG", quality=90, optimize=True)
+    # 호출부가 다른 경로를 기대해도 메인 산출물은 out
+    if out != output_path and not os.path.isfile(output_path):
         try:
-            rgb.save(output_path, format="WEBP", quality=85, method=6)
+            rgb.save(output_path, format="JPEG", quality=90, optimize=True)
         except Exception:
             pass
-        # 호출측 경로가 .webp여도 JPEG 파일이 메인 — 경로 반환은 save_post에서 교정
 
 
 def _card_news_slug(expression: str, title: str) -> str:
@@ -3370,49 +3376,35 @@ def _repair_blogger_hero_image(html_content: str, local_thumb_path: str, title: 
 
 
 def _blogger_hero_img_html(thumb_url: str, local_thumb_path: str, title: str) -> str:
-    """Blogger 본문 히어로 이미지. 공개 URL + 실패 시 JPEG data-URI 폴백(미리보기 깨짐 방지)."""
+    """Blogger 본문 히어로. 로컬 JPEG를 data-URI로 넣어 깨짐 방지 + 공개 URL을 src에 병기."""
     alt = html.escape(title, quote=True)
-    src = thumb_url or ""
+    src = (thumb_url or "").strip()
     data_uri = ""
     try:
-        path = local_thumb_path
-        if path and not os.path.isfile(path) and path.endswith(".webp"):
-            path = path[:-5] + ".jpg"
+        path = local_thumb_path or ""
+        if path and not os.path.isfile(path):
+            for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                alt_path = os.path.splitext(path)[0] + ext
+                if os.path.isfile(alt_path):
+                    path = alt_path
+                    break
         if path and os.path.isfile(path):
-            with open(path, "rb") as f:
-                raw = f.read()
-            # 너무 크면 리사이즈
-            if len(raw) > 350_000:
-                im = Image.open(path).convert("RGB")
-                im.thumbnail((960, 540))
-                import io
-                buf = io.BytesIO()
-                im.save(buf, format="JPEG", quality=78, optimize=True)
-                raw = buf.getvalue()
-            data_uri = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+            im = Image.open(path).convert("RGB")
+            im.thumbnail((1280, 720))
+            import io
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=82, optimize=True)
+            data_uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception as e:
         logger.warning(f"[블로거] 히어로 data-URI 준비 실패: {e}")
-    # 공개 URL이 http(s)이면 그걸 1순위로, onerror 시 data-URI
-    if src.startswith("http://") or src.startswith("https://"):
-        if data_uri:
-            return (
-                f'<img src="{html.escape(src, quote=True)}" '
-                f'style="max-width:100%;height:auto;border-radius:8px;display:block;background:#eee;" '
-                f'alt="{alt}" loading="eager" '
-                f'onerror="this.onerror=null;this.src=\'{data_uri}\';">'
-            )
-        return (
-            f'<img src="{html.escape(src, quote=True)}" '
-            f'style="max-width:100%;height:auto;border-radius:8px;display:block;background:#eee;" '
-            f'alt="{alt}" loading="eager">'
-        )
+    style = "max-width:100%;height:auto;border-radius:8px;display:block;background:#1a1a1a;"
+    # data-URI를 1순위로 쓰면 Blogger 편집기/본문에서 항상 보임 (외부 404 무관)
     if data_uri:
-        return (
-            f'<img src="{data_uri}" '
-            f'style="max-width:100%;height:auto;border-radius:8px;display:block;background:#eee;" '
-            f'alt="{alt}" loading="eager">'
-        )
-    return f'<p style="color:#999;">(thumbnail unavailable)</p>'
+        return f'<img src="{data_uri}" style="{style}" alt="{alt}" loading="eager">'
+    if src.startswith("http://") or src.startswith("https://"):
+        return f'<img src="{html.escape(src, quote=True)}" style="{style}" alt="{alt}" loading="eager">'
+    return f'<p style="color:#999;padding:24px;background:#eee;border-radius:8px;">(thumbnail unavailable)</p>'
+
 
 
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
@@ -3989,6 +3981,7 @@ def repair_old_posts() -> None:
         logger.info(f"[복구] GitHub Pages 공개 산출물 정리 완료 — {removed_public_files}개 파일 삭제 (이미지·posts.json·대시보드는 유지)")
 
     fixed_thumbs = 0
+    fixed_card_news = 0
     fixed_buttons = 0
     deleted_other_niche = 0
     skipped_no_expression = 0
@@ -4057,6 +4050,33 @@ def repair_old_posts() -> None:
         except Exception as e:
             logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
 
+        # 1-b) 이전 글 카드뉴스 없으면 자동 생성 (9:16 H.O.L.D.)
+        try:
+            slug_cn = _card_news_slug(expression, title)
+            need_card = True
+            for base in (CARD_NEWS_DOWNLOAD_DIR, CARD_NEWS_PUBLIC_DIR):
+                folder = os.path.join(base, slug_cn)
+                if os.path.isdir(folder):
+                    try:
+                        if any(fn.lower().endswith(".png") for fn in os.listdir(folder)):
+                            need_card = False
+                            break
+                    except Exception:
+                        pass
+            if need_card:
+                article_stub = {
+                    "title": title,
+                    "expression": expression,
+                    "category": category,
+                    "meta_description": (p.get("meta_description") or title),
+                    "html_body": "",
+                }
+                generate_card_news_images(article_stub, (p.get("blogger_url") or "").strip())
+                fixed_card_news += 1
+                logger.info(f"[복구] 카드뉴스 신규 생성: {slug_cn}")
+        except Exception as e:
+            logger.warning(f"[복구] 카드뉴스 생성 실패({title}): {e}")
+
         # 2) 본문 HTML의 히어로 영역에 발음 듣기 버튼이 없거나 낡은 형태면 최신 버튼으로 교체
         post_path = os.path.join(DOCS_DIR, p["file"])
         if os.path.exists(post_path):
@@ -4102,7 +4122,7 @@ def repair_old_posts() -> None:
         update_seo_files(kept_posts)
 
     logger.info(
-        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 발음버튼 {fixed_buttons}개 패치, "
+        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 카드뉴스 {fixed_card_news}개, 발음버튼 {fixed_buttons}개 패치, "
         f"다른 주제 글 {deleted_other_niche}개 삭제 (표현 추출 실패 {skipped_no_expression}개는 그대로 둠)"
     )
 
