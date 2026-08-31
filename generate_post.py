@@ -1484,7 +1484,19 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
     bar_h = 18
     draw.rectangle([(0, THUMB_SIZE[1] - bar_h), (THUMB_SIZE[0], THUMB_SIZE[1])], fill=accent_rgb + (255,))
 
-    img.convert("RGB").save(output_path, format="WEBP", quality=85, method=6)
+    # [FIX] Blogger·모바일 편집기는 WEBP 미리보기가 깨지는 경우가 많아 JPEG를 기본으로 저장.
+    # 확장자가 .webp로 넘어와도 실제 포맷은 JPEG로 맞춤(하위 호환: 경로 확장자 교정).
+    rgb = img.convert("RGB")
+    out = output_path
+    if out.lower().endswith(".webp"):
+        out = out[:-5] + ".jpg"
+    rgb.save(out, format="JPEG", quality=88, optimize=True)
+    if out != output_path:
+        try:
+            rgb.save(output_path, format="WEBP", quality=85, method=6)
+        except Exception:
+            pass
+        # 호출측 경로가 .webp여도 JPEG 파일이 메인 — 경로 반환은 save_post에서 교정
 
 
 def _card_news_slug(expression: str, title: str) -> str:
@@ -2176,9 +2188,18 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     theme = get_theme(category)
     slug = slugify(article["keyword"])
     today = datetime.now().strftime("%Y-%m-%d")
-    thumb_filename = f"{slug}-{today}.webp"
+    thumb_filename = f"{slug}-{today}.jpg"
     post_filename = f"{slug}-{today}.html"
-    photo_credit = generate_thumbnail(article["title"], os.path.join(DOCS_DIR, "thumbs", thumb_filename), theme, category, article.get("image_keywords", ""), article.get("expression", ""))
+    thumb_path = os.path.join(DOCS_DIR, "thumbs", thumb_filename)
+    photo_credit = generate_thumbnail(article["title"], thumb_path, theme, category, article.get("image_keywords", ""), article.get("expression", ""))
+    if not os.path.isfile(thumb_path):
+        # WEBP-only 잔존 시 JPG 재생성 보장
+        alt = thumb_path.replace(".jpg", ".webp")
+        if os.path.isfile(alt):
+            try:
+                Image.open(alt).convert("RGB").save(thumb_path, format="JPEG", quality=88)
+            except Exception as e:
+                logger.warning(f"[썸네일] JPG 변환 실패: {e}")
     photo_credit_html = ""
     if photo_credit:
         photo_credit_html = (
@@ -2244,7 +2265,18 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         "date": today, "category": category, "accent": theme["accent"], "badge": theme["badge"],
         "blogger_url": "",  # [NEW] Blogger 발행 성공 후 run()에서 채워 넣는다 (관련글 링크에 사용)
     }
-    return post_meta, json_ld, thumb_url, os.path.join(DOCS_DIR, "thumbs", thumb_filename), post_url
+    local_thumb = os.path.join(DOCS_DIR, "thumbs", thumb_filename)
+    if not os.path.isfile(local_thumb):
+        # generate_thumbnail이 확장자를 바꿨을 수 있음
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            alt = os.path.join(DOCS_DIR, "thumbs", f"{slug}-{today}{ext}")
+            if os.path.isfile(alt):
+                local_thumb = alt
+                thumb_filename = os.path.basename(alt)
+                thumb_url = f"{SITE_URL}/thumbs/{thumb_filename}" if SITE_URL else f"../thumbs/{thumb_filename}"
+                post_meta["thumb"] = f"thumbs/{thumb_filename}"
+                break
+    return post_meta, json_ld, thumb_url, local_thumb, post_url
 
 def render_index_html(posts: List[Dict[str, Any]]) -> None:
     """[NEW] posts 리스트를 받아 index.html을 다시 그린다. 새 글 추가(update_index)와
@@ -3197,13 +3229,14 @@ def _publish_instagram_carousel(article: Dict[str, Any], blogger_url: str, image
 
 
 def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) -> None:
-    """Blogger 성공 후: 카드뉴스 생성(다운로드 폴더) → push → Threads/Instagram 업로드."""
+    """Blogger 성공 후: 카드뉴스(사전 생성분 재사용/보강) → Threads/Instagram 업로드."""
     if not blogger_url:
         return
-    card = None
+    card = article.get("_card_news") if isinstance(article.get("_card_news"), dict) else None
     try:
+        # 블로그 URL이 생긴 뒤 CTA 슬라이드 보강 위해 1회 더 생성(덮어쓰기)
         card = generate_card_news_images(article, blogger_url)
-        # 공개 URL이 GitHub Pages에 올라가도록 즉시 push
+        article["_card_news"] = card
         commit_and_push_changes()
     except Exception as e:
         logger.warning(f"[카드뉴스] 생성 실패(썸네일 폴백): {e}")
@@ -3230,6 +3263,53 @@ def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) ->
 
     if card and card.get("download_dir"):
         logger.info(f"[카드뉴스] 로컬 다운로드 폴더: {card['download_dir']}")
+
+
+
+def _blogger_hero_img_html(thumb_url: str, local_thumb_path: str, title: str) -> str:
+    """Blogger 본문 히어로 이미지. 공개 URL + 실패 시 JPEG data-URI 폴백(미리보기 깨짐 방지)."""
+    alt = html.escape(title, quote=True)
+    src = thumb_url or ""
+    data_uri = ""
+    try:
+        path = local_thumb_path
+        if path and not os.path.isfile(path) and path.endswith(".webp"):
+            path = path[:-5] + ".jpg"
+        if path and os.path.isfile(path):
+            with open(path, "rb") as f:
+                raw = f.read()
+            # 너무 크면 리사이즈
+            if len(raw) > 350_000:
+                im = Image.open(path).convert("RGB")
+                im.thumbnail((960, 540))
+                import io
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=78, optimize=True)
+                raw = buf.getvalue()
+            data_uri = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+    except Exception as e:
+        logger.warning(f"[블로거] 히어로 data-URI 준비 실패: {e}")
+    # 공개 URL이 http(s)이면 그걸 1순위로, onerror 시 data-URI
+    if src.startswith("http://") or src.startswith("https://"):
+        if data_uri:
+            return (
+                f'<img src="{html.escape(src, quote=True)}" '
+                f'style="max-width:100%;height:auto;border-radius:8px;display:block;background:#eee;" '
+                f'alt="{alt}" loading="eager" '
+                f'onerror="this.onerror=null;this.src=\'{data_uri}\';">'
+            )
+        return (
+            f'<img src="{html.escape(src, quote=True)}" '
+            f'style="max-width:100%;height:auto;border-radius:8px;display:block;background:#eee;" '
+            f'alt="{alt}" loading="eager">'
+        )
+    if data_uri:
+        return (
+            f'<img src="{data_uri}" '
+            f'style="max-width:100%;height:auto;border-radius:8px;display:block;background:#eee;" '
+            f'alt="{alt}" loading="eager">'
+        )
+    return f'<p style="color:#999;">(thumbnail unavailable)</p>'
 
 
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
@@ -3300,7 +3380,7 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
             f'{nav_html}'
             f'{value_html}'
             f'<div style="position:relative;margin:0;">'
-            f'<img src="{thumb_url}" style="max-width:100%;height:auto;border-radius:8px;display:block;" alt="{html.escape(article["title"], quote=True)}" onerror="_retryHeroImage(this)">'
+            f'{_blogger_hero_img_html(thumb_url, local_thumb_path, article.get("title") or "")}'
             f'{_tts_buttons_html(article.get("expression", ""), theme)}'
             f'</div>'
             f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;font-weight:bold;padding:4px 12px;border-radius:999px;margin:14px 0 4px;">{theme["badge"]}</span>'
@@ -4224,6 +4304,15 @@ def run() -> None:
     if PUBLISH_GITHUB_PAGES_SITE:
         update_seo_files(posts)
     build_lead_magnet_pdf(posts)  # [NEW] 무료 PDF 리드마그넷 자동 갱신
+
+    # [카드뉴스] Blogger/SNS 전에 항상 생성 → downloads/ + docs/card_news/ (push에 포함)
+    try:
+        card_meta = generate_card_news_images(article, blogger_url="")
+        article["_card_news"] = card_meta
+        logger.info(f"[카드뉴스] 사전 생성 완료: {card_meta.get('download_dir')}")
+    except Exception as e:
+        logger.warning(f"[카드뉴스] 사전 생성 실패: {e}")
+        article["_card_news"] = {}
 
     commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
 
