@@ -1506,100 +1506,270 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
 
 
 
+
 def _instatoon_slug(expression: str, title: str) -> str:
     base = (expression or title or "post").strip()
     base = re.sub(r"[^\w가-힣\-]+", "_", base)[:40].strip("_") or "post"
     return base
 
 
-def _instatoon_dialogue(article: Dict[str, Any]) -> List[Dict[str, str]]:
-    """표현 주제에 맞는 5컷 대화 스크립트 (인스타툰)."""
+# 매 글·매 컷마다 바뀌는 캐릭터/배경 팔레트
+_INSTATOON_CASTS = [
+    {"id": "chick", "name": "병아리", "body": (255, 220, 60), "cheek": (255, 150, 150), "beak": (255, 140, 40)},
+    {"id": "bunny", "name": "토끼", "body": (255, 240, 245), "cheek": (255, 170, 180), "beak": (255, 120, 140)},
+    {"id": "bear", "name": "곰돌이", "body": (210, 160, 110), "cheek": (230, 140, 120), "beak": (120, 70, 40)},
+    {"id": "cat", "name": "고양이", "body": (255, 200, 120), "cheek": (255, 160, 140), "beak": (80, 60, 50)},
+    {"id": "pup", "name": "강아지", "body": (240, 200, 150), "cheek": (255, 160, 130), "beak": (90, 60, 40)},
+    {"id": "human_m", "name": "친구", "body": (255, 220, 200), "hair": (40, 40, 45), "shirt": (80, 160, 220)},
+    {"id": "human_f", "name": "친구", "body": (255, 220, 200), "hair": (220, 100, 160), "shirt": (120, 100, 220)},
+]
+_INSTATOON_BG_STYLES = ["white_clean", "soft_pastel", "room_simple", "gradient_soft"]
+
+
+def _instatoon_style_seed(expression: str, title: str) -> int:
+    return int(hashlib.md5(f"{expression}|{title}".encode("utf-8")).hexdigest(), 16)
+
+
+def _instatoon_dialogue_hold(article: Dict[str, Any]) -> List[Dict[str, str]]:
+    """H.O.L.D. 5컷 스크립트 — 말풍선에 표현 삽입 + 하단 상세 설명."""
     expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
     if not expr:
         expr = "이 표현"
     title = (article.get("title") or "").strip()
     meta = (article.get("meta_description") or "").strip()
-    # 컷별: speaker(A/B/N=나레이션), ko, en
-    cuts = [
+    # Hook / Obstacle / Loop / Loop深化 / Deliver
+    return [
         {
-            "cut": "1",
-            "label": "CUT 1 · Setup",
-            "speaker": "N",
-            "bubble": f"오늘 배울 말: 「{expr}」",
-            "sub": "A real moment where this word shows up.",
+            "hold": "H",
+            "hold_name": "HOOK",
+            "label": "1/5 HOOK",
+            "narration": f"오늘 포인트는 「{expr}」",
+            "bubble": f"「{expr}」… 이거 어떻게 쓰지?",
+            "thought": "직역하면 느낌이 안 사는데",
+            "caption": f"처음 들으면 「{expr}」가 어떤 순간에 쓰이는지부터 헷갈리기 쉽다.",
+            "pose": "curious",
         },
         {
-            "cut": "2",
-            "label": "CUT 2 · Awkward try",
-            "speaker": "A",
-            "bubble": "Direct translation… feels weird, right?",
-            "sub": f"Foreigner tries to say something near 「{expr}」.",
+            "hold": "O",
+            "hold_name": "OBSTACLE",
+            "label": "2/5 OBSTACLE",
+            "narration": "영어로는 비슷한 말이 있어도…",
+            "bubble": f"그냥 비슷한 영어로 바꿔 말하면 「{expr}」가 될까?",
+            "thought": "미묘하게 다른 것 같아",
+            "caption": f"사전 뜻만 보고 말하면, 「{expr}」의 공기가 어색해질 때가 있다.",
+            "pose": "think",
         },
         {
-            "cut": "3",
-            "label": "CUT 3 · Native line",
-            "speaker": "B",
-            "bubble": f"아, 그럴 땐 「{expr}」 라고 해.",
-            "sub": "A Korean friend drops the natural line.",
+            "hold": "L",
+            "hold_name": "LOOP",
+            "label": "3/5 LOOP",
+            "narration": "한국 친구가 자연스럽게 한마디",
+            "bubble": f"그럴 땐 「{expr}」 라고 해!",
+            "thought": "",
+            "caption": f"친구가 아무렇지 않게 「{expr}」를 꺼내는 그 타이밍이 힌트다.",
+            "pose": "happy",
         },
         {
-            "cut": "4",
-            "label": "CUT 4 · Nuance",
-            "speaker": "B",
-            "bubble": "뜻만 외우지 말고, 언제 쓰는지가 포인트야.",
-            "sub": (meta[:90] + "…") if len(meta) > 90 else (meta or "Meaning + situation matter together."),
+            "hold": "L2",
+            "hold_name": "LOOP+",
+            "label": "4/5 LOOP+",
+            "narration": "언제, 누구에게?",
+            "bubble": f"「{expr}」는 이 타이밍에 더 자연스러워",
+            "thought": "관계·상황에 따라 느낌이 달라",
+            "caption": (meta[:120] if meta else f"같은 「{expr}」라도 관계와 장소에 따라 무게가 달라진다."),
+            "pose": "speak",
         },
         {
-            "cut": "5",
-            "label": "CUT 5 · Takeaway",
-            "speaker": "N",
-            "bubble": f"「{expr}」 — use it in the right moment.",
-            "sub": title[:80] if title else "Learn Korean → See Koreans",
+            "hold": "D",
+            "hold_name": "DELIVER",
+            "label": "5/5 DELIVER",
+            "narration": f"「{expr}」 한 줄 정리",
+            "bubble": f"오늘은 「{expr}」 — 상황까지 기억해!",
+            "thought": "",
+            "caption": (title[:100] if title else f"「{expr}」의 뜻 + 사용 순간을 함께 익혀 보세요. Learn Korean → See Koreans"),
+            "pose": "happy",
         },
     ]
-    return cuts
 
 
-def _draw_speech_bubble(draw, xy, text, font, *, fill=(255, 255, 255, 245), stroke=(40, 40, 40, 255), max_w=700):
-    x, y = xy
-    lines = _wrap_by_pixel_width(draw, text, font, max_w)[:4]
+def _draw_round_blob(draw, cx, cy, rx, ry, fill, outline=None, width=3):
+    draw.ellipse([cx - rx, cy - ry, cx + rx, cy + ry], fill=fill, outline=outline, width=width if outline else 0)
+
+
+
+def _draw_cast_character(draw, cx, cy, cast: Dict, pose: str = "happy", scale: float = 1.0):
+    """표정·제스처가 살아있는 단순 툰 캐릭터."""
+    s = scale
+    body = cast.get("body", (255, 220, 60))
+    cheek = cast.get("cheek", (255, 150, 150))
+    cid = cast.get("id", "chick")
+    beak = cast.get("beak", (255, 140, 40))
+    pose = (pose or "happy").lower()
+
+    def eyes(style: str):
+        ey = cy - int(10 * s)
+        if cid.startswith("human"):
+            ey = cy - int(35 * s)
+        if style == "happy":
+            for ex in (cx - int(22 * s), cx + int(22 * s)):
+                draw.arc([ex - 11, ey - 4, ex + 11, ey + 12], 200, 340, fill=(30, 30, 30), width=3)
+        elif style == "sad":
+            for ex in (cx - int(22 * s), cx + int(22 * s)):
+                draw.arc([ex - 10, ey - 2, ex + 10, ey + 14], 20, 160, fill=(30, 30, 30), width=3)
+            # tear
+            draw.ellipse([cx + int(40 * s), ey, cx + int(48 * s), ey + int(14 * s)], fill=(150, 200, 255), outline=(30, 30, 30), width=1)
+        elif style == "shock":
+            for ex in (cx - int(22 * s), cx + int(22 * s)):
+                draw.ellipse([ex - 9, ey - 12, ex + 9, ey + 10], fill=(30, 30, 30))
+                draw.ellipse([ex - 3, ey - 6, ex + 3, ey], fill=(255, 255, 255))
+            # ! mark
+            draw.ellipse([cx + int(55 * s), cy - int(70 * s), cx + int(70 * s), cy - int(55 * s)], fill=(255, 80, 80))
+            draw.rectangle([cx + int(60 * s), cy - int(100 * s), cx + int(66 * s), cy - int(72 * s)], fill=(255, 80, 80))
+        elif style == "angry":
+            for ex in (cx - int(22 * s), cx + int(22 * s)):
+                draw.ellipse([ex - 6, ey - 6, ex + 6, ey + 6], fill=(30, 30, 30))
+            # brows
+            draw.line([(cx - 34, ey - 18), (cx - 12, ey - 10)], fill=(30, 30, 30), width=3)
+            draw.line([(cx + 12, ey - 10), (cx + 34, ey - 18)], fill=(30, 30, 30), width=3)
+        elif style == "think":
+            for ex in (cx - int(22 * s), cx + int(22 * s)):
+                draw.ellipse([ex - 6, ey - 8, ex + 6, ey + 6], fill=(30, 30, 30))
+            draw.arc([cx + int(30 * s), ey - 5, cx + int(50 * s), ey + 15], 0, 180, fill=(30, 30, 30), width=2)
+        else:  # curious / default
+            for ex in (cx - int(22 * s), cx + int(22 * s)):
+                draw.ellipse([ex - 7, ey - 10, ex + 7, ey + 8], fill=(30, 30, 30))
+                draw.ellipse([ex - 2, ey - 5, ex + 3, ey], fill=(255, 255, 255))
+
+    def cheeks():
+        for ex in (cx - int(38 * s), cx + int(38 * s)):
+            _draw_round_blob(draw, ex, cy + int(12 * s), int(12 * s), int(8 * s), cheek)
+
+    def mouth(style: str):
+        if style in ("happy", "speak"):
+            draw.arc([cx - 16, cy + 10, cx + 16, cy + 32], 20, 160, fill=(30, 30, 30), width=3)
+        elif style == "sad":
+            draw.arc([cx - 16, cy + 18, cx + 16, cy + 36], 200, 340, fill=(30, 30, 30), width=3)
+        elif style == "shock":
+            draw.ellipse([cx - 10, cy + 12, cx + 10, cy + 32], fill=(40, 40, 40))
+        elif style == "speak":
+            draw.ellipse([cx - 12, cy + 12, cx + 12, cy + 28], outline=(30, 30, 30), width=3)
+        else:
+            draw.ellipse([cx - 10, cy + 14, cx + 10, cy + 26], fill=beak, outline=(30, 30, 30), width=2)
+
+    # map pose → face + arms
+    face = {
+        "curious": "curious", "confused": "think", "think": "think",
+        "shock": "shock", "sad": "sad", "angry": "angry",
+        "speak": "speak", "explain": "speak", "happy": "happy",
+    }.get(pose, "happy")
+
+    if cid.startswith("human"):
+        hair = cast.get("hair", (40, 40, 45))
+        shirt = cast.get("shirt", (80, 160, 220))
+        _draw_round_blob(draw, cx, cy - int(30 * s), int(55 * s), int(52 * s), body, (30, 30, 30), 3)
+        if "f" in cid:
+            _draw_round_blob(draw, cx + int(40 * s), cy - int(70 * s), int(22 * s), int(22 * s), hair, (30, 30, 30), 2)
+            draw.ellipse([cx - int(55 * s), cy - int(85 * s), cx + int(55 * s), cy - int(25 * s)], fill=hair, outline=(30, 30, 30), width=2)
+        else:
+            draw.ellipse([cx - int(55 * s), cy - int(90 * s), cx + int(55 * s), cy - int(20 * s)], fill=hair, outline=(30, 30, 30), width=2)
+        eyes(face if face != "speak" else "curious")
+        cheeks()
+        mouth("happy" if face in ("speak", "happy") else face)
+        # torso
+        draw.rounded_rectangle(
+            [cx - int(50 * s), cy + int(25 * s), cx + int(50 * s), cy + int(110 * s)],
+            radius=int(18 * s), fill=shirt, outline=(30, 30, 30), width=3,
+        )
+        # arms / gestures
+        if pose in ("speak", "explain", "happy"):
+            # raised hand
+            draw.line([(cx + int(50 * s), cy + int(50 * s)), (cx + int(90 * s), cy + int(10 * s))], fill=(30, 30, 30), width=5)
+            _draw_round_blob(draw, cx + int(95 * s), cy + int(5 * s), int(14 * s), int(14 * s), body, (30, 30, 30), 2)
+        elif pose in ("confused", "think", "curious"):
+            draw.line([(cx + int(48 * s), cy + int(45 * s)), (cx + int(70 * s), cy - int(5 * s))], fill=(30, 30, 30), width=5)
+            _draw_round_blob(draw, cx + int(75 * s), cy - int(12 * s), int(14 * s), int(14 * s), body, (30, 30, 30), 2)
+        elif pose in ("shock", "sad"):
+            draw.line([(cx - int(55 * s), cy + int(55 * s)), (cx - int(75 * s), cy + int(90 * s))], fill=(30, 30, 30), width=5)
+            draw.line([(cx + int(55 * s), cy + int(55 * s)), (cx + int(75 * s), cy + int(90 * s))], fill=(30, 30, 30), width=5)
+        return
+
+    # animal / chick body
+    rx, ry = int(70 * s), int(65 * s)
+    _draw_round_blob(draw, cx, cy, rx, ry, body, (30, 30, 30), 4)
+    if cid == "bunny":
+        for ex in (-28, 28):
+            draw.ellipse([cx + int(ex * s) - 12, cy - int(110 * s), cx + int(ex * s) + 12, cy - int(50 * s)], fill=body, outline=(30, 30, 30), width=3)
+    elif cid == "cat":
+        draw.polygon([(cx - 50, cy - 40), (cx - 25, cy - 95), (cx - 5, cy - 40)], fill=body, outline=(30, 30, 30))
+        draw.polygon([(cx + 5, cy - 40), (cx + 25, cy - 95), (cx + 50, cy - 40)], fill=body, outline=(30, 30, 30))
+    else:
+        draw.ellipse([cx - 8, cy - ry - 18, cx + 8, cy - ry + 6], fill=beak, outline=(30, 30, 30), width=2)
+
+    eyes(face if face != "speak" else "curious")
+    cheeks()
+    mouth(face if face != "curious" else "happy")
+
+    # wing/arm gestures
+    if pose in ("speak", "explain", "happy"):
+        # one wing up
+        draw.ellipse([cx + rx - 10, cy - 10, cx + rx + 45, cy + 35], fill=body, outline=(30, 30, 30), width=3)
+    elif pose in ("confused", "think", "curious"):
+        draw.ellipse([cx + rx - 15, cy - 30, cx + rx + 40, cy + 20], fill=body, outline=(30, 30, 30), width=3)
+        # question marks
+        qf = _load_font(int(36 * s))
+        draw.text((cx + int(55 * s), cy - int(90 * s)), "?", font=qf, fill=(30, 30, 30))
+    elif pose in ("shock",):
+        draw.ellipse([cx - rx - 40, cy + 10, cx - rx + 5, cy + 50], fill=body, outline=(30, 30, 30), width=3)
+        draw.ellipse([cx + rx - 5, cy + 10, cx + rx + 40, cy + 50], fill=body, outline=(30, 30, 30), width=3)
+    elif pose == "sad":
+        draw.ellipse([cx - rx - 20, cy + 20, cx - rx + 15, cy + 55], fill=body, outline=(30, 30, 30), width=3)
+
+    # feet
+    draw.ellipse([cx - 28, cy + ry - 5, cx - 8, cy + ry + 18], fill=beak, outline=(30, 30, 30), width=2)
+    draw.ellipse([cx + 8, cy + ry - 5, cx + 28, cy + ry + 18], fill=beak, outline=(30, 30, 30), width=2)
+
+
+def _draw_speech_bubble_v2(draw, x, y, text, font, max_w=720, tail="left"):
+    lines = _wrap_by_pixel_width(draw, text, font, max_w)[:5]
     if not lines:
         return y
-    pads = 18
-    line_gap = 8
-    heights = []
-    widths = []
+    pad = 20
+    gap = 8
+    widths, heights = [], []
     for line in lines:
         b = draw.textbbox((0, 0), line, font=font)
         widths.append(b[2] - b[0])
         heights.append(b[3] - b[1])
-    box_w = max(widths) + pads * 2
-    box_h = sum(heights) + line_gap * (len(lines) - 1) + pads * 2
-    draw.rounded_rectangle([x, y, x + box_w, y + box_h], radius=22, fill=fill, outline=stroke, width=3)
-    # tail
-    draw.polygon([(x + 36, y + box_h - 2), (x + 20, y + box_h + 22), (x + 58, y + box_h - 2)], fill=fill, outline=stroke)
-    cy = y + pads
+    bw = max(widths) + pad * 2
+    bh = sum(heights) + gap * (len(lines) - 1) + pad * 2
+    draw.rounded_rectangle([x, y, x + bw, y + bh], radius=28, fill=(255, 255, 255), outline=(30, 30, 30), width=4)
+    if tail == "left":
+        draw.polygon([(x + 40, y + bh - 2), (x + 24, y + bh + 28), (x + 70, y + bh - 2)], fill=(255, 255, 255), outline=(30, 30, 30))
+    else:
+        draw.polygon([(x + bw - 40, y + bh - 2), (x + bw - 24, y + bh + 28), (x + bw - 70, y + bh - 2)], fill=(255, 255, 255), outline=(30, 30, 30))
+    cy = y + pad
     for i, line in enumerate(lines):
-        draw.text((x + pads, cy), line, font=font, fill=(25, 25, 25, 255))
-        cy += heights[i] + line_gap
-    return y + box_h + 28
+        draw.text((x + pad, cy), line, font=font, fill=(25, 25, 25))
+        cy += heights[i] + gap
+    return y + bh + 36
 
 
-def _draw_character(draw, cx, cy, *, label: str, accent, mirror=False):
-    """간단한 툰 캐릭터 (원형 머리 + 몸)."""
-    r = 52
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 255, 255, 255), outline=accent + (255,), width=4)
-    # eyes
-    eye_y = cy - 8
-    for ex in (cx - 18, cx + 18):
-        draw.ellipse([ex - 6, eye_y - 6, ex + 6, eye_y + 6], fill=(30, 30, 30, 255))
-    # smile
-    draw.arc([cx - 20, cy + 2, cx + 20, cy + 28], 20, 160, fill=(30, 30, 30, 255), width=3)
-    # body
-    draw.rounded_rectangle([cx - 40, cy + r - 4, cx + 40, cy + r + 70], radius=20, fill=accent + (200,))
-    lf = _load_font(22)
-    b = draw.textbbox((0, 0), label, font=lf)
-    draw.text((cx - (b[2] - b[0]) / 2, cy + r + 78), label, font=lf, fill=(255, 255, 255, 255))
+def _draw_thought_bubble(draw, x, y, text, font, max_w=400):
+    if not text:
+        return
+    lines = _wrap_by_pixel_width(draw, text, font, max_w)[:3]
+    pad = 14
+    widths = [draw.textbbox((0, 0), ln, font=font)[2] - draw.textbbox((0, 0), ln, font=font)[0] for ln in lines]
+    heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
+    bw = max(widths + [40]) + pad * 2
+    bh = sum(heights) + 8 * max(len(lines) - 1, 0) + pad * 2
+    draw.rounded_rectangle([x, y, x + bw, y + bh], radius=40, fill=(255, 255, 255), outline=(30, 30, 30), width=3)
+    draw.ellipse([x + 20, y + bh + 4, x + 34, y + bh + 18], fill=(255, 255, 255), outline=(30, 30, 30), width=2)
+    draw.ellipse([x + 10, y + bh + 20, x + 20, y + bh + 30], fill=(255, 255, 255), outline=(30, 30, 30), width=2)
+    cy = y + pad
+    for i, line in enumerate(lines):
+        draw.text((x + pad, cy), line, font=font, fill=(50, 50, 50))
+        cy += heights[i] + 8
 
 
 def _draw_instatoon_cut(
@@ -1607,82 +1777,96 @@ def _draw_instatoon_cut(
     *,
     cut: Dict[str, str],
     expression: str,
+    cast: Dict,
+    bg_style: str,
     total: int = 5,
 ) -> Image.Image:
-    """인스타툰 1컷 (1080x1080)."""
+    """말풍선 대화 + 상황 부연(나레이션)을 자연스럽게. 하단 설명 박스 없음."""
     w, h = INSTATOON_SIZE
-    seed = int(hashlib.md5(f"{expression}-{cut.get('cut')}".encode()).hexdigest(), 16) % 100000
-    colors = theme.get("gradient") or [(233, 92, 132), (247, 158, 173), (255, 205, 210)]
-    img = _make_random_gradient_background((w, h), colors, seed=seed).convert("RGBA")
-    draw = ImageDraw.Draw(img)
     accent = _hex_to_rgb(theme.get("accent") or "#e95c84")
-
-    # 상단 라벨
-    badge_font = _load_font(28)
-    badge = cut.get("label") or f"CUT {cut.get('cut')}"
-    bb = draw.textbbox((0, 0), badge, font=badge_font)
-    pad = 14
-    draw.rounded_rectangle(
-        [36, 36, 36 + (bb[2] - bb[0]) + pad * 2, 36 + (bb[3] - bb[1]) + pad],
-        radius=18,
-        fill=(0, 0, 0, 160),
-    )
-    draw.text((36 + pad, 36 + pad // 2 - bb[1]), badge, font=badge_font, fill=(255, 255, 255, 255))
-
-    # 패널 프레임
-    draw.rounded_rectangle([40, 110, w - 40, h - 120], radius=28, fill=(255, 255, 255, 235), outline=accent + (255,), width=5)
-
-    speaker = cut.get("speaker") or "N"
-    bubble = cut.get("bubble") or ""
-    sub = cut.get("sub") or ""
-
-    if speaker == "N":
-        # 나레이션 중앙
-        nf = _load_font(48)
-        y = 280
-        for line in _wrap_by_pixel_width(draw, bubble, nf, w - 160)[:4]:
-            lb = draw.textbbox((0, 0), line, font=nf)
-            draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=nf, fill=accent + (255,))
-            y += (lb[3] - lb[1]) + 14
-        if sub:
-            sf = _load_font(30)
-            y += 20
-            for line in _wrap_by_pixel_width(draw, sub, sf, w - 180)[:4]:
-                lb = draw.textbbox((0, 0), line, font=sf)
-                draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=sf, fill=(60, 60, 60, 255))
-                y += (lb[3] - lb[1]) + 10
+    if bg_style == "soft_pastel":
+        img = Image.new("RGB", (w, h), _blend_rgb((255, 255, 255), accent, 0.08))
+    elif bg_style == "gradient_soft":
+        img = _make_random_gradient_background(
+            (w, h), theme.get("gradient") or [(255, 240, 245), (255, 255, 255), (240, 248, 255)], seed=42
+        ).convert("RGB")
+    elif bg_style == "room_simple":
+        img = Image.new("RGB", (w, h), (250, 248, 244))
+        draw0 = ImageDraw.Draw(img)
+        draw0.rectangle([0, int(h * 0.68), w, h], fill=(230, 225, 215))
+        draw0.rectangle([0, 0, w, int(h * 0.68)], fill=(245, 242, 235))
     else:
-        # 캐릭터 + 말풍선
-        if speaker == "A":
-            _draw_character(draw, 200, 720, label="A", accent=_blend_rgb(accent, (80, 80, 120), 0.3))
-            _draw_speech_bubble(draw, (120, 200), bubble, _load_font(40), max_w=780)
-        else:
-            _draw_character(draw, 880, 720, label="B", accent=accent)
-            _draw_speech_bubble(draw, (100, 200), bubble, _load_font(40), max_w=780)
-        if sub:
-            sf = _load_font(28)
-            for i, line in enumerate(_wrap_by_pixel_width(draw, sub, sf, w - 160)[:3]):
-                lb = draw.textbbox((0, 0), line, font=sf)
-                draw.text(((w - (lb[2] - lb[0])) / 2, 880 + i * 34), line, font=sf, fill=(70, 70, 70, 255))
+        img = Image.new("RGB", (w, h), (255, 255, 255))
 
-    # 하단 브랜드
-    foot = f"{expression}  ·  {cut.get('cut')}/{total}  ·  Learn Korean → See Koreans"
-    ff = _load_font(24)
-    fb = draw.textbbox((0, 0), foot, font=ff)
-    draw.rectangle([0, h - 48, w, h], fill=accent + (255,))
-    draw.text(((w - (fb[2] - fb[0])) / 2, h - 36), foot, font=ff, fill=(255, 255, 255, 255))
-    return img.convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    # 아주 작은 컷 번호만 (참고 툰처럼 눈에 덜 띄게)
+    badge_font = _load_font(22)
+    badge = cut.get("label") or ""
+    draw.text((32, 28), badge, font=badge_font, fill=(160, 160, 160))
+
+    # 상단 상황 나레이션 (부연 설명 — 박스 없이 문장만)
+    nar = cut.get("narration") or ""
+    y = 56
+    if nar:
+        nf = _load_font(42)
+        for line in _wrap_by_pixel_width(draw, nar, nf, w - 100)[:3]:
+            lb = draw.textbbox((0, 0), line, font=nf)
+            draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=nf, fill=(30, 30, 30))
+            y += (lb[3] - lb[1]) + 6
+
+    # 말풍선
+    bubble = cut.get("bubble") or ""
+    bf = _load_font(38)
+    bubble_bottom = _draw_speech_bubble_v2(draw, 70, y + 16, bubble, bf, max_w=800, tail="left")
+
+    # 생각 풍선
+    thought = cut.get("thought") or ""
+    if thought:
+        _draw_thought_bubble(draw, 600, min(bubble_bottom, 380), thought, _load_font(26), max_w=400)
+
+    # 캐릭터 (표정·제스처)
+    _draw_cast_character(draw, w // 2, int(h * 0.52), cast, pose=cut.get("pose") or "happy", scale=1.2)
+
+    # 하단: 박스가 아니라 참고 툰처럼 한두 줄 부연 (상황에 대한 자연스러운 설명)
+    caption = cut.get("caption") or ""
+    if caption:
+        cap_font = _load_font(28)
+        lines = _wrap_by_pixel_width(draw, caption, cap_font, w - 120)[:3]
+        # 아래에서 올라오며 중앙 정렬
+        total_h = 0
+        heights = []
+        for line in lines:
+            lb = draw.textbbox((0, 0), line, font=cap_font)
+            heights.append(lb[3] - lb[1])
+            total_h += (lb[3] - lb[1]) + 8
+        cy = h - 40 - total_h
+        for i, line in enumerate(lines):
+            lb = draw.textbbox((0, 0), line, font=cap_font)
+            draw.text(((w - (lb[2] - lb[0])) / 2, cy), line, font=cap_font, fill=(55, 55, 55))
+            cy += heights[i] + 8
+
+    return img
+
 
 
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """표현 주제 대화체 인스타툰 5컷 → downloads/instatoon + docs/instatoon."""
+    """H.O.L.D. 인스타툰 5컷 — 매번 다른 캐릭터/스타일, 말풍선에 표현, 하단 상세 설명."""
     category = article.get("category") or "번역감정"
     theme = get_theme(category)
     expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
-    slug = _instatoon_slug(expr, article.get("title") or "")
-    cuts = _instatoon_dialogue(article)
+    title = article.get("title") or ""
+    slug = _instatoon_slug(expr, title)
+    cuts = _instatoon_dialogue_hold(article)
     if blogger_url and cuts:
-        cuts[-1]["sub"] = blogger_url
+        cuts[-1]["caption"] = (cuts[-1].get("caption") or "") + f" → {blogger_url}"
+
+    seed = _instatoon_style_seed(expr, title)
+    rnd = random.Random(seed)
+    cast = _INSTATOON_CASTS[seed % len(_INSTATOON_CASTS)]
+    # 보조 캐릭터(다른 컷에서 번갈아)
+    cast2 = _INSTATOON_CASTS[(seed // 7) % len(_INSTATOON_CASTS)]
+    bg_style = _INSTATOON_BG_STYLES[seed % len(_INSTATOON_BG_STYLES)]
 
     public_dir = os.path.join(INSTATOON_PUBLIC_DIR, slug)
     download_dir = os.path.join(INSTATOON_DOWNLOAD_DIR, slug)
@@ -1692,7 +1876,17 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
     local_paths: List[str] = []
     public_urls: List[str] = []
     for i, cut in enumerate(cuts[:INSTATOON_CUTS], start=1):
-        img = _draw_instatoon_cut(theme, cut=cut, expression=expr or "한국어", total=INSTATOON_CUTS)
+        use_cast = cast if i % 2 == 1 else cast2
+        # 컷마다 배경 미세 변주
+        bg = bg_style if i < 5 else rnd.choice(_INSTATOON_BG_STYLES)
+        img = _draw_instatoon_cut(
+            theme,
+            cut=cut,
+            expression=expr or "한국어",
+            cast=use_cast,
+            bg_style=bg,
+            total=INSTATOON_CUTS,
+        )
         fname = f"{i:02d}.png"
         pub_path = os.path.join(public_dir, fname)
         dl_path = os.path.join(download_dir, fname)
@@ -1701,19 +1895,20 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
         local_paths.append(dl_path)
         if SITE_URL:
             public_urls.append(f"{SITE_URL.rstrip('/')}/instatoon/{slug}/{fname}")
-        logger.info(f"[인스타툰] CUT {i}/5 저장: {dl_path}")
+        logger.info(f"[인스타툰] {cut.get('hold')} CUT {i}/5 ({use_cast.get('name')}) → {dl_path}")
 
-    logger.info(f"[인스타툰] 5컷 완료 → {download_dir}")
+    logger.info(f"[인스타툰] H.O.L.D. 5컷 완료 cast={cast.get('id')}/{cast2.get('id')} style={bg_style} → {download_dir}")
     return {
         "slug": slug,
         "local_paths": local_paths,
         "public_urls": [u for u in public_urls if u],
         "download_dir": download_dir,
         "public_dir": public_dir,
+        "cast": cast.get("id"),
+        "style": bg_style,
     }
 
 
-# 하위 호환 별칭 (옛 호출부 방지)
 def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
     return generate_instatoon_images(article, blogger_url)
 
