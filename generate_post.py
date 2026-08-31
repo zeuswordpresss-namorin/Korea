@@ -11,6 +11,8 @@ GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 - [AdSense] 심사 모드(ADSENSE_REVIEW_MODE): 본문 수동광고·제휴 블록 생략, 품질 게이트,
   편집 고지, Blogger About/Privacy/Contact 페이지 동기화, 라벨 구조화
+- [SNS] Blogger 발행 성공 후 Threads·Instagram Graph API 자동 공유 (Secrets 설정 시에만)
+- [SEO] 제목 Meaning/What Does 패턴, 검색형 H2, Topic Cluster 내부링크 2~3개, 문화 단정 완화
 """
 
 import base64
@@ -71,6 +73,20 @@ ENGLISH_SLOGAN = os.environ.get("ENGLISH_SLOGAN", "Learn Korean, Understand Kore
 SNS_PINTEREST_URL = os.environ.get("SNS_PINTEREST_URL", "")
 SNS_INSTAGRAM_URL = os.environ.get("SNS_INSTAGRAM_URL", "")
 SNS_X_URL = os.environ.get("SNS_X_URL", "")
+
+# --- [NEW] Threads / Instagram 자동 발행 (Blogger 성공 직후)
+# Threads: Meta 개발자 앱(Threads use case) + threads_basic, threads_content_publish
+# Instagram: Professional(Business/Creator) + Facebook Page 연결 + instagram_content_publish
+# 미설정 시 조용히 건너뜀. 실패해도 Blogger 발행 결과는 유지.
+THREADS_ENABLED = os.environ.get("THREADS_ENABLED", "true").strip().lower() in ("1", "true", "yes", "y")
+THREADS_USER_ID = os.environ.get("THREADS_USER_ID", "").strip()
+THREADS_ACCESS_TOKEN = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
+THREADS_API_BASE = os.environ.get("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
+
+INSTAGRAM_ENABLED = os.environ.get("INSTAGRAM_ENABLED", "true").strip().lower() in ("1", "true", "yes", "y")
+INSTAGRAM_USER_ID = os.environ.get("INSTAGRAM_USER_ID", "").strip()  # IG Professional user id
+INSTAGRAM_ACCESS_TOKEN = os.environ.get("INSTAGRAM_ACCESS_TOKEN", "").strip()
+INSTAGRAM_API_BASE = os.environ.get("INSTAGRAM_API_BASE", "https://graph.facebook.com/v21.0").rstrip("/")
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
 GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")
 GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")
@@ -174,22 +190,43 @@ SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방
 1) 표현 소개 + 훅: 한국어 원문, 간결한 뜻, 누구에게/어떤 상황에서 쓰는지. 반드시 훅으로 연다.
 2) 직역이 안 되는 이유: 영어(또는 다른 언어)의 가장 가까운 단어와 비교하고, 그 단어가 못 담는 한국인만의 뉘앙스를 설명한다. 표현의 한국어 원문을 최소 1회 <strong>으로 강조한다.
 3) 실제 사용 장면: 대화체에 가까운 일상 예시 1~2개 (누가, 어떤 상황에서, 어떤 말투로). 가능하면 <ul><li>로 정리한다.
-4) 문화/관계 맥락: 이 표현이 한국 사회·관계 맺는 방식과 어떻게 연결되는지. [중요 — 단정 완화] "한국인은 항상 ~한다", "한국 문화에서는 ~이다"처럼 무출처·절대적 단정을 쓰지 않는다. "~인 경우가 많다", "많은 한국인에게 ~로 느껴진다", "흔히 관찰되는 경향이다", "한 가지 배경으로 자주 언급된다"처럼 완화된 표현을 쓴다.
+4) 문화/관계 맥락: 이 표현이 관계·일상과 어떻게 맞닿는지. [중요 — 단정 완화]
+   금지에 가까운 표현: "한국인은 항상/절대/모두", "obsessed with", "한국 문화는 ~이다"(단정).
+   권장: "이 표현은 흔히 ~한 맥락에서 설명됩니다", "한 가지 배경으로 자주 언급되는 것은 ~입니다",
+   "나이·지역·관계에 따라 뉘앙스가 달라질 수 있습니다", "learners often notice that…".
+   역사·사회 배경을 들 때는 인과를 단정하지 말고 "한 가지 해석으로는", "종종 연결해 설명하곤 합니다" 정도만 쓴다.
 5) 참여형 클로징: 막연한 "어떻게 생각하세요?" 대신, 한 가지만 떠올리면 바로 답할 수 있는 구체적 질문 1~2개.
 
-H2 소제목 변주 예시 (그대로 복사하지 말고, 비슷한 다양성으로 매번 새로 고른다):
-- 표현 소개: "이 말 한 마디에 담긴 것", "오늘 파헤쳐 볼 표현", "한 단어로 설명이 안 되는 그 감정", "먼저 이 상황부터"
-- 직역 불가: "왜 영어로는 이 맛이 안 날까", "가장 가까운 영어 단어의 한계", "번역기가 놓치는 뉘앙스", "직역하면 어색해지는 이유"
-- 사용 장면: "실제로는 이럴 때 쓴다", "대화 속에서 어떻게 나오는지", "한국인이 이 말을 꺼내는 순간", "말투와 상황 예시"
-- 문화 맥락: "이 표현 뒤에 있는 관계의 결", "한 가지 배경으로 자주 이야기되는 것", "사회·관계와 맞닿는 지점", "왜 이 말이 자주 쓰이는지"
-- 참여: "당신의 언어에서는?", "비슷한 말이 있나요?", "한 단어로 뭐라고 부르시나요?", "이런 순간, 당신은 뭐라고 말하나요?"
+H2 소제목 변주 예시 (그대로 복사하지 말고, 표현명을 넣어 매번 다르게):
+- Meaning: What Does "표현" Mean?, The Core Meaning of "표현"
+- Usage: When Do Koreans Say "표현"?, Real Situations for "표현"
+- Translation gap: Why "표현" Does Not Translate Directly, Closest English Words and Their Limits
+- Examples: Example Dialogues with "표현", How It Sounds in Conversation
+- Culture (완화): One Cultural Context Behind "표현", What Learners Often Notice About "표현"
+- Reader prompt: How Would You Say This in Your Language?, Is There a Similar Phrase Where You Live?
 
 섹션 순서는 고정하지 않는다. 예: 훅→직역 문제→사용 예시→문화→참여 / 훅→사용 예시→직역 문제→문화→참여 / 훅→문화 긴장→직역→사용→참여 등. 다만 글 앞부분에 훅이, 맨 끝에 참여 질문이 오는 흐름은 유지한다. H2는 4~6개 사이로 자연스럽게 나눈다.
 
 아래 규칙을 지켜 작성하세요:
-1. [클릭을 부르는 제목 — 매우 중요] 호기심 갭과 명확한 이익 약속을 동시에 가진다. 영어 검색 키워드형으로 작성하되 (예: "Why \\"정(Jeong)\\" Has No English Equivalent", "The Real Meaning of \\"눈치\\" (Nunchi)", "Why Koreans Say \\"수고했어요\\" So Often"), "Has No English Equivalent", "The Real Meaning of", "Why Koreans Say/Never/Always" 같은 궁금증 유발 어구를 활용한다. 표현의 한국어 원문을 반드시 제목에 쌍따옴표(" ")로 감싸 포함시키고, 25~55자 내외로 작성한다.
-1-1. meta_description은 검색결과 스니펫용 요약이다. 표현을 앞부분에 두고, 뜻과 번역이 안 되는 이유를 알 수 있다는 점이 드러나게 100~140자 내외로 작성한다.
-2. 소제목(H2) 문구와 순서는 위 변주 규칙을 따른다. 이전 글과 동일한 5개 고정 문구("오늘의 표현" / "왜 영어로 직역이 안 될까?" / "한국인은 어떤 상황에서 쓸까?" / "문화 이야기" / "여러분의 언어에서는 어떤가요?")를 그대로 반복하지 않는다.
+1. [SEO 제목 — 매우 중요] 영어권 검색 의도 "what does X mean" / "X meaning in Korean"에 맞춘다.
+   우선 패턴(표현마다 조금씩 다르게 고른다):
+   - "표현" Meaning in Korean: What Does It Really Mean?
+   - What Does "표현" Mean? Korean Expression Explained
+   - "표현" Meaning: What Koreans Actually Mean
+   - Why "표현" Has No Direct English Translation
+   표현의 한국어 원문을 반드시 제목에 쌍따옴표(" ")로 감싸 넣고, Meaning / What Does 를 제목 앞쪽에 두는 것을 우선한다.
+   피해야 할 것: "Are Obsessed With", "Always", "Never", "All Koreans" 같은 강한 일반화·자극 제목.
+   길이 약 40~70자(영문 기준).
+1-1. meta_description: 표현을 맨 앞에 두고, meaning + when Koreans use it + culture nuance 를 100~140자로.
+   예: What does "밥 한번 먹자" mean in Korean? Learn when people say it, why it is not always a firm plan, and the cultural nuance.
+2. 소제목(H2)은 검색·스캔에 유리한 영어 중심 문구를 섞는다(매 글 변주). 예:
+   - What Does "표현" Mean?
+   - When Do Koreans Actually Say "표현"?
+   - Why Doesn't "표현" Translate Directly?
+   - Examples of "표현" in Real Korean
+   - What This Expression Hints About Korean Culture
+   - How Would You Say Something Similar in Your Language?
+   한국어 고정 5단("오늘의 표현" / "왜 영어로…" / …)을 그대로 반복하지 않는다.
 3. [문체/가독성 — 매우 중요] AI 특유의 어색한 말투를 피한다:
    - 모든 문단을 "~일까요?", "~습니다!" 같은 같은 패턴으로 끝맺지 말고 평서문/의문문/짧은 문장을 자연스럽게 섞는다.
    - 같은 내용을 표현만 바꿔 반복하지 않는다(패딩 금지). 한 문단에서 한 이야기를 하면 다음 문단은 반드시 새로운 정보로 넘어간다.
@@ -335,6 +372,68 @@ WEEKDAY_THEME_CATEGORY: Dict[int, str] = {
     3: "리액션",     # 목요일
     4: "번역감정",   # 금요일 (플래그십 카테고리 재순환)
 }
+
+
+# =====================================================================
+# [SEO] Topic Cluster — 내부링크를 같은 주제 묶음으로 연결 (진단 권고)
+# Greetings / Relationship / Emotions·Reactions / Culture
+# =====================================================================
+TOPIC_CLUSTERS: Dict[str, List[str]] = {
+    "greetings": [
+        "안녕하세요", "식사하셨어요", "잘 지내시죠", "수고하셨습니다", "별말씀을요",
+        "괜찮아요", "수고했어요", "다녀오겠습니다", "조심히 들어가세요", "다음에 봐요",
+        "감사합니다 정말로", "화이팅", "힘내세요", "축하드려요",
+    ],
+    "relationship": [
+        "밥 한번 먹자", "우리", "정(情)", "정", "눈치", "밥 사는 문화", "정 나눔 선물 문화",
+        "정 문화", "눈치 문화", "신세 많이 졌습니다", "신경 쓰지 마세요", "괜찮으시면",
+    ],
+    "emotions": [
+        "헐", "대박", "어머", "아이고", "헉", "어이없다", "답답하다", "아쉽다", "서운하다",
+        "민망하다", "섭섭하다", "허전하다", "짠하다", "뭉클하다", "억울하다", "속상하다",
+        "당황스럽다", "기가 막히다", "웃프다", "찜찜하다", "든든하다",
+    ],
+    "culture": [
+        "나이 문화", "한국식 나이 계산법", "한국식 나이 서열", "동안 문화", "동안",
+        "존댓말", "존댓말 반말 전환 시점", "회식 문화", "선후배 문화", "서열 문화",
+        "빨리빨리 문화", "단체 문화", "한국의 집단주의 정서", "정 많은 민족성",
+        "눈치껏 행동하기", "한국식 인사법", "한국식 배려",
+    ],
+}
+
+
+def _normalize_topic_key(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"[\(（].*?[\)）]", "", s)
+    return s.strip()
+
+
+def _cluster_for_topic(topic_or_expr: str) -> Optional[str]:
+    key = _normalize_topic_key(topic_or_expr)
+    if not key:
+        return None
+    for cname, members in TOPIC_CLUSTERS.items():
+        for m in members:
+            mk = _normalize_topic_key(m)
+            if key == mk or key in m or mk in key:
+                return cname
+    return None
+
+
+def _cluster_for_article(article: Dict[str, Any]) -> Optional[str]:
+    for field in ("expression", "keyword", "title"):
+        c = _cluster_for_topic(str(article.get(field) or ""))
+        if c:
+            return c
+    cat = article.get("category") or ""
+    if cat == "일상표현":
+        return "greetings"
+    if cat in ("번역감정", "리액션"):
+        return "emotions"
+    if cat == "한국문화":
+        return "culture"
+    return None
+
 
 def _topic_category(topic: str) -> Optional[str]:
     for category, topics in EVERGREEN_TOPIC_BANK.items():
@@ -1537,27 +1636,60 @@ def add_ymyl_disclaimer(article: Dict[str, Any]) -> Dict[str, Any]:
     return article
 
 def _relevance_score(article: Dict[str, Any], candidate: Dict[str, Any]) -> float:
+    """같은 Topic Cluster·카테고리에 높은 점수 — SEO 토픽 클러스터 내부링크용."""
     score = 0.0
-    if candidate.get("category") == article.get("category", "번역감정"): score += 3.0
-    current_words = set(re.findall(r"[\w가-힣]+", (article.get("title", "") + " " + article.get("keyword", ""))))
-    candidate_words = set(re.findall(r"[\w가-힣]+", candidate.get("title", "")))
-    score += len(current_words & candidate_words) * 1.5
+    if candidate.get("category") == article.get("category", "번역감정"):
+        score += 2.0
+    ac = _cluster_for_article(article)
+    cc = _cluster_for_article(candidate)
+    if ac and cc and ac == cc:
+        score += 5.0
+    current_words = set(re.findall(r"[\w가-힣]+", (article.get("title", "") + " " + article.get("keyword", "") + " " + article.get("expression", ""))))
+    candidate_words = set(re.findall(r"[\w가-힣]+", (candidate.get("title", "") + " " + candidate.get("expression", ""))))
+    score += len(current_words & candidate_words) * 1.2
     return score
 
 def add_internal_link(article: Dict[str, Any]) -> Dict[str, Any]:
-    if not os.path.exists(POSTS_JSON): return article
-    with open(POSTS_JSON, "r", encoding="utf-8") as f: posts = json.load(f)
-    # [FIX] Blogger 단독 발행으로 전환하면서, 더 이상 존재하지 않는 GitHub Pages 글 주소
-    # 대신 실제 Blogger 주소가 있는 글만 관련 글 후보로 삼는다 (죽은 링크 방지).
+    """관련 글 2~3개를 Topic Cluster 우선으로 연결 (무작위 1개 추천 대신)."""
+    if not os.path.exists(POSTS_JSON):
+        return article
+    with open(POSTS_JSON, "r", encoding="utf-8") as f:
+        posts = json.load(f)
     posts = [p for p in posts if p.get("blogger_url")]
-    if not posts: return article
+    if not posts:
+        return article
     scored = [(p, _relevance_score(article, p)) for p in posts]
     scored.sort(key=lambda x: x[1], reverse=True)
-    top_pool = [p for p, s in scored[:5] if s > 0] or [p for p, s in scored[:5]]
-    if not top_pool: return article
-    weights = [max(s, 0.5) for p, s in scored[:len(top_pool)]]
-    pick = random.choices(top_pool, weights=weights, k=1)[0]
-    article["html_body"] += f'<p style="margin-top:2em;padding-top:1em;border-top:1px dashed #ddd;">🔗 이 글도 함께 보면 좋아요: <a href="{pick["blogger_url"]}">{pick["title"]}</a></p>'
+    my_title = (article.get("title") or "").strip()
+    picks = []
+    for p, s in scored:
+        if (p.get("title") or "").strip() == my_title:
+            continue
+        if s <= 0 and picks:
+            continue
+        picks.append(p)
+        if len(picks) >= 3:
+            break
+    if not picks:
+        return article
+    cluster = _cluster_for_article(article) or "related"
+    cluster_label = {
+        "greetings": "More Korean greetings & daily phrases",
+        "relationship": "More Korean relationship expressions",
+        "emotions": "More Korean emotions & reactions",
+        "culture": "More Korean culture & language notes",
+        "related": "Related reading",
+    }.get(cluster, "Related reading")
+    items = "".join(
+        f'<li style="margin:0.35em 0;"><a href="{html.escape(p["blogger_url"], quote=True)}">{html.escape(p.get("title") or "")}</a></li>'
+        for p in picks
+    )
+    article["html_body"] += (
+        f'<div style="margin-top:2em;padding:14px 16px;border-top:1px dashed #ddd;'
+        f'border-radius:0 0 10px 10px;background:#fafafa;">'
+        f'<p style="margin:0 0 8px;font-weight:700;color:#333;">📚 {cluster_label}</p>'
+        f'<ul style="margin:0;padding-left:1.2em;">{items}</ul></div>'
+    )
     return article
 
 def _manual_ad_unit() -> str:
@@ -2571,6 +2703,176 @@ def ensure_blogger_policy_pages() -> Dict[str, str]:
         return page_urls
 
 
+
+# =====================================================================
+# [NEW] Threads + Instagram 자동 발행 (Blogger 발행 성공 후)
+# - 이미지 URL은 공개 접근 가능해야 함 (GitHub Pages thumbs URL 사용)
+# - 토큰/ID 미설정 시 스킵. 예외는 로그 후 삼킴 (메인 파이프라인 보호)
+# =====================================================================
+def _sns_caption(article: Dict[str, Any], blogger_url: str, *, platform: str) -> str:
+    """플랫폼별 길이 제한에 맞춘 홍보 캡션."""
+    title = (article.get("title") or "").strip()
+    expr = (article.get("expression") or "").strip()
+    cat = (article.get("category") or "").strip()
+    lines = []
+    if expr:
+        lines.append(f"Korean expression: “{expr}”")
+    if title:
+        lines.append(title)
+    lines.append("Learn Korean → understand how Koreans think & speak.")
+    if cat:
+        lines.append(f"#{cat.replace(' ', '')}")
+    lines.append("#LearnKorean #KoreanLanguage #한국어 #KoreanCulture")
+    if blogger_url:
+        lines.append(blogger_url)
+    caption = "\n".join(lines)
+    limit = 480 if platform == "threads" else 2100
+    if len(caption) > limit:
+        caption = caption[: limit - 1].rstrip() + "…"
+    return caption
+
+
+def _wait_media_container_ready(
+    status_url: str,
+    access_token: str,
+    *,
+    label: str,
+    max_attempts: int = 12,
+    delay_sec: float = 3.0,
+) -> bool:
+    """컨테이너 status_code 가 FINISHED 될 때까지 폴링."""
+    for i in range(1, max_attempts + 1):
+        try:
+            r = requests.get(status_url, params={"fields": "status_code,status", "access_token": access_token}, timeout=30)
+            data = r.json() if r.ok else {}
+            code = (data.get("status_code") or data.get("status") or "").upper()
+            logger.info(f"[{label}] 컨테이너 상태 ({i}/{max_attempts}): {code or r.text[:120]}")
+            if code in ("FINISHED", "PUBLISHED"):
+                return True
+            if code in ("ERROR", "EXPIRED"):
+                logger.warning(f"[{label}] 컨테이너 실패: {data}")
+                return False
+        except Exception as e:
+            logger.warning(f"[{label}] 상태 조회 오류: {e}")
+        time.sleep(delay_sec)
+    return False
+
+
+def publish_to_threads(article: Dict[str, Any], blogger_url: str, image_url: str) -> Optional[str]:
+    """Threads 이미지(+텍스트) 게시. 성공 시 media id 또는 permalink 힌트 반환."""
+    if not THREADS_ENABLED:
+        return None
+    if not (THREADS_USER_ID and THREADS_ACCESS_TOKEN):
+        logger.info("[Threads] 미설정(THREADS_USER_ID / THREADS_ACCESS_TOKEN) — 건너뜁니다.")
+        return None
+    if not image_url:
+        logger.warning("[Threads] image_url 비어 있음 — 건너뜁니다.")
+        return None
+    caption = _sns_caption(article, blogger_url, platform="threads")
+    try:
+        create = requests.post(
+            f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads",
+            data={
+                "media_type": "IMAGE",
+                "image_url": image_url,
+                "text": caption,
+                "access_token": THREADS_ACCESS_TOKEN,
+            },
+            timeout=60,
+        )
+        if not create.ok:
+            logger.warning(f"[Threads] 컨테이너 생성 실패 HTTP {create.status_code}: {create.text[:400]}")
+            return None
+        creation_id = (create.json() or {}).get("id")
+        if not creation_id:
+            logger.warning(f"[Threads] creation_id 없음: {create.text[:300]}")
+            return None
+        ready = _wait_media_container_ready(
+            f"{THREADS_API_BASE}/{creation_id}",
+            THREADS_ACCESS_TOKEN,
+            label="Threads",
+        )
+        if not ready:
+            logger.warning("[Threads] 컨테이너 준비 시간 초과 — 발행 시도는 계속합니다.")
+        pub = requests.post(
+            f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads_publish",
+            data={"creation_id": creation_id, "access_token": THREADS_ACCESS_TOKEN},
+            timeout=60,
+        )
+        if not pub.ok:
+            logger.warning(f"[Threads] 발행 실패 HTTP {pub.status_code}: {pub.text[:400]}")
+            return None
+        media_id = (pub.json() or {}).get("id", "")
+        logger.info(f"[Threads] 발행 완료 id={media_id}")
+        return media_id or creation_id
+    except Exception as e:
+        logger.warning(f"[Threads] 예외(건너뜀): {e}")
+        return None
+
+
+def publish_to_instagram(article: Dict[str, Any], blogger_url: str, image_url: str) -> Optional[str]:
+    """Instagram Professional 계정 이미지 게시 (텍스트 단독 불가 → 썸네일 필수)."""
+    if not INSTAGRAM_ENABLED:
+        return None
+    if not (INSTAGRAM_USER_ID and INSTAGRAM_ACCESS_TOKEN):
+        logger.info("[Instagram] 미설정(INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN) — 건너뜁니다.")
+        return None
+    if not image_url:
+        logger.warning("[Instagram] image_url 비어 있음 — 건너뜁니다.")
+        return None
+    caption = _sns_caption(article, blogger_url, platform="instagram")
+    try:
+        create = requests.post(
+            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media",
+            data={
+                "image_url": image_url,
+                "caption": caption,
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            },
+            timeout=60,
+        )
+        if not create.ok:
+            logger.warning(f"[Instagram] 컨테이너 생성 실패 HTTP {create.status_code}: {create.text[:400]}")
+            return None
+        creation_id = (create.json() or {}).get("id")
+        if not creation_id:
+            logger.warning(f"[Instagram] creation_id 없음: {create.text[:300]}")
+            return None
+        ready = _wait_media_container_ready(
+            f"{INSTAGRAM_API_BASE}/{creation_id}",
+            INSTAGRAM_ACCESS_TOKEN,
+            label="Instagram",
+        )
+        if not ready:
+            logger.warning("[Instagram] 컨테이너 준비 시간 초과 — 발행 시도는 계속합니다.")
+        pub = requests.post(
+            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media_publish",
+            data={"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=60,
+        )
+        if not pub.ok:
+            logger.warning(f"[Instagram] 발행 실패 HTTP {pub.status_code}: {pub.text[:400]}")
+            return None
+        media_id = (pub.json() or {}).get("id", "")
+        logger.info(f"[Instagram] 발행 완료 id={media_id}")
+        return media_id or creation_id
+    except Exception as e:
+        logger.warning(f"[Instagram] 예외(건너뜀): {e}")
+        return None
+
+
+def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) -> None:
+    """Blogger 성공 후 Threads·Instagram 순차 발행."""
+    if not blogger_url:
+        return
+    # 공개 URL이 아니면 Meta가 이미지를 다운로드하지 못함
+    if not (image_url.startswith("http://") or image_url.startswith("https://")):
+        logger.warning(f"[SNS] 공개 image_url 이 아니라 스킵: {image_url[:80]}")
+        return
+    publish_to_threads(article, blogger_url, image_url)
+    publish_to_instagram(article, blogger_url, image_url)
+
+
 def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: str, local_thumb_path: str) -> Optional[str]:
     if not _blogger_configured():
         # [FIX] 기존에는 미설정 시 아무 로그 없이 조용히 건너뛰어, 파이프라인이 "성공"으로 표시돼도
@@ -3062,10 +3364,55 @@ def _apply_hold_content_repair(html: str, seed: str) -> str:
 
 
 # =====================================================================
+
+# =====================================================================
+# [SEO 리페어] 기존 글 제목을 Meaning / What Does 패턴으로 일괄 리라이트
+# =====================================================================
+_SEO_TITLE_PATTERNS = [
+    '"{expr}" Meaning in Korean: What Does It Really Mean?',
+    'What Does "{expr}" Mean? Korean Expression Explained',
+    '"{expr}" Meaning: What Koreans Actually Mean',
+    'Why "{expr}" Has No Direct English Translation',
+    '"{expr}" Meaning in Korean — Usage & Cultural Nuance',
+]
+
+
+def _title_already_seo(title: str) -> bool:
+    t = (title or "").lower()
+    keys = ("meaning", "what does", "no direct english translation", "korean expression explained")
+    return any(k in t for k in keys)
+
+
+def _seo_rewrite_title(old_title: str, expression: str = "") -> str:
+    """표현을 추출해 SEO 제목 패턴 중 하나로 결정적 변환. 이미 SEO형이면 유지."""
+    expr = (expression or "").strip() or _extract_expression_from_title(old_title, strict=False)
+    if not expr:
+        return old_title
+    if _title_already_seo(old_title) and expr in (old_title or ""):
+        return old_title
+    # 표현이 제목에 없고 SEO형이면 표현만 보강하지 않고 패턴 재작성
+    h = int(hashlib.md5(expr.encode("utf-8")).hexdigest(), 16)
+    pattern = _SEO_TITLE_PATTERNS[h % len(_SEO_TITLE_PATTERNS)]
+    new_title = pattern.format(expr=expr)
+    # 과도하게 긴 제목 방지
+    if len(new_title) > 90:
+        new_title = f'What Does "{expr}" Mean? Korean Expression Explained'
+    return new_title
+
+
+def _rewrite_title_in_html(html_body: str, old_title: str, new_title: str) -> str:
+    """본문 안에 옛 제목이 노출된 경우(관련글 등 제외) 최소한의 치환."""
+    if not html_body or not old_title or old_title == new_title:
+        return html_body
+    # og/title 태그는 Blogger가 제목 필드로 관리하므로 content 본문만 안전 치환
+    return html_body.replace(old_title, new_title)
+
+
 # [NEW + H.O.L.D.] 이전 글 자동 복구
 # - expression 누락으로 텍스트/발음버튼이 빠진 과거 글 일괄 수정
 # - 고정 5단 H2 문구를 글마다 다른 변주 소제목으로 교체 (AdSense 패턴 리스크 완화)
 # - 문화 섹션 무출처 단정 표현 완화
+# - 기존 글 제목을 Meaning / What Does SEO 패턴으로 일괄 리라이트
 # GitHub Pages(로컬 파일)는 확실하게 복구하고, Blogger는 제목 매칭 + 고아 글 H.O.L.D. 본문 패치까지 수행한다.
 # 실행: python generate_post.py repair
 # =====================================================================
@@ -3127,9 +3474,19 @@ def repair_old_posts() -> None:
         theme = get_theme(category)
         expression = _extract_expression_from_title(title, strict=True)
         if not expression:
+            # strict 실패 시 느슨 추출로 SEO 제목만이라도 시도
+            expression = _extract_expression_from_title(title, strict=False)
+        if not expression:
             skipped_no_expression += 1
             logger.warning(f"[복구] 제목에서 표현을 추출하지 못해 건너뜁니다: {title}")
             continue
+
+        # 0) SEO 제목 리라이트 (posts.json)
+        new_title = _seo_rewrite_title(title, expression)
+        if new_title != title:
+            p["title"] = new_title
+            title = new_title
+            logger.info(f"[복구][SEO 제목] {expression} → {new_title}")
 
         # 1) 썸네일 재생성 (항상 안전하게 덮어쓰기 — expression 폴백 로직이 이미 최신 버전)
         thumb_path = os.path.join(DOCS_DIR, p["thumb"])
@@ -3242,12 +3599,19 @@ def repair_old_posts() -> None:
             blogger_url_bootstrapped = 0
             hold_content_fixed = 0
             orphan_hold_fixed = 0
+            seo_title_fixed = 0
             for bp in blogger_posts:
                 norm_title = _normalize_title(bp.get("title", ""))
                 local = local_titles.get(norm_title)
                 content = bp.get("content", "") or ""
                 new_content = content
                 bp_title = bp.get("title", "") or ""
+                # [SEO] 제목 리라이트 (표현 추출 가능 시)
+                expr_seo = _extract_expression_from_title(bp_title, strict=True) or _extract_expression_from_title(bp_title, strict=False)
+                new_bp_title = _seo_rewrite_title(bp_title, expr_seo) if expr_seo else bp_title
+                if new_bp_title != bp_title:
+                    seo_title_fixed += 1
+                    new_content = _rewrite_title_in_html(new_content, bp_title, new_bp_title)
 
                 # [H.O.L.D. 리페어] posts.json 매칭 여부와 무관하게, 고정 5단 H2·문화 단정이 있으면 본문 변주
                 repaired = _apply_hold_content_repair(new_content, bp_title or bp.get("id", ""))
@@ -3278,11 +3642,13 @@ def repair_old_posts() -> None:
                         upd = requests.put(
                             f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
                             headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-                            json={"title": bp["title"], "content": new_content},
+                            json={"title": new_bp_title, "content": new_content},
                             timeout=30,
                         )
                         if upd.ok:
                             blogger_fixed += 1
+                            if new_bp_title != bp_title:
+                                logger.info(f"[복구][SEO 제목] {bp_title} → {new_bp_title}")
                         else:
                             logger.warning(f"[복구] Blogger 고아 글 패치 실패({bp_title}): HTTP {upd.status_code}")
                     continue
@@ -3337,18 +3703,22 @@ def repair_old_posts() -> None:
                     related_link_fixed += 1
                     new_content = relinked
 
-                if new_content == content:
+                # 제목만 SEO로 바뀌고 본문이 동일해도 업데이트
+                if new_content == content and new_bp_title == bp_title:
                     already_up_to_date += 1
                     continue
-
                 upd = requests.put(
                     f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
                     headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-                    json={"title": bp["title"], "content": new_content},
+                    json={"title": new_bp_title, "content": new_content},
                     timeout=30,
                 )
                 if upd.ok:
                     blogger_fixed += 1
+                    if new_bp_title != bp_title:
+                        logger.info(f"[복구][SEO 제목] {bp_title} → {new_bp_title}")
+                    if local and new_bp_title != bp_title:
+                        local["title"] = new_bp_title
                 else:
                     logger.warning(f"[복구] Blogger 글 패치 실패({bp_title}): HTTP {upd.status_code}")
 
@@ -3394,7 +3764,7 @@ def repair_old_posts() -> None:
 
             logger.info(
                 f"[복구] Blogger 완료 — 매칭 {matched}개 중 {blogger_fixed}개 패치 "
-                f"(H.O.L.D. 본문 {hold_content_fixed}개, 고아글 H.O.L.D. {orphan_hold_fixed}개, "
+                f"(SEO 제목 {seo_title_fixed}개, H.O.L.D. 본문 {hold_content_fixed}개, 고아글 H.O.L.D. {orphan_hold_fixed}개, "
                 f"낡은 버튼 교체 {stale_button_replaced}개, 관련글 링크 교체 {related_link_fixed}개, "
                 f"blogger_url 채움 {blogger_url_bootstrapped}개, 이미 최신 {already_up_to_date}개, "
                 f"표현 추출 실패 {no_expression}개, img 태그 없음 {no_img_tag}개)"
@@ -3508,6 +3878,8 @@ def run() -> None:
     # [NEW] 발행 직후 Google에 색인 생성을 자동으로 요청한다 (Search Console에서 손으로 누르던 작업 자동화)
     if blogger_url:
         request_google_indexing(blogger_url)  # Blogger가 메인 발행처이므로 이 주소만 색인 요청
+        # [NEW] Threads + Instagram 자동 공유 (토큰 없으면 내부에서 스킵)
+        publish_to_sns(article, blogger_url, thumb_url)
 
     if not manual_title and not is_manual_trigger:
         increment_daily_count()
