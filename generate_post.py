@@ -2416,83 +2416,18 @@ def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str
 
 
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """마스터 프롬프트 콘티 → (가능하면 AI 이미지) → 4:5 한 컷 + plan.json + 클릭 HTML."""
-    expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
-    slug = _instatoon_slug(expr, article.get("title") or "")
-    public_dir = os.path.join(INSTATOON_PUBLIC_DIR, slug)
-    download_dir = os.path.join(INSTATOON_DOWNLOAD_DIR, slug)
-    os.makedirs(public_dir, exist_ok=True)
-    os.makedirs(download_dir, exist_ok=True)
-
-    plan = plan_instatoon_from_blog(article)
-    plan_path = os.path.join(download_dir, "plan.json")
-    try:
-        with open(plan_path, "w", encoding="utf-8") as f:
-            json.dump(plan, f, ensure_ascii=False, indent=2)
-        with open(os.path.join(public_dir, "plan.json"), "w", encoding="utf-8") as f:
-            json.dump(plan, f, ensure_ascii=False, indent=2)
-        # 최종 이미지 프롬프트 단독 파일 (외부 툴 복사용)
-        with open(os.path.join(download_dir, "image_prompt.txt"), "w", encoding="utf-8") as f:
-            f.write(plan.get("final_image_prompt") or "")
-            f.write("\n\n--- NEGATIVE ---\n")
-            f.write(plan.get("negative_prompt") or "")
-    except Exception as e:
-        logger.warning(f"[인스타툰] plan 저장 실패: {e}")
-
-    fname = "01.png"
-    pub_path = os.path.join(public_dir, fname)
-    dl_path = os.path.join(download_dir, fname)
-
-    # 장면만 AI 생성(글자 금지) → 정확한 한국어 말풍선 오버레이
-    scene_prompt = _build_scene_only_prompt(plan)
-    neg = (plan.get("negative_prompt") or "") + ", text, letters, words, writing, signage, watermark, logo, garbled text"
-    raw = _try_ai_image_bytes(scene_prompt, neg)
-    final_img = None
-    if raw:
-        try:
-            from io import BytesIO
-            ai_img = Image.open(BytesIO(raw)).convert("RGB")
-            final_img = _overlay_korean_ui(ai_img, plan, blogger_url)
-            logger.info("[인스타툰] AI 장면 + 한국어 오버레이 합성 완료")
-        except Exception as e:
-            logger.warning(f"[인스타툰] AI 합성 실패: {e}")
-            final_img = None
-    if final_img is None:
-        final_img = _render_plan_storyboard(plan, blogger_url)
-        logger.warning("[인스타툰] AI 실패 → 웹툰 폴백")
-    final_img.save(pub_path, format="PNG", optimize=True)
-    final_img.save(dl_path, format="PNG", optimize=True)
-
-    target = (blogger_url or "").strip() or (SITE_URL or "https://learnkoreanseekoreans.blogspot.com").rstrip("/")
-    safe_target = html.escape(target, quote=True)
-    click_html = (
-        "<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        f"<title>{html.escape(expr or 'Learn Korean')}</title>"
-        f"<meta http-equiv=\"refresh\" content=\"0;url={safe_target}\">"
-        f"<script>location.replace({json.dumps(target)});</script></head><body>"
-        f"<a href=\"{safe_target}\"><img src=\"{html.escape(fname)}\" style=\"width:100%\" alt=\"instatoon\"></a>"
-        "</body></html>"
-    )
-    for folder in (download_dir, public_dir):
-        try:
-            with open(os.path.join(folder, "index.html"), "w", encoding="utf-8") as hf:
-                hf.write(click_html)
-        except Exception:
-            pass
-
-    public_urls = [f"{SITE_URL.rstrip('/')}/instatoon/{slug}/{fname}"] if SITE_URL else []
-    logger.info(f"[인스타툰] {plan.get('situation')} → {dl_path}")
+    """인스타툰 생성 비활성화 — 블로그 본문·썸네일·발행만 유지."""
+    logger.info("[인스타툰] 생성 비활성화됨 — 건너뜀")
     return {
-        "slug": slug,
-        "local_paths": [dl_path],
-        "public_urls": public_urls,
-        "click_url": f"{SITE_URL.rstrip('/')}/instatoon/{slug}/" if SITE_URL else "",
-        "blogger_url": target,
-        "download_dir": download_dir,
-        "public_dir": public_dir,
-        "plan": plan,
+        "slug": "",
+        "local_paths": [],
+        "public_urls": [],
+        "click_url": "",
+        "blogger_url": (blogger_url or "").strip(),
+        "download_dir": "",
+        "disabled": True,
     }
+
 
 
 def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
@@ -4839,8 +4774,8 @@ def repair_old_posts() -> None:
                     "meta_description": (p.get("meta_description") or title),
                     "html_body": "",
                 }
-                generate_instatoon_images(article_stub, (p.get("blogger_url") or "").strip())
-                fixed_card_news += 1
+                # 인스타툰 생성 제거됨 — 스킵
+                pass
                 logger.info(f"[복구] 인스타툰 생성: {slug_cn}")
         except Exception as e:
             logger.warning(f"[복구] 인스타툰 생성 실패({title}): {e}")
