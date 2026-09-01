@@ -1,0 +1,4 @@
+4:5 vertical Instagram webtoon, medium shot, an office worker (woman, 30s, neat blouse, slightly disheveled hair, tired eyes) is standing by the office exit, her shoulders slumped, looking exhausted after a long day. Another colleague (woman, 30s, bright blazer, warm smile) gently taps her shoulder. The colleague's face is full of warmth and encouragement. The tired worker looks up, her expression a mix of surprise and a hint of relief. Subtle warm lighting. speech bubble: "오늘도 수고했어! 내일도 '화이팅'이야!"
+
+--- NEGATIVE ---
+photorealistic, 3D render, bad anatomy, deformed, ugly, disfigured, poor lighting, low quality, cartoon, anime, text, signature, watermark, multiple people in background, blurry, extra limbs, bad hands, missing fingers, extra fingers, malformed hands, extra hands, missing limbs, extra limbs, distorted face, duplicate, blurry, out of focus, monochrome, grayscale, low contrast, oversaturated
