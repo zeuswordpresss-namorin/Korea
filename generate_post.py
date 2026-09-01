@@ -1875,16 +1875,32 @@ def _draw_instatoon_one_cut(article: Dict[str, Any], blogger_url: str = "") -> I
 
     _draw_place_bg(draw, str(plan.get("place") or ""), w, h, ink, accent)
 
-    # 4) footer cultural message
+    # 4) footer cultural message + 블로그 이동 CTA 바
     foot = (plan.get("footer") or "").strip()
-    if blogger_url and len(foot) < 60:
-        foot = f"{foot}  {blogger_url}".strip()
-    fy = h - 110
+    fy = h - 168
     ff = _load_font(26)
-    for line in _wrap_by_pixel_width(draw, foot, ff, w - 100)[:3]:
+    for line in _wrap_by_pixel_width(draw, foot, ff, w - 100)[:2]:
         lb = draw.textbbox((0, 0), line, font=ff)
         draw.text(((w - (lb[2] - lb[0])) / 2, fy), line, font=ff, fill=(75, 75, 80))
         fy += (lb[3] - lb[1]) + 6
+
+    if blogger_url:
+        bar_top = h - 72
+        draw.rectangle([0, bar_top, w, h], fill=accent)
+        cta1 = "탭하면 구글 블로그에서 이어서 읽기"
+        cta2 = blogger_url.replace("https://", "").replace("http://", "")
+        f1, f2 = _load_font(28), _load_font(22)
+        b1 = draw.textbbox((0, 0), cta1, font=f1)
+        draw.text(((w - (b1[2] - b1[0])) / 2, bar_top + 8), cta1, font=f1, fill=(255, 255, 255))
+        b2 = draw.textbbox((0, 0), cta2, font=f2)
+        draw.text(((w - (b2[2] - b2[0])) / 2, bar_top + 40), cta2, font=f2, fill=(255, 255, 255))
+    else:
+        bar_top = h - 48
+        draw.rectangle([0, bar_top, w, h], fill=accent)
+        cta1 = "Learn Korean -> See Koreans"
+        f1 = _load_font(26)
+        b1 = draw.textbbox((0, 0), cta1, font=f1)
+        draw.text(((w - (b1[2] - b1[0])) / 2, bar_top + 12), cta1, font=f1, fill=(255, 255, 255))
 
     # expression chip
     tag = f"「{expr}」"
@@ -1922,12 +1938,41 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
     dl_path = os.path.join(download_dir, fname)
     img.save(pub_path, format="PNG", optimize=True)
     img.save(dl_path, format="PNG", optimize=True)
+
+    # 한 컷 클릭 → 구글 블로그 자동 이동 HTML
+    target = (blogger_url or "").strip() or (SITE_URL or "https://learnkoreanseekoreans.blogspot.com").rstrip("/")
+    safe_target = html.escape(target, quote=True)
+    click_html = (
+        "<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        f"<title>{html.escape(expr or 'Learn Korean')}</title>"
+        f"<meta http-equiv=\"refresh\" content=\"0;url={safe_target}\">"
+        f"<link rel=\"canonical\" href=\"{safe_target}\">"
+        "<style>html,body{margin:0;background:#111}a.cover{display:block;min-height:100vh}"
+        "img{width:100%;height:auto;vertical-align:middle}"
+        ".hint{position:fixed;left:0;right:0;bottom:0;padding:14px;text-align:center;"
+        "background:rgba(0,0,0,.75);color:#fff;font:600 15px/1.4 system-ui,sans-serif}</style>"
+        f"<script>location.replace({json.dumps(target)});</script></head><body>"
+        f"<a class=\"cover\" href=\"{safe_target}\" rel=\"noopener\">"
+        f"<img src=\"{html.escape(fname)}\" alt=\"{html.escape(expr or 'instatoon')}\">"
+        "<div class=\"hint\">구글 블로그로 이동 중… 탭하세요</div></a></body></html>"
+    )
+    for folder in (download_dir, public_dir):
+        try:
+            with open(os.path.join(folder, "index.html"), "w", encoding="utf-8") as hf:
+                hf.write(click_html)
+        except Exception as e:
+            logger.warning(f"[인스타툰] 클릭 링크 HTML 저장 실패: {e}")
+
     public_urls = [f"{SITE_URL.rstrip('/')}/instatoon/{slug}/{fname}"] if SITE_URL else []
-    logger.info(f"[인스타툰] {plan.get('situation')} → {dl_path}")
+    click_url = f"{SITE_URL.rstrip('/')}/instatoon/{slug}/" if SITE_URL else ""
+    logger.info(f"[인스타툰] {plan.get('situation')} → {dl_path} (클릭→{target})")
     return {
         "slug": slug,
         "local_paths": [dl_path],
         "public_urls": public_urls,
+        "click_url": click_url,
+        "blogger_url": target,
         "download_dir": download_dir,
         "public_dir": public_dir,
         "plan": plan,
@@ -3232,26 +3277,35 @@ def ensure_blogger_policy_pages() -> Dict[str, str]:
 # - 토큰/ID 미설정 시 스킵. 예외는 로그 후 삼킴 (메인 파이프라인 보호)
 # =====================================================================
 def _sns_caption(article: Dict[str, Any], blogger_url: str, *, platform: str) -> str:
-    """플랫폼별 길이 제한에 맞춘 홍보 캡션."""
+    """플랫폼별 홍보 캡션 — 구글 블로그 링크를 맨 앞에 두어 전환 유도."""
     title = (article.get("title") or "").strip()
     expr = (article.get("expression") or "").strip()
     cat = (article.get("category") or "").strip()
+    link = (blogger_url or "").strip()
     lines = []
+    if link:
+        lines.append("📖 구글 블로그에서 이어서 읽기")
+        lines.append(link)
+        lines.append("")
     if expr:
         lines.append(f"Korean expression: “{expr}”")
     if title:
         lines.append(title)
+    lines.append("한 컷으로 상황만 보고, 자세한 뉘앙스는 블로그에서 확인하세요.")
     lines.append("Learn Korean → understand how Koreans think & speak.")
+    tags = ["#LearnKorean", "#KoreanLanguage", "#한국어", "#KoreanCulture", "#인스타툰"]
     if cat:
-        lines.append(f"#{cat.replace(' ', '')}")
-    lines.append("#LearnKorean #KoreanLanguage #한국어 #KoreanCulture")
-    if blogger_url:
-        lines.append(blogger_url)
+        tags.insert(0, f"#{cat.replace(' ', '')}")
+    lines.append(" ".join(tags))
     caption = "\n".join(lines)
     limit = 480 if platform == "threads" else 2100
     if len(caption) > limit:
-        caption = caption[: limit - 1].rstrip() + "…"
+        if link and link not in caption[:limit]:
+            caption = caption[: max(0, limit - len(link) - 5)].rstrip() + "…\n" + link
+        else:
+            caption = caption[: limit - 1].rstrip() + "…"
     return caption
+
 
 
 def _wait_media_container_ready(
@@ -4687,6 +4741,12 @@ def run() -> None:
     if blogger_url:
         request_google_indexing(blogger_url)  # Blogger가 메인 발행처이므로 이 주소만 색인 요청
         # [NEW] Threads + Instagram 자동 공유 (토큰 없으면 내부에서 스킵)
+        # 한 컷에 블로그 URL 반영 후 SNS (클릭 전환용)
+        try:
+            article["_card_news"] = generate_instatoon_images(article, blogger_url)
+            commit_and_push_changes()
+        except Exception as _e:
+            logger.warning(f"[인스타툰] 발행 URL 반영 재생성 실패: {_e}")
         publish_to_sns(article, blogger_url, thumb_url)
 
     if not manual_title and not is_manual_trigger:
