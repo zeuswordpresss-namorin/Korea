@@ -1126,6 +1126,42 @@ def fix_character_count_claims(article: Dict[str, Any]) -> Dict[str, Any]:
             article[field] = _COUNT_WORD_PATTERN.sub(_replace, article[field])
     return article
 
+
+def _fallback_article_local(title: str) -> Dict[str, Any]:
+    """Gemini 429/장애 시 최소 발행 가능한 로컬 폴백 글 (파이프라인 전체 중단 방지)."""
+    expr = _extract_expression_from_title(title) or _extract_expression_from_title(title, strict=False) or "한국어"
+    category = "일상표현"
+    for cat, words in {
+        "번역감정": ["마음", "감정", "느낌", "섭섭", "답답", "미안"],
+        "한국문화": ["눈치", "정", "체면", "우리"],
+        "리액션": ["대박", "헐", "진짜", "미쳤"],
+    }.items():
+        if any(w in (title + expr) for w in words):
+            category = cat
+            break
+    html = f"""
+<div class="reader-value"><strong>Today&apos;s expression</strong><br>「{html.escape(expr)}」</div>
+<h2>이 말, 어떤 순간에 나올까?</h2>
+<p>한국어 「{html.escape(expr)}」는 사전 뜻만으로는 설명이 부족한 경우가 많습니다. 실제 대화에서는 <em>상황과 관계</em>가 의미를 완성합니다.</p>
+<h2>직역하면 놓치는 부분</h2>
+<p>영어나 다른 언어로 그대로 옮기면 어색하거나 오해가 생길 수 있어요. 「{html.escape(expr)}」를 배울 때는 예문보다 <strong>언제 쓰는지</strong>를 함께 기억하는 편이 낫습니다.</p>
+<h2>이렇게 써 보세요</h2>
+<p>친구와의 캐주얼한 대화에서 「{html.escape(expr)}」가 자연스럽게 나오는 장면을 떠올려 보세요. 관계가 가까운 사이에서 더 자주 들릴 수 있습니다.</p>
+<h2>한 줄 정리</h2>
+<p>「{html.escape(expr)}」 — 뜻이 아니라 <strong>순간</strong>으로 기억해 보세요.</p>
+<p class="meta-note">* 일시적 AI 한도로 요약본이 발행되었습니다. 다음 실행에서 본문이 보강될 수 있습니다.</p>
+"""
+    return {
+        "title": title if title else f'"{expr}" Meaning in Korean: What Does It Really Mean?',
+        "expression": expr,
+        "category": category,
+        "html_body": html,
+        "meta_description": f'What does "{expr}" mean in Korean? Learn the real situation, not just the dictionary.',
+        "image_keywords": f"korean language {expr} conversation",
+        "focus_keyword": expr,
+    }
+
+
 def generate_article(title: str) -> Dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 비어있습니다. 저장소 Secrets 설정을 확인하세요.")
@@ -1142,12 +1178,16 @@ def generate_article(title: str) -> Dict[str, Any]:
     }
 
     last_error = None
-    for attempt in range(1, 4):
+    for attempt in range(1, 7):  # 429 대비 재시도 확대
         try:
             resp = requests.post(url, json=payload, timeout=60)
             if resp.status_code in (429, 503):
-                wait = 15 * attempt
-                logger.warning(f"일시적 오류({resp.status_code}), {wait}초 대기 후 재시도 ({attempt}/3)")
+                # Gemini free-tier 429: 지수 백오프 (30s → 최대 3분)
+                wait = min(30 * attempt, 180)
+                logger.warning(
+                    f"일시적 오류({resp.status_code}), {wait}초 대기 후 재시도 ({attempt}/6) "
+                    f"— API 할당량/동시요청 한도일 수 있습니다"
+                )
                 time.sleep(wait)
                 last_error = f"{resp.status_code} 오류 반복됨"
                 continue
@@ -1214,7 +1254,7 @@ def generate_article(title: str) -> Dict[str, Any]:
             last_error = str(e)
             time.sleep(10)
 
-    raise RuntimeError(f"3번 시도했지만 계속 실패했습니다: {last_error}")
+    raise RuntimeError(f"Gemini 글 생성 실패(재시도 소진): {last_error}")
 
 def _load_font(size: int):
     for path in FONT_CANDIDATES:
@@ -1638,6 +1678,9 @@ def plan_instatoon_from_blog(article: Dict[str, Any]) -> Dict[str, Any]:
             },
             timeout=40,
         )
+        if resp.status_code in (429, 503):
+            logger.warning(f"[인스타툰] Gemini {resp.status_code} — 로컬 콘티로 진행 (할당량 보호)")
+            return plan
         if not resp.ok:
             logger.warning(f"[인스타툰] Gemini HTTP {resp.status_code}")
             return plan
@@ -4585,13 +4628,22 @@ def run() -> None:
     generate_static_pages()
     ensure_blogger_policy_pages()  # AdSense: About/Privacy/Contact + 내비 문구 동기화
 
-    article = generate_article(title)
+    try:
+        article = generate_article(title)
+    except Exception as e:
+        logger.error(f"[Gemini] 글 생성 실패 → 로컬 폴백 사용: {e}")
+        article = _fallback_article_local(title)
     article = fix_character_count_claims(article)  # [NEW] AI의 글자 수 오기재를 Python이 강제 교정
     ok, reason = validate_article_quality(article)
     if not ok:
         logger.warning(f"[품질] 1차 생성 미달({reason}) — 1회 재생성 시도")
-        article = generate_article(title)
-        article = fix_character_count_claims(article)
+        try:
+            article = generate_article(title)
+            article = fix_character_count_claims(article)
+        except Exception as e2:
+            logger.warning(f"[품질] 재생성 불가({e2}) — 폴백/기존 본문으로 발행 계속")
+            if not article.get("html_body"):
+                article = _fallback_article_local(title)
         ok2, reason2 = validate_article_quality(article)
         if not ok2:
             logger.warning(f"[품질] 재생성 후에도 미달({reason2}) — 발행은 계속하되 로그에 남김")
