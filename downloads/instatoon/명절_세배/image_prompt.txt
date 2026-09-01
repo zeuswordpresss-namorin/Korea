@@ -1,0 +1,4 @@
+4:5 vertical Instagram Korean webtoon illustration, clean line art, simple background, person staring at phone messages, frustrated expression, expressive face matching emotion '황당함', speech bubble with exact Korean text "아, 명절 세배.", highlight expression "명절 세배", warm approachable editorial style, high readability, no photorealism, minimal text
+
+--- NEGATIVE ---
+photorealistic, 3D render, cinematic realism, overly detailed background, crowded composition, too many characters, bad anatomy, excessive text, random Korean letters, garbled Korean, watermark, logo, stiff pose
