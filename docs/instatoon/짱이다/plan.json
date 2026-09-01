@@ -1,34 +1,28 @@
 {
-  "core_message": "'짱이다'는 친한 사람에게 대단하고 멋진 것을 보고 진심으로 감탄할 때 쓰는 표현이다.",
-  "situation": "번화한 길거리, 해가 질 무렵. 두 친구가 길거리 떡볶이를 먹고 있다. 한 친구가 떡볶이를 한 입 먹고 눈이 휘둥그래져서 다른 친구를 바라본다.",
+  "core_message": "What does \"짱이다\" mean in Korean? Learn when Koreans use this powerful expression of praise,",
+  "situation": "거리 · 그 표현이 나온 순간",
   "place": "거리",
-  "empathy": "맛있는 길거리 음식을 먹다 보면 나도 모르게 감탄사가 튀어나오는 순간.",
-  "emotion_primary": "감탄",
-  "emotion_secondary": "기쁨",
+  "empathy": "아, 진짜 저 상황에선 저 말이 나오지.",
+  "emotion_primary": "감동",
+  "emotion_secondary": "",
   "characters": [
     {
       "role": "주인공",
-      "desc": "20대 초반 여성, 캐주얼한 후드티와 모자를 쓰고 있다.",
-      "action": "떡볶이를 한 입 먹자마자 눈이 휘둥그레지며 옆의 친구를 바라본다.",
-      "face": "매우 놀라고 감탄한 표정, 입은 살짝 벌어져 있다."
-    },
-    {
-      "role": "상대",
-      "desc": "20대 초반 여성, 캐주얼한 복장.",
-      "action": "주인공의 반응을 보고 즐겁게 웃으며 자신의 떡볶이 컵을 들고 있다.",
-      "face": "부드럽게 웃는 표정, 주인공의 감탄에 공감하는 듯하다."
+      "desc": "20대 한국인",
+      "action": "반응 중",
+      "face": "감동"
     }
   ],
-  "camera": "closeup",
-  "visual_hook": "주인공이 떡볶이를 먹고 놀란 듯 눈을 크게 뜬 채 옆 친구를 쳐다보는 순간.",
+  "camera": "medium",
+  "visual_hook": "거리 · 그 표현이 나온 순간",
   "bubbles": [
-    "야, 이 떡볶이 진짜 짱이다!"
+    "짱이다…"
   ],
   "highlight_expression": "짱이다",
-  "footer": "친한 친구와 맛있는 음식을 함께 나누며, 진심으로 감탄할 때 “짱이다!”는 최고의 표현이 됩니다.",
-  "color_mood": "bright",
+  "footer": "한국에서는 이런 순간에 「짱이다」라고 말하기도 해요.",
+  "color_mood": "warm",
   "use_foreigner": false,
   "foreign_bubble": "",
-  "final_image_prompt": "4:5 vertical Instagram webtoon, A young Korean woman, early 20s, with a casual hoodie and a cap, wide-eyed and joyful, having just taken a bite of tteokbokki. She is looking at her friend with an incredibly excited and astonished expression. Her friend, also early 20s, dressed casually, is smiling, holding her own paper cup of tteokbokki. They are standing in front of a bustling Korean street food stall during twilight. The background shows hints of a lively market. Bright, warm lighting. Style: Hand-drawn webtoon, clear lines, vibrant colors, highly expressive faces. Text bubble: \"야, 이 떡볶이 진짜 짱이다!\" (Hey, this tteokbokki is really '짱이다'!) Korean text on the food stall sign.",
-  "negative_prompt": "photorealistic, 3D render, bad anatomy, deformed, ugly, disfigured, poorly drawn face, poorly drawn hands, missing limbs, extra limbs, fused fingers, too many fingers, watermark, signature, text, multiple instances, blurry, low quality, grayscale, monochrome, morbid, aggressive, dull, boring, flat, simple background, unrealistic, out of focus, duplicate, error"
+  "final_image_prompt": "4:5 vertical Instagram Korean webtoon illustration, clean line art, simple background, person watching a departing bus on a familiar street, soft emotion, expressive face matching emotion '감동', speech bubble with exact Korean text \"짱이다…\", highlight expression \"짱이다\", warm approachable editorial style, high readability, no photorealism, minimal text",
+  "negative_prompt": "photorealistic, 3D render, cinematic realism, overly detailed background, crowded composition, too many characters, bad anatomy, excessive text, random Korean letters, garbled Korean, watermark, logo, stiff pose"
 }
