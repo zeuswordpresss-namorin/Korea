@@ -1691,45 +1691,67 @@ def _fallback_master_plan(article: Dict[str, Any]) -> Dict[str, Any]:
     meta = (article.get("meta_description") or "").strip()
     body = _strip_html_for_instatoon(article.get("html_body") or "", 600)
     seed = int(hashlib.md5(f"{expr}|{meta}|{body[:60]}".encode()).hexdigest(), 16)
+    # (pattern, emotion, place, bubble, mood, english_scene_NO_TEXT, camera)
     rules = [
-        (r"미쳤|대박|레전드|최고", "감탄", "식당", f"와… {expr}.", "bright",
-         "close-up of a young Korean person tasting amazing food, eyes wide with delight"),
-        (r"눈치|망설|조심", "당황", "직장", f"…{expr} 보이네.", "cool",
-         "office meeting, person hesitating with hand half-raised, awkward smile"),
-        (r"괜찮", "체념", "카페", f"{expr}.", "soft",
-         "cafe table, person saying they are fine while looking tired"),
-        (r"정(이|이 )들|그리", "감동", "거리", f"{expr}…", "warm",
-         "person watching a departing bus on a familiar street, soft emotion"),
-        (r"답답|억울|화", "황당함", "메신저", f"아, {expr}.", "dry",
-         "person staring at phone messages, frustrated expression"),
-        (r"애매", "당황", "카페", f"음… {expr}.", "cool",
-         "person between two menu choices, unsure expression"),
+        (r"세배|명절|설날|추석|새해", "공감", "집", f"새해 복 많이 받으세요. 세배 올립니다.", "warm",
+         "Korean New Year family living room, young adult in hanbok or neat clothes bowing deeply to elders seated on floor cushions, low table with fruit, warm indoor light", "wide"),
+        (r"감사|고마", "공감", "카페", f"정말 감사해요.", "soft",
+         "Korean cafe, person receiving help from friend, both smiling, hands together in thanks", "medium"),
+        (r"미쳤|대박|레전드|최고", "감탄", "식당", f"와… {expr}!", "bright",
+         "Korean restaurant table full of delicious food, young person eyes wide with joy tasting a bite", "closeup"),
+        (r"눈치|망설|조심", "당황", "직장", f"지금은 말하기 좀…", "cool",
+         "Korean office meeting, person half-raising hand then freezing, colleagues looking, awkward smile", "medium"),
+        (r"괜찮", "체념", "카페", f"{expr}…", "soft",
+         "Korean cafe, person smiling weakly saying they are fine while eyes look tired, coffee cup", "closeup"),
+        (r"정(이|이 )?들|그리", "감동", "거리", f"{expr}…", "warm",
+         "Seoul street at dusk, person watching a departing bus, soft nostalgic expression", "wide"),
+        (r"답답|억울", "황당함", "메신저", f"아, {expr}.", "dry",
+         "person staring at smartphone chat, frustrated face, simple bedroom background", "closeup"),
+        (r"애매", "당황", "카페", f"음… {expr}해.", "cool",
+         "person between two menu boards in Korean cafe, unsure expression, hand on chin", "medium"),
+        (r"화나|짜증|열받", "분노", "메신저", f"진짜 {expr}.", "dry",
+         "person gripping phone tightly, angry expression, subway seat", "closeup"),
+        (r"설레|두근", "설렘", "거리", f"왜 이렇게 {expr}리지?", "warm",
+         "person checking phone with shy smile on Seoul street, soft pink evening light", "medium"),
+        (r"민망|창피|부끄", "민망함", "카페", f"아… {expr}해.", "cool",
+         "person covering face with hand in Korean cafe, ears red, friend laughing gently", "medium"),
     ]
-    emotion, place, bubble, mood, scene_en = "공감", "카페", expr, "soft", "everyday Korean cafe moment"
+    emotion, place, bubble, mood = "공감", "카페", expr, "soft"
+    scene_en = "everyday Korean moment with clear facial emotion, simple background"
+    camera = "medium"
     blob = f"{expr} {meta} {body}"
-    for pat, em, pl, bu, mo, sc in rules:
+    for pat, em, pl, bu, mo, sc, cam in rules:
         if re.search(pat, blob):
-            emotion, place, bubble, mood, scene_en = em, pl, bu, mo, sc
+            emotion, place, bubble, mood, scene_en, camera = em, pl, bu, mo, sc, cam
             break
-    sit = f"{place} · 그 표현이 나온 순간"
+    else:
+        # hash-based variety so same default doesn't always look identical
+        places = [
+            ("카페", "Korean cafe table, expressive face", "medium"),
+            ("거리", "Seoul sidewalk, person reacting", "medium"),
+            ("집", "Korean home interior, emotional moment", "medium"),
+            ("직장", "Korean office desk, reaction shot", "closeup"),
+            ("지하철", "Seoul subway, person reacting", "closeup"),
+        ]
+        place, scene_en, camera = places[seed % len(places)]
+    sit = f"{place}에서 「{expr}」가 나온 순간"
     final_prompt = (
-        f"4:5 vertical Instagram Korean webtoon illustration, clean line art, simple background, "
-        f"{scene_en}, expressive face matching emotion '{emotion}', "
-        f"speech bubble with exact Korean text \"{bubble}\", "
-        f"highlight expression \"{expr}\", warm approachable editorial style, high readability, "
-        f"no photorealism, minimal text"
+        f"Korean webtoon illustration, clean line art, soft flat colors, {camera} shot. "
+        f"{scene_en}. Emotion: {emotion}. "
+        f"Depict the real Korean life moment for the expression '{expr}'. "
+        f"No text, no letters, no Korean characters, no English words, no signs, no watermark."
     )
     return {
-        "core_message": meta[:90] if meta else f"「{expr}」가 나오는 실제 순간",
+        "core_message": meta[:90] if meta else f"「{expr}」가 실제로 쓰이는 순간",
         "situation": sit,
         "place": place,
         "empathy": "아, 진짜 저 상황에선 저 말이 나오지.",
         "emotion_primary": emotion,
         "emotion_secondary": "",
-        "characters": [{"role": "주인공", "desc": "20대 한국인", "action": "반응 중", "face": emotion}],
-        "camera": "medium",
+        "characters": [{"role": "주인공", "desc": "한국인 청년", "action": "그 순간의 행동", "face": emotion}],
+        "camera": camera,
         "visual_hook": sit,
-        "bubbles": [bubble],
+        "bubbles": [bubble if bubble != expr else f"{expr}."],
         "highlight_expression": expr,
         "footer": f"한국에서는 이런 순간에 「{expr}」라고 말하기도 해요.",
         "color_mood": mood,
@@ -1737,11 +1759,11 @@ def _fallback_master_plan(article: Dict[str, Any]) -> Dict[str, Any]:
         "foreign_bubble": "",
         "final_image_prompt": final_prompt,
         "negative_prompt": (
-            "photorealistic, 3D render, cinematic realism, overly detailed background, "
-            "crowded composition, too many characters, bad anatomy, excessive text, "
-            "random Korean letters, garbled Korean, watermark, logo, stiff pose"
+            "photorealistic, 3D render, text, letters, words, Korean characters, English words, "
+            "signage, speech bubble with text, watermark, logo, crowded, bad anatomy, stiff pose"
         ),
     }
+
 
 
 def plan_instatoon_from_blog(article: Dict[str, Any]) -> Dict[str, Any]:
@@ -2270,48 +2292,66 @@ def _render_plan_storyboard(plan: Dict[str, Any], blogger_url: str = "") -> Imag
 
 
 def _build_scene_only_prompt(plan: Dict[str, Any]) -> str:
-    """AI 이미지용: 장면·감정만 (한글/영문 글자 생성 금지)."""
+    """AI용 장면 프롬프트 — 글자 절대 금지, 표현의 실제 상황만."""
     expr = plan.get("highlight_expression") or ""
-    place = str(plan.get("place") or "everyday Korea")
+    place = str(plan.get("place") or "")
     situation = plan.get("situation") or plan.get("visual_hook") or ""
     emotion = plan.get("emotion_primary") or "neutral"
     camera = plan.get("camera") or "medium"
+    # final_image_prompt가 장면 설명이면 우선 사용하되 글자 금지 재강조
+    base = (plan.get("final_image_prompt") or "").strip()
+    if len(base) > 40:
+        return (
+            base
+            + " STRICT: no text, no letters, no Korean, no English, no speech bubbles with writing, "
+            + "no signs, blank areas for later text overlay only."
+        )
+    place_en = {
+        "카페": "Korean cafe interior",
+        "식당": "Korean restaurant with food",
+        "직장": "Korean office meeting",
+        "회사": "Korean office",
+        "집": "Korean family home living room",
+        "거리": "Seoul street",
+        "지하철": "Seoul subway",
+        "메신저": "looking at smartphone messages",
+        "쇼핑": "Korean convenience store",
+        "여행": "travel viewpoint Korea",
+        "학교": "Korean school hallway",
+        "편의점": "Korean convenience store",
+    }.get(place, "Korean everyday setting")
     chars = plan.get("characters") or []
     if chars and isinstance(chars[0], dict):
         c0 = chars[0]
-        char_desc = f"{c0.get('desc') or 'young Korean person'}, face showing {c0.get('face') or emotion}, action: {c0.get('action') or 'reacting'}"
+        char_desc = f"{c0.get('desc') or 'young Korean'}, face: {c0.get('face') or emotion}, doing: {c0.get('action') or 'reacting'}"
     else:
-        char_desc = f"young Korean person with clear facial expression of {emotion}"
-    place_en = {
-        "카페": "Korean cafe interior with table",
-        "식당": "Korean restaurant with food",
-        "직장": "Korean office meeting room",
-        "회사": "Korean office desk",
-        "집": "Korean home living room",
-        "거리": "Seoul street",
-        "지하철": "Seoul subway",
-        "메신저": "person looking at smartphone",
-        "쇼핑": "Korean convenience store",
-        "여행": "travel spot in Korea",
-        "학교": "school in Korea",
-        "편의점": "Korean convenience store",
-    }
-    place_line = place_en.get(place, f"Korean everyday setting related to {place}")
+        char_desc = f"young Korean, facial expression of {emotion}"
     return (
-        f"Single panel Korean webtoon manhwa illustration, clean line art, soft flat colors, {camera} shot. "
-        f"Scene: {situation}. Location: {place_line}. Character: {char_desc}. Emotion: {emotion}. "
-        f"Depict the real-life moment when Koreans would use the expression '{expr}'. "
-        f"Leave blank upper space for speech bubbles. "
-        f"IMPORTANT: no text, no letters, no Korean characters, no English words, no readable signs, "
-        f"no watermark, no logo, simple background, expressive face only, vertical portrait."
+        f"Korean manhwa webtoon single panel, clean line art, soft colors, {camera} shot. "
+        f"Location: {place_en}. Situation: {situation}. Character: {char_desc}. "
+        f"This is the exact moment Koreans would say '{expr}'. "
+        f"Strong readable face emotion. Simple background. "
+        f"STRICT RULES: no text anywhere, no letters, no Korean characters, no English, "
+        f"no speech bubbles, no signs, no watermark, no logo."
     )
 
 
+
 def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str = "") -> Image.Image:
-    """AI 장면 위에 정확한 한국어 말풍선·표현 칩·하단 문구 합성."""
+    """AI 장면 위에 (1) AI가 그린 깨진 글자 영역 가리기 (2) 정확한 한국어 말풍선 합성."""
     w, h = INSTATOON_SIZE
     img = base.convert("RGB").resize((w, h), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(img)
+    # AI 모델이 상단/옆에 넣는 깨진 한글·말풍선을 덮음 (장면 인물은 유지)
+    cover = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    cd = ImageDraw.Draw(cover)
+    # 상단 좌·우 말풍선 영역 + 우측 상단 칩 영역
+    cd.rounded_rectangle([20, 20, int(w * 0.62), int(h * 0.28)], radius=20, fill=(255, 255, 255, 245))
+    cd.rounded_rectangle([int(w * 0.45), 20, w - 20, int(h * 0.32)], radius=20, fill=(255, 255, 255, 230))
+    cd.rectangle([w - 220, 16, w - 12, 70], fill=(255, 255, 255, 250))
+    img = Image.alpha_composite(img.convert("RGBA"), cover).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
     ink = (25, 25, 28)
     accent = (230, 90, 60)
     expr = (plan.get("highlight_expression") or "").strip()
@@ -2319,14 +2359,16 @@ def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str
     if isinstance(bubbles, str):
         bubbles = [bubbles]
     bubbles = [str(b).strip() for b in bubbles if str(b).strip()]
-    if expr and not any(expr in b for b in bubbles):
-        bubbles = [f"{expr}"] + bubbles
-    if not bubbles and expr:
-        bubbles = [expr]
+    # 표현이 말풍선에 꼭 들어가게
+    if expr:
+        if not bubbles:
+            bubbles = [expr]
+        elif not any(expr in b for b in bubbles):
+            bubbles = [expr] + bubbles
     y = 36
     for i, b in enumerate(bubbles[:2]):
         font = _load_font(40 if i == 0 else 32)
-        lines = _wrap_by_pixel_width(draw, b, font, 720)[:3]
+        lines = _wrap_by_pixel_width(draw, b, font, 700)[:3]
         if not lines:
             continue
         pad = 16
@@ -2334,22 +2376,21 @@ def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str
         heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
         bw = max(widths) + pad * 2
         bh = sum(heights) + 8 * max(len(lines) - 1, 0) + pad * 2
-        x = 48 if i == 0 else 80
+        x = 40 if i == 0 else 72
         draw.rounded_rectangle([x, y, x + bw, y + bh], radius=22, fill=(255, 255, 255), outline=ink, width=3)
-        # tail
-        draw.polygon([(x + 36, y + bh - 1), (x + 22, y + bh + 18), (x + 58, y + bh - 1)], fill=(255, 255, 255), outline=ink)
+        draw.polygon([(x + 40, y + bh - 1), (x + 24, y + bh + 16), (x + 60, y + bh - 1)], fill=(255, 255, 255), outline=ink)
         cy = y + pad
         for j, ln in enumerate(lines):
             draw.text((x + pad, cy), ln, font=font, fill=ink)
             cy += heights[j] + 8
-        y += bh + 28
+        y += bh + 26
     if expr:
         tag = f"「{expr}」"
         tf = _load_font(24)
         tb = draw.textbbox((0, 0), tag, font=tf)
         tw, th = tb[2] - tb[0], tb[3] - tb[1]
-        tx, ty = w - tw - 40, 28
-        draw.rounded_rectangle([tx - 12, ty - 6, tx + tw + 12, ty + th + 6], radius=10, fill=(255, 255, 255), outline=accent, width=2)
+        tx, ty = w - tw - 36, 24
+        draw.rounded_rectangle([tx - 10, ty - 6, tx + tw + 10, ty + th + 6], radius=10, fill=(255, 255, 255), outline=accent, width=2)
         draw.text((tx, ty), tag, font=tf, fill=accent)
     foot = (plan.get("footer") or "").strip()
     if foot:
@@ -2371,6 +2412,7 @@ def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str
         ub = draw.textbbox((0, 0), u, font=uf)
         draw.text(((w - (ub[2] - ub[0])) / 2, h - 24), u, font=uf, fill=(255, 255, 255))
     return img
+
 
 
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
