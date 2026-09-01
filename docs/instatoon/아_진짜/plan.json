@@ -1,29 +1,28 @@
 {
-  "core_message": "아 진짜는 상황에 따라 짜증, 놀람, 체념 등 다양한 감정을 표현하는 한국인의 보편적인 감탄사입니다.",
-  "situation": "추운 날씨에 늦게 오는 버스를 기다리며 짜증 내는 순간.",
-  "place": "거리",
-  "empathy": "추운 날씨에 지각하는 버스를 기다려 본 사람이라면 누구나 공감할 만한 답답함.",
-  "emotion_primary": "짜증",
+  "core_message": "What does \"아 진짜\" mean in Korean? Learn its real meanings, why it's hard to translate direc",
+  "situation": "카페에서 「아 진짜」가 나온 순간",
+  "place": "카페",
+  "empathy": "아, 진짜 저 상황에선 저 말이 나오지.",
+  "emotion_primary": "공감",
   "emotion_secondary": "",
   "characters": [
     {
       "role": "주인공",
-      "desc": "20대 여성, 겨울 코트 착용",
-      "action": "한 손은 주머니에 넣고 다른 손으로 스마트폰을 보며 버스 정류장에서 서서 기다린다. 몸을 웅크린 자세.",
-      "face": "추위와 버스를 기다리는 짜증과 지루함이 섞인 표정. 입술은 살짝 삐죽거리고 미간은 찌푸린 상태."
+      "desc": "한국인 청년",
+      "action": "그 순간의 행동",
+      "face": "공감"
     }
   ],
   "camera": "medium",
-  "visual_hook": "주인공이 짜증 섞인 표정으로 스마트폰을 보며 버스를 기다리는 모습.",
+  "visual_hook": "카페에서 「아 진짜」가 나온 순간",
   "bubbles": [
-    "아 진짜...",
-    "버스 왜 이렇게 안 와?"
+    "아 진짜."
   ],
   "highlight_expression": "아 진짜",
-  "footer": "날씨와 상관없이 대중교통 지연은 한국인에게 흔한 짜증 유발 상황이죠.",
-  "color_mood": "cool",
+  "footer": "한국에서는 이런 순간에 「아 진짜」라고 말하기도 해요.",
+  "color_mood": "soft",
   "use_foreigner": false,
   "foreign_bubble": "",
-  "final_image_prompt": "Modern Korean Instagram webtoon style, clean line art, expressive face, simple background. A young Korean woman in her 20s, wearing a thick winter coat, stands at a bus stop on a cold, grey day. She is slightly hunched over, with one hand in her pocket and the other holding her smartphone, looking down the empty street with a visibly annoyed and frustrated expression. Her lips are slightly pouting, and her eyebrows are furrowed in irritation. The scene captures the feeling of waiting for a significantly delayed bus in cold weather, conveying the sentiment of 'Ah jinja' as annoyance. No text, no letters, no Korean or English writing in the image.",
-  "negative_prompt": "photorealistic, 3D render, cinematic realism, text, letters, words, Korean characters, English words, signage, watermark, logo, crowded composition, bad anatomy, emotionless, stiff pose, visual clutter"
+  "final_image_prompt": "Korean webtoon illustration, clean line art, soft flat colors, medium shot. Korean cafe table, expressive face. Emotion: 공감. Depict the real Korean life moment for the expression '아 진짜'. No text, no letters, no Korean characters, no English words, no signs, no watermark.",
+  "negative_prompt": "photorealistic, 3D render, text, letters, words, Korean characters, English words, signage, speech bubble with text, watermark, logo, crowded, bad anatomy, stiff pose"
 }
