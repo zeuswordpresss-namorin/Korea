@@ -1758,94 +1758,125 @@ _MOOD_PALETTE = {
 
 
 
+
 def _try_cloudflare_flux_bytes(prompt: str) -> Optional[bytes]:
     """완전 무료 고성능: Cloudflare Workers AI FLUX.1-schnell
 
-    매일 10,000 Neurons 무료 (≈ 100장+/일, UTC 리셋)
-    Secrets: CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN
+    POST /client/v4/accounts/{id}/ai/run/@cf/black-forest-labs/flux-1-schnell
+    body: { "prompt": "...", "steps": 4 }
+    응답: JSON { result: { image: base64 } } 또는 image/* 바이너리
     """
     account = (CLOUDFLARE_ACCOUNT_ID or os.environ.get("CLOUDFLARE_ACCOUNT_ID", "") or "").strip()
     token = (CLOUDFLARE_API_TOKEN or os.environ.get("CLOUDFLARE_API_TOKEN", "") or "").strip()
     if not account or not token:
         logger.warning(
             "[인스타툰] Cloudflare Secrets 없음 — FLUX 건너뜀 "
-            f"(ACCOUNT_ID={'Y' if account else 'N'}, API_TOKEN={'Y' if token else 'N'}). "
-            "workflow.yml env에 CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 을 "
-            "${{ secrets.NAME }} 으로 연결했는지 확인하세요."
+            f"(ACCOUNT_ID={'Y' if account else 'N'}, API_TOKEN={'Y' if token else 'N'})"
         )
         return None
 
-    full = (prompt or "").strip()[:2000]
+    full = (prompt or "").strip()[:1800]
     if not full:
         return None
     full += (
-        " Korean Instagram webtoon illustration, clean line art, expressive face, "
-        "simple background, vertical composition, speech bubble with accurate Korean text when specified, "
-        "no photorealism, no watermark"
+        ". Korean Instagram webtoon illustration style, clean simple line art, "
+        "expressive character face, minimal background, vertical portrait composition, "
+        "cute manhwa look, no photorealism, no watermark, no logo"
     )
 
+    import base64 as b64mod
+
+    # 공식 모델 ID
     models = [
         "@cf/black-forest-labs/flux-1-schnell",
-        "black-forest-labs/flux-1-schnell",
     ]
-    # 4:5에 가까운 해상도 (타일 단위 과금 완화: 768x1024)
-    sizes = [(768, 1024), (512, 768), (1024, 1024)]
+    # 페이로드 변형: steps 공식 파라미터 (num_steps 아님). width/height는 지원 시만.
+    payloads = [
+        {"prompt": full, "steps": 4},
+        {"prompt": full, "steps": 6},
+        {"prompt": full},
+        {"prompt": full, "steps": 4, "width": 768, "height": 1024},
+    ]
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
     last_err = ""
+
+    def _decode_response(r: "requests.Response") -> Optional[bytes]:
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        if "image" in ctype and r.content and len(r.content) > 1500:
+            return r.content
+        # JSON
+        try:
+            data = r.json()
+        except Exception:
+            return None
+        # 에러 메시지
+        if isinstance(data, dict) and data.get("success") is False:
+            errs = data.get("errors") or data.get("messages") or data
+            raise RuntimeError(str(errs)[:300])
+        candidates = []
+        if isinstance(data, dict):
+            candidates.append(data.get("image"))
+            res = data.get("result")
+            if isinstance(res, dict):
+                candidates.append(res.get("image"))
+                candidates.append(res.get("b64"))
+            elif isinstance(res, str):
+                candidates.append(res)
+            candidates.append(data.get("result"))
+        for c in candidates:
+            if not c or not isinstance(c, str):
+                continue
+            s = c.strip()
+            if s.startswith("data:image"):
+                s = s.split(",", 1)[-1]
+            try:
+                raw = b64mod.b64decode(s)
+                if len(raw) > 1500:
+                    return raw
+            except Exception:
+                continue
+        return None
+
     for model in models:
         url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
-        for w, h in sizes:
-            body = {
-                "prompt": full,
-                "width": w,
-                "height": h,
-                "num_steps": 4,
-            }
+        for i, body in enumerate(payloads):
             try:
-                logger.info(f"[인스타툰] Cloudflare FLUX 요청: {model} {w}x{h}")
+                logger.info(f"[인스타툰] Cloudflare FLUX 요청: {model} fmt={i} keys={list(body.keys())}")
                 r = requests.post(url, headers=headers, json=body, timeout=120)
                 if r.status_code in (401, 403):
-                    last_err = f"인증 실패 HTTP {r.status_code}: {r.text[:200]}"
+                    last_err = f"인증 실패 HTTP {r.status_code}: {r.text[:250]}"
                     logger.warning(f"[인스타툰] {last_err}")
+                    # 토큰 권한 문제면 다른 fmt도 동일
                     return None
                 if r.status_code in (429, 503):
-                    last_err = f"HTTP {r.status_code}"
+                    last_err = f"HTTP {r.status_code}: {r.text[:150]}"
                     logger.warning(f"[인스타툰] Cloudflare {last_err}")
-                    time.sleep(8)
+                    time.sleep(10)
                     continue
                 if not r.ok:
-                    last_err = f"HTTP {r.status_code}: {r.text[:220]}"
+                    last_err = f"HTTP {r.status_code}: {r.text[:280]}"
                     logger.warning(f"[인스타툰] Cloudflare {last_err}")
                     continue
-                ctype = r.headers.get("Content-Type", "")
-                if "image" in ctype and r.content and len(r.content) > 2000:
-                    logger.info(f"[인스타툰] Cloudflare FLUX 성공 ({len(r.content)} bytes)")
-                    return r.content
-                # JSON base64 응답
                 try:
-                    data = r.json()
-                    img_b64 = None
-                    if isinstance(data, dict):
-                        img_b64 = data.get("image") or data.get("result", {}).get("image")
-                        if isinstance(data.get("result"), str):
-                            img_b64 = data["result"]
-                    if img_b64:
-                        import base64 as b64mod
-                        raw = b64mod.b64decode(img_b64)
-                        if len(raw) > 2000:
-                            logger.info(f"[인스타툰] Cloudflare FLUX 성공(b64) ({len(raw)} bytes)")
-                            return raw
-                except Exception:
-                    pass
-                last_err = f"이미지 바디 없음 ctype={ctype}"
+                    raw = _decode_response(r)
+                except RuntimeError as e:
+                    last_err = str(e)
+                    logger.warning(f"[인스타툰] Cloudflare API 에러: {last_err}")
+                    continue
+                if raw:
+                    logger.info(f"[인스타툰] Cloudflare FLUX 성공 ({len(raw)} bytes)")
+                    return raw
+                last_err = f"응답 파싱 실패 ctype={r.headers.get('Content-Type')} body={r.text[:160]}"
+                logger.warning(f"[인스타툰] {last_err}")
             except Exception as e:
                 last_err = str(e)
                 logger.warning(f"[인스타툰] Cloudflare 예외: {e}")
     logger.warning(f"[인스타툰] Cloudflare FLUX 실패 — {last_err}")
     return None
+
 
 
 def _try_hf_flux_bytes(prompt: str) -> Optional[bytes]:
