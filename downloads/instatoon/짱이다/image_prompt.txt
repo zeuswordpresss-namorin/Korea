@@ -1,0 +1,4 @@
+4:5 vertical Instagram Korean webtoon illustration, clean line art, simple background, person watching a departing bus on a familiar street, soft emotion, expressive face matching emotion '감동', speech bubble with exact Korean text "짱이다…", highlight expression "짱이다", warm approachable editorial style, high readability, no photorealism, minimal text
+
+--- NEGATIVE ---
+photorealistic, 3D render, cinematic realism, overly detailed background, crowded composition, too many characters, bad anatomy, excessive text, random Korean letters, garbled Korean, watermark, logo, stiff pose
