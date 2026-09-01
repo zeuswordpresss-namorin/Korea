@@ -1764,10 +1764,15 @@ def _try_cloudflare_flux_bytes(prompt: str) -> Optional[bytes]:
     매일 10,000 Neurons 무료 (≈ 100장+/일, UTC 리셋)
     Secrets: CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN
     """
-    account = (CLOUDFLARE_ACCOUNT_ID or "").strip()
-    token = (CLOUDFLARE_API_TOKEN or "").strip()
+    account = (CLOUDFLARE_ACCOUNT_ID or os.environ.get("CLOUDFLARE_ACCOUNT_ID", "") or "").strip()
+    token = (CLOUDFLARE_API_TOKEN or os.environ.get("CLOUDFLARE_API_TOKEN", "") or "").strip()
     if not account or not token:
-        logger.info("[인스타툰] Cloudflare Secrets 없음 — FLUX 건너뜀")
+        logger.warning(
+            "[인스타툰] Cloudflare Secrets 없음 — FLUX 건너뜀 "
+            f"(ACCOUNT_ID={'Y' if account else 'N'}, API_TOKEN={'Y' if token else 'N'}). "
+            "workflow.yml env에 CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 을 "
+            "${{ secrets.NAME }} 으로 연결했는지 확인하세요."
+        )
         return None
 
     full = (prompt or "").strip()[:2000]
