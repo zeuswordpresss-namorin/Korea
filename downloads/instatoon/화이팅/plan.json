@@ -1,34 +1,28 @@
 {
-  "core_message": "힘든 하루를 보낸 친구에게 '화이팅'은 내일을 기대하게 만드는 따뜻한 응원의 메시지입니다.",
-  "situation": "퇴근길, 지쳐 보이는 동료에게 건네는 격려",
-  "place": "직장",
-  "empathy": "피곤한 하루 끝, 동료의 진심 어린 응원 한마디에 힘이 나는 순간은 모두가 공감할 거예요.",
-  "emotion_primary": "공감",
-  "emotion_secondary": "격려",
+  "core_message": "What does \"화이팅\" mean in Korean? Learn when people actually say this popular cheer, why it'",
+  "situation": "메신저 · 그 표현이 나온 순간",
+  "place": "메신저",
+  "empathy": "아, 진짜 저 상황에선 저 말이 나오지.",
+  "emotion_primary": "황당함",
+  "emotion_secondary": "",
   "characters": [
     {
       "role": "주인공",
-      "desc": "30대 여성 직장인, 밝은 블레이저, 따뜻한 미소",
-      "action": "지친 동료의 어깨를 부드럽게 두드리며 활짝 웃음",
-      "face": "따뜻하고 격려하는 미소"
-    },
-    {
-      "role": "상대",
-      "desc": "30대 여성 직장인, 단정한 블라우스, 흐트러진 머리",
-      "action": "하루 종일 일에 지쳐 어깨가 축 처진 채 서 있음",
-      "face": "피로에 지친 표정, 살짝 놀랐다가 이내 안도하는 표정"
+      "desc": "20대 한국인",
+      "action": "반응 중",
+      "face": "황당함"
     }
   ],
   "camera": "medium",
-  "visual_hook": "지친 동료의 어깨를 토닥이며 미소 짓는 주인공의 표정과, 살짝 놀랐다가 풀리는 동료의 표정",
+  "visual_hook": "메신저 · 그 표현이 나온 순간",
   "bubbles": [
-    "오늘도 수고했어! 내일도 화이팅이야!"
+    "아, 화이팅."
   ],
   "highlight_expression": "화이팅",
-  "footer": "피곤한 하루의 끝, '화이팅'은 내일을 기대하게 만드는 따뜻한 응원입니다.",
-  "color_mood": "warm",
+  "footer": "한국에서는 이런 순간에 「화이팅」라고 말하기도 해요.",
+  "color_mood": "dry",
   "use_foreigner": false,
   "foreign_bubble": "",
-  "final_image_prompt": "4:5 vertical Instagram webtoon, medium shot, an office worker (woman, 30s, neat blouse, slightly disheveled hair, tired eyes) is standing by the office exit, her shoulders slumped, looking exhausted after a long day. Another colleague (woman, 30s, bright blazer, warm smile) gently taps her shoulder. The colleague's face is full of warmth and encouragement. The tired worker looks up, her expression a mix of surprise and a hint of relief. Subtle warm lighting. speech bubble: \"오늘도 수고했어! 내일도 '화이팅'이야!\"",
-  "negative_prompt": "photorealistic, 3D render, bad anatomy, deformed, ugly, disfigured, poor lighting, low quality, cartoon, anime, text, signature, watermark, multiple people in background, blurry, extra limbs, bad hands, missing fingers, extra fingers, malformed hands, extra hands, missing limbs, extra limbs, distorted face, duplicate, blurry, out of focus, monochrome, grayscale, low contrast, oversaturated"
+  "final_image_prompt": "4:5 vertical Instagram Korean webtoon illustration, clean line art, simple background, person staring at phone messages, frustrated expression, expressive face matching emotion '황당함', speech bubble with exact Korean text \"아, 화이팅.\", highlight expression \"화이팅\", warm approachable editorial style, high readability, no photorealism, minimal text",
+  "negative_prompt": "photorealistic, 3D render, cinematic realism, overly detailed background, crowded composition, too many characters, bad anatomy, excessive text, random Korean letters, garbled Korean, watermark, logo, stiff pose"
 }
