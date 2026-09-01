@@ -80,18 +80,26 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          # --- [NEW] 워드프레스 동시 자동 발행 ---
-          # WORDPRESS_CLIENT_ID/SECRET이 있으면 워드프레스닷컴(*.wordpress.com) OAuth2 방식,
-          # 없으면 자체호스팅 워드프레스용 Basic Auth 방식으로 자동 분기합니다.
-          # WORDPRESS_URL: Variables 또는 Secrets 어느 쪽에 등록해도 인식되도록 폴백 처리
-          # (Secrets/Variables 탭 혼동으로 인한 "미설정" 오인식 방지)
+          # --- 워드프레스 동시 자동 발행 ---
           WORDPRESS_URL: ${{ vars.WORDPRESS_URL || secrets.WORDPRESS_URL }}
           WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
           WORDPRESS_CLIENT_ID: ${{ secrets.WORDPRESS_CLIENT_ID }}
           WORDPRESS_CLIENT_SECRET: ${{ secrets.WORDPRESS_CLIENT_SECRET }}
-          # --- [NEW] 썸네일용 무료 스톡 이미지(Pexels, 출처 표기) ---
+          # --- 썸네일용 무료 스톡 이미지(Pexels) ---
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          # --- [NEW] Cloudflare Workers AI FLUX 인스타툰 (무료 일일 Neurons) ---
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # --- [선택] Hugging Face FLUX 보조 ---
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # --- [선택] OpenAI 이미지 ---
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # --- SNS (있으면 자동 공유) ---
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "refresh" ]; then
             python generate_post.py refresh
@@ -105,6 +113,6 @@ jobs:
         run: |
           git config user.name "auto-blog-bot"
           git config user.email "auto-blog-bot@users.noreply.github.com"
-          git add docs keywords_queue.json
+          git add docs keywords_queue.json downloads || true
           git diff --cached --quiet && echo "변경사항 없음, 커밋 생략" || git commit -m "자동 파이프라인 실행: $(date +'%Y-%m-%d %H:%M')"
           git push
