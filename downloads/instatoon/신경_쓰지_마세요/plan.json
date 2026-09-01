@@ -1,28 +1,35 @@
 {
-  "core_message": "What does \"신경 쓰지 마세요\" mean in Korean? Learn when people say it, why it's more than \"don't ",
-  "situation": "카페 · 그 표현이 나온 순간",
+  "core_message": "신경 쓰지 마세요'는 상대방의 부담이나 죄책감을 덜어주려는 배려의 표현입니다.",
+  "situation": "편안한 카페에서 친구가 약속 시간에 늦어 미안해하는 순간",
   "place": "카페",
-  "empathy": "아, 진짜 저 상황에선 저 말이 나오지.",
-  "emotion_primary": "체념",
-  "emotion_secondary": "",
+  "empathy": "친구가 늦었을 때 '괜찮아, 신경 쓰지 마'라고 말하며 안심시키는 순간은 많은 한국인에게 익숙하고 따뜻한 공감대입니다.",
+  "emotion_primary": "공감",
+  "emotion_secondary": "안심, 배려",
   "characters": [
     {
+      "role": "상대",
+      "desc": "약속에 늦어 미안해하는 친구, 밝은 캐주얼 복장",
+      "action": "작게 고개를 숙이며 어깨를 축 늘어뜨린 채 미안한 표정으로 앉아있음",
+      "face": "미안함, 죄책감"
+    },
+    {
       "role": "주인공",
-      "desc": "20대 한국인",
-      "action": "반응 중",
-      "face": "체념"
+      "desc": "기다렸던 친구, 편안한 니트 복장",
+      "action": "따뜻하게 웃으며 괜찮다는 듯 손을 살짝 흔들고 있음",
+      "face": "온화함, 안심시키는 미소"
     }
   ],
   "camera": "medium",
-  "visual_hook": "카페 · 그 표현이 나온 순간",
+  "visual_hook": "약속에 늦은 친구의 미안해하는 표정과, 괜찮다고 말하는 친구의 따뜻한 미소",
   "bubbles": [
-    "신경 쓰지 마세요."
+    "아이고, 미안! 내가 너무 늦었지?",
+    "괜찮아, 신경 쓰지 마. 나도 방금 왔어."
   ],
   "highlight_expression": "신경 쓰지 마세요",
-  "footer": "한국에서는 이런 순간에 「신경 쓰지 마세요」라고 말하기도 해요.",
-  "color_mood": "soft",
+  "footer": "상대방의 마음의 짐을 덜어주려는 따뜻한 배려가 담긴 '신경 쓰지 마세요'!",
+  "color_mood": "warm",
   "use_foreigner": false,
   "foreign_bubble": "",
-  "final_image_prompt": "4:5 vertical Instagram Korean webtoon illustration, clean line art, simple background, cafe table, person saying they are fine while looking tired, expressive face matching emotion '체념', speech bubble with exact Korean text \"신경 쓰지 마세요.\", highlight expression \"신경 쓰지 마세요\", warm approachable editorial style, high readability, no photorealism, minimal text",
-  "negative_prompt": "photorealistic, 3D render, cinematic realism, overly detailed background, crowded composition, too many characters, bad anatomy, excessive text, random Korean letters, garbled Korean, watermark, logo, stiff pose"
+  "final_image_prompt": "4:5 vertical Instagram webtoon, a cozy cafe interior, two Korean female friends. One friend (late) with an apologetic expression, slightly bowing her head, wearing a stylish casual outfit. The other friend (waiting) with a warm, reassuring smile, gently waving her hand in a comforting gesture, wearing a comfortable knit. A half-eaten slice of cake and a coffee cup on the table between them. Soft, warm lighting. The late friend says, \"아이고, 미안! 내가 너무 늦었지?\", and the waiting friend responds, \"괜찮아, '신경 쓰지 마'. 나도 방금 왔어.\"",
+  "negative_prompt": "photorealistic, 3D render, ugly, deformed, noisy, blurry, low contrast, out of focus, duplicate, error, extra limbs, poorly drawn hands, poorly drawn feet, extra fingers, too many fingers, long neck, too many eyes, bad anatomy, bad proportions, disfigured, malformed, missing limbs, missing a body, text, watermark, signature, multiple characters in one person, poorly drawn face, mutated, cross-eyed, symmetrical, black and white, monochrome, grayscale, dark, scary, horror, gory"
 }
