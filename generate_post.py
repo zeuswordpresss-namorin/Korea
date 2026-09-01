@@ -1572,35 +1572,95 @@ def _strip_html_for_instatoon(html_body: str, limit: int = 2800) -> str:
 
 
 # ─── MASTER PROMPT: 표현+본문 → 분석 → 콘티 → 이미지 프롬프트 ───
-INSTATOON_MASTER_SYSTEM = """당신은 한국어와 한국 문화를 전문적으로 다루는 25년 경력의 인스타툰 작가이자 스토리텔러, 캐릭터 연출가, 이미지 생성 프롬프트 디렉터다.
+INSTATOON_MASTER_SYSTEM = """# MASTER PROMPT
+# Korean Expression → One-Cut Instagram Webtoon Generator
 
-목표는 한국어 표현을 '설명하는 이미지'가 아니라, 그 표현이 실제 생활에서 튀어나오는 가장 공감되는 순간을 하나의 인스타툰 장면으로 만드는 것이다.
+당신은 한국어와 한국 문화를 전문적으로 다루는
+25년 경력의 인스타툰 작가이자 스토리텔러,
+캐릭터 연출가, 이미지 생성 프롬프트 디렉터다.
 
-[규칙]
-- 본문에 없는 사실을 임의로 추가하지 말 것
-- '한국인은 모두…' 식 일반화·과장 금지
-- 한 컷 = 하나의 순간 (여러 장면 억지 합치기 금지)
-- 외국인 캐릭터는 직역 오해·의미 차이가 콘텐츠 핵심일 때만 (항상 넣지 말 것)
-- 대사는 구어체, 1~3개, 표현 철자 유지
-- 하단 문화 메시지 1~2줄, 본문에 근거할 것
-- 표현마다 장소·행동·구도·포즈를 다르게 (동일 템플릿 반복 금지)
-- 첫 시선은 설명문이 아니라 사건·표정
+목표는 한국어 표현을 "설명하는 이미지"가 아니라
+그 표현이 실제 생활에서 튀어나오는 가장 공감되는 순간을
+하나의 인스타툰 장면으로 만드는 것이다.
 
-[분석 순서]
-1) 본문 분석 (표현/사전뜻/실제뜻/오해/상황/감정/문화/공감장면/핵심메시지)
-2) 핵심 메시지 1개만 선정
-3) 감정 엔진 (감탄·놀람·기쁨·감동·당황·황당·어이·분노·실망·걱정·체념·민망·부끄러움·설렘·귀여움·공감·복합)
-4) 장면 엔진 (음식·카페·쇼핑·여행·직장·학교·친구·가족·연애·SNS·메신저·대중교통·집·거리 등 중 하나)
-5) 공감 포인트
-6) 시각적 훅 (과장 표정·결정적 순간 등)
-7) 캐릭터 최소 인원 (기본 1, 필요시 2, 최대 3)
-8) 카메라 (closeup|medium|wide)
-9) 대사
-10) 하단 메시지
-11) 최종 이미지 생성 프롬프트 (영문+한글 표현 병기, 4:5 Instagram webtoon)
-12) negative prompt
+[USER INPUT]
+한국어 표현 + 블로그 본문만 주어진다.
 
-반드시 아래 JSON만 출력 (마크다운 코드펜스 금지):
+[1. CONTENT ANALYSIS]
+본문을 분석해 내부적으로 추출한다.
+A. 핵심 한국어 표현
+B. 사전적 의미
+C. 실제 한국인이 사용하는 의미
+D. 문자 그대로 번역했을 때 생길 수 있는 오해
+E. 실제 사용 상황
+F. 표현에 담긴 감정
+G. 한국 문화와 관련된 부분
+H. 외국인이 이해하기 어려운 부분
+I. 한국인이 공감할 수 있는 생활 장면
+J. 이 콘텐츠에서 가장 중요한 한 가지 메시지
+본문에 없는 사실은 임의로 추가하지 않는다.
+"한국인은 모두 이렇게 말한다" 같은 일반화 금지.
+
+[2. 핵심 메시지 1개]
+한 컷에 모든 내용을 넣지 말고 가장 강한 메시지 하나만.
+예: 직역하면 이상하지만 실제로는 자연스럽다 / 상황에 따라 감정이 달라진다 / 이런 상황에서 쓴다 / 직역 오해 / 누구나 공감할 순간
+
+[3. EMOTION ENGINE]
+①감탄 ②놀람 ③기쁨 ④감동 ⑤당황 ⑥황당함 ⑦어이없음 ⑧분노 ⑨실망 ⑩걱정 ⑪체념 ⑫민망함 ⑬부끄러움 ⑭설렘 ⑮귀여움 ⑯공감 ⑰복합
+필요하면 2개 조합.
+
+[4. SCENE ENGINE]
+표현마다 완전히 다른 실제 상황 1개만 선택.
+음식/카페/쇼핑/여행/직장/학교/친구/가족/연애/소개팅/SNS/메신저/전화/대중교통/편의점/식당/집/거리/회사회의/문화상황/일상관계
+예:
+미쳤다→엄청난 음식 감탄
+눈치 보다→여러 사람 앞에서 말할까 망설임
+대박→예상 못한 소식
+괜찮아→힘들지만 안심시키는 말
+애매하다→두 선택지 사이 고민
+정이 들다→익숙한 사람/장소와 이별
+답답하다→대화가 안 통하는 순간
+동일 템플릿 금지.
+
+[5. EMPATHY ENGINE]
+한국인이 자기 경험을 떠올릴 수 있는가?
+공감 포인트 1개. 약하면 더 일상적 상황으로 변경.
+
+[6. VISUAL HOOK]
+썸네일에서도 사건·표정이 먼저 보이게.
+과장 표정, 결정적 순간, 말과 상황의 불일치 등.
+긴 설명문·사전정의·가만히 서 있는 장면 금지.
+
+[7. STORY]
+상황 발생 → 감정 → 한국어 표현 → 의미 발견 (이미지는 한 순간)
+
+[8. CHARACTER]
+기본 주인공 1명, 필요시 +상대 1명, 최대 3명.
+캐릭터 디자인이 표현보다 앞서지 않게.
+
+[9. FOREIGNER RULE]
+항상 넣지 말 것.
+직역 오해·한영 의미 차이·문화 차이가 핵심일 때만.
+부정적으로 묘사하지 말 것.
+
+[10. CAMERA]
+감정→closeup / 행동→medium / 상황→wide / 오해→두 반응 동시 / 감동→공간 관계
+
+[11. COMPOSITION]
+Instagram 4:5 vertical. 시선: 사건→표정→표현→짧은 메시지. 여백 유지.
+
+[12. DIALOGUE]
+구어체만. 1~3 말풍선. 핵심 표현 철자 유지. 문어·교과서체 금지.
+
+[13. CULTURAL MESSAGE]
+하단 1~2줄. 본문에 없는 문화 사실 창작 금지.
+
+[14-17]
+시각 은유는 과하지 않게. Modern Korean Instagram webtoon, clean line art, expressive face, simple background.
+텍스트 최소. 포즈·배경·구도 반복 금지.
+
+[18. OUTPUT]
+반드시 아래 JSON만 출력 (마크다운 코드펜스·설명 문장 금지):
 {
   "core_message": "한 문장",
   "situation": "장소 + 시간 + 사건",
@@ -1608,19 +1668,22 @@ INSTATOON_MASTER_SYSTEM = """당신은 한국어와 한국 문화를 전문적�
   "empathy": "한국인 공감 한 줄",
   "emotion_primary": "감탄|놀람|기쁨|감동|당황|황당함|어이없음|분노|실망|걱정|체념|민망|부끄러움|설렘|귀여움|공감|복합",
   "emotion_secondary": "",
-  "characters": [{"role":"주인공|상대","desc":"외형","action":"행동","face":"표정"}],
+  "characters": [{"role":"주인공","desc":"외형","action":"행동","face":"표정"}],
   "camera": "closeup|medium|wide",
-  "visual_hook": "첫 시선이 갈 사건",
-  "bubbles": ["구어 대사1"],
-  "highlight_expression": "표현 원문",
+  "visual_hook": "첫 시선 사건",
+  "bubbles": ["구어 대사"],
+  "highlight_expression": "표현 원문 그대로",
   "footer": "하단 1~2줄",
   "color_mood": "bright|warm|cool|dry|soft",
   "use_foreigner": false,
   "foreign_bubble": "",
-  "final_image_prompt": "4:5 vertical Instagram webtoon, ... 완성 영문 프롬프트 (한글 표현은 따옴표로 유지)",
-  "negative_prompt": "photorealistic, 3D render, ..."
+  "final_image_prompt": "English scene prompt for illustration WITHOUT any text letters in the image; describe place, characters, faces, actions, camera; mention the expression only as meaning context",
+  "negative_prompt": "photorealistic, 3D render, cinematic realism, text, letters, words, Korean characters, English words, signage, watermark, logo, crowded composition, bad anatomy, emotionless, stiff pose, visual clutter"
 }
 """
+
+
+
 
 
 def _fallback_master_plan(article: Dict[str, Any]) -> Dict[str, Any]:
@@ -1727,6 +1790,11 @@ def plan_instatoon_from_blog(article: Dict[str, Any]) -> Dict[str, Any]:
             if v is not None and v != "":
                 plan[k] = v
         plan["highlight_expression"] = expr  # 철자 고정
+        # 이미지 AI에는 글자 없이 장면만 (오버레이에서 한국어 합성)
+        if plan.get("final_image_prompt") and "no text" not in plan["final_image_prompt"].lower():
+            plan["final_image_prompt"] = (plan["final_image_prompt"].rstrip(".") +
+                ". No text, no letters, no Korean or English writing in the image.")
+
         if isinstance(plan.get("bubbles"), str):
             plan["bubbles"] = [plan["bubbles"]]
         if not isinstance(plan.get("bubbles"), list) or not plan["bubbles"]:
@@ -2200,6 +2268,111 @@ def _render_plan_storyboard(plan: Dict[str, Any], blogger_url: str = "") -> Imag
 
 
 
+
+def _build_scene_only_prompt(plan: Dict[str, Any]) -> str:
+    """AI 이미지용: 장면·감정만 (한글/영문 글자 생성 금지)."""
+    expr = plan.get("highlight_expression") or ""
+    place = str(plan.get("place") or "everyday Korea")
+    situation = plan.get("situation") or plan.get("visual_hook") or ""
+    emotion = plan.get("emotion_primary") or "neutral"
+    camera = plan.get("camera") or "medium"
+    chars = plan.get("characters") or []
+    if chars and isinstance(chars[0], dict):
+        c0 = chars[0]
+        char_desc = f"{c0.get('desc') or 'young Korean person'}, face showing {c0.get('face') or emotion}, action: {c0.get('action') or 'reacting'}"
+    else:
+        char_desc = f"young Korean person with clear facial expression of {emotion}"
+    place_en = {
+        "카페": "Korean cafe interior with table",
+        "식당": "Korean restaurant with food",
+        "직장": "Korean office meeting room",
+        "회사": "Korean office desk",
+        "집": "Korean home living room",
+        "거리": "Seoul street",
+        "지하철": "Seoul subway",
+        "메신저": "person looking at smartphone",
+        "쇼핑": "Korean convenience store",
+        "여행": "travel spot in Korea",
+        "학교": "school in Korea",
+        "편의점": "Korean convenience store",
+    }
+    place_line = place_en.get(place, f"Korean everyday setting related to {place}")
+    return (
+        f"Single panel Korean webtoon manhwa illustration, clean line art, soft flat colors, {camera} shot. "
+        f"Scene: {situation}. Location: {place_line}. Character: {char_desc}. Emotion: {emotion}. "
+        f"Depict the real-life moment when Koreans would use the expression '{expr}'. "
+        f"Leave blank upper space for speech bubbles. "
+        f"IMPORTANT: no text, no letters, no Korean characters, no English words, no readable signs, "
+        f"no watermark, no logo, simple background, expressive face only, vertical portrait."
+    )
+
+
+def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str = "") -> Image.Image:
+    """AI 장면 위에 정확한 한국어 말풍선·표현 칩·하단 문구 합성."""
+    w, h = INSTATOON_SIZE
+    img = base.convert("RGB").resize((w, h), Image.Resampling.LANCZOS)
+    draw = ImageDraw.Draw(img)
+    ink = (25, 25, 28)
+    accent = (230, 90, 60)
+    expr = (plan.get("highlight_expression") or "").strip()
+    bubbles = plan.get("bubbles") or []
+    if isinstance(bubbles, str):
+        bubbles = [bubbles]
+    bubbles = [str(b).strip() for b in bubbles if str(b).strip()]
+    if expr and not any(expr in b for b in bubbles):
+        bubbles = [f"{expr}"] + bubbles
+    if not bubbles and expr:
+        bubbles = [expr]
+    y = 36
+    for i, b in enumerate(bubbles[:2]):
+        font = _load_font(40 if i == 0 else 32)
+        lines = _wrap_by_pixel_width(draw, b, font, 720)[:3]
+        if not lines:
+            continue
+        pad = 16
+        widths = [draw.textbbox((0, 0), ln, font=font)[2] - draw.textbbox((0, 0), ln, font=font)[0] for ln in lines]
+        heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
+        bw = max(widths) + pad * 2
+        bh = sum(heights) + 8 * max(len(lines) - 1, 0) + pad * 2
+        x = 48 if i == 0 else 80
+        draw.rounded_rectangle([x, y, x + bw, y + bh], radius=22, fill=(255, 255, 255), outline=ink, width=3)
+        # tail
+        draw.polygon([(x + 36, y + bh - 1), (x + 22, y + bh + 18), (x + 58, y + bh - 1)], fill=(255, 255, 255), outline=ink)
+        cy = y + pad
+        for j, ln in enumerate(lines):
+            draw.text((x + pad, cy), ln, font=font, fill=ink)
+            cy += heights[j] + 8
+        y += bh + 28
+    if expr:
+        tag = f"「{expr}」"
+        tf = _load_font(24)
+        tb = draw.textbbox((0, 0), tag, font=tf)
+        tw, th = tb[2] - tb[0], tb[3] - tb[1]
+        tx, ty = w - tw - 40, 28
+        draw.rounded_rectangle([tx - 12, ty - 6, tx + tw + 12, ty + th + 6], radius=10, fill=(255, 255, 255), outline=accent, width=2)
+        draw.text((tx, ty), tag, font=tf, fill=accent)
+    foot = (plan.get("footer") or "").strip()
+    if foot:
+        fy = h - 148
+        draw.rectangle([0, fy - 14, w, h - 68], fill=(255, 255, 255))
+        ff = _load_font(24)
+        for line in _wrap_by_pixel_width(draw, foot, ff, w - 80)[:2]:
+            lb = draw.textbbox((0, 0), line, font=ff)
+            draw.text(((w - (lb[2] - lb[0])) / 2, fy), line, font=ff, fill=(70, 70, 75))
+            fy += (lb[3] - lb[1]) + 6
+    if blogger_url:
+        draw.rectangle([0, h - 66, w, h], fill=accent)
+        cta = "탭하면 구글 블로그에서 이어서 읽기"
+        bf = _load_font(26)
+        bb = draw.textbbox((0, 0), cta, font=bf)
+        draw.text(((w - (bb[2] - bb[0])) / 2, h - 54), cta, font=bf, fill=(255, 255, 255))
+        u = blogger_url.replace("https://", "").replace("http://", "")[:56]
+        uf = _load_font(18)
+        ub = draw.textbbox((0, 0), u, font=uf)
+        draw.text(((w - (ub[2] - ub[0])) / 2, h - 24), u, font=uf, fill=(255, 255, 255))
+    return img
+
+
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
     """마스터 프롬프트 콘티 → (가능하면 AI 이미지) → 4:5 한 컷 + plan.json + 클릭 HTML."""
     expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
@@ -2228,23 +2401,25 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
     pub_path = os.path.join(public_dir, fname)
     dl_path = os.path.join(download_dir, fname)
 
-    raw = _try_ai_image_bytes(plan.get("final_image_prompt") or "", plan.get("negative_prompt") or "")
+    # 장면만 AI 생성(글자 금지) → 정확한 한국어 말풍선 오버레이
+    scene_prompt = _build_scene_only_prompt(plan)
+    neg = (plan.get("negative_prompt") or "") + ", text, letters, words, writing, signage, watermark, logo, garbled text"
+    raw = _try_ai_image_bytes(scene_prompt, neg)
+    final_img = None
     if raw:
         try:
             from io import BytesIO
             ai_img = Image.open(BytesIO(raw)).convert("RGB")
-            ai_img = ai_img.resize(INSTATOON_SIZE, Image.Resampling.LANCZOS)
-            ai_img.save(pub_path, format="PNG", optimize=True)
-            ai_img.save(dl_path, format="PNG", optimize=True)
-            logger.info("[인스타툰] AI 이미지 저장 완료")
+            final_img = _overlay_korean_ui(ai_img, plan, blogger_url)
+            logger.info("[인스타툰] AI 장면 + 한국어 오버레이 합성 완료")
         except Exception as e:
-            logger.warning(f"[인스타툰] AI 이미지 저장 실패, 스토리보드 폴백: {e}")
-            raw = None
-    if not raw:
-        board = _render_plan_storyboard(plan, blogger_url)
-        board.save(pub_path, format="PNG", optimize=True)
-        board.save(dl_path, format="PNG", optimize=True)
-        logger.warning("[인스타툰] AI 이미지 실패 → 웹툰 폴백 (Cloudflare/HF/Pollinations 확인)")
+            logger.warning(f"[인스타툰] AI 합성 실패: {e}")
+            final_img = None
+    if final_img is None:
+        final_img = _render_plan_storyboard(plan, blogger_url)
+        logger.warning("[인스타툰] AI 실패 → 웹툰 폴백")
+    final_img.save(pub_path, format="PNG", optimize=True)
+    final_img.save(dl_path, format="PNG", optimize=True)
 
     target = (blogger_url or "").strip() or (SITE_URL or "https://learnkoreanseekoreans.blogspot.com").rstrip("/")
     safe_target = html.escape(target, quote=True)
