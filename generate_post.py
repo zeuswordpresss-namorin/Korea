@@ -162,11 +162,11 @@ FONT_CANDIDATES = [
 
 DOCS_DIR = "docs"
 POSTS_DIR = os.path.join(DOCS_DIR, "posts")
-# [스케치 한컷] 블로그 요약 · 연필스케치 풍 9:16 (Instagram/Threads 단일 이미지)
-INSTATOON_SIZE = (1080, 1920)  # 9:16
+# [인스타툰 한컷] 표현→실제 사용 순간 시각화 (4:5, Instagram/Threads 단일)
+INSTATOON_SIZE = (1080, 1350)  # 4:5 피드
 INSTATOON_PUBLIC_DIR = os.path.join(DOCS_DIR, "instatoon")
 INSTATOON_DOWNLOAD_DIR = os.environ.get("INSTATOON_DOWNLOAD_DIR", "downloads/instatoon")
-INSTATOON_CUTS = 1  # 한 컷만
+INSTATOON_CUTS = 1
 # [NEW] 구글 블로그(Blogger)만 메인으로 발행하고, GitHub Pages는 이미지 호스팅(docs/thumbs)과
 # posts.json(내부 상태) 용도로만 남긴다. 개별 글 페이지·홈페이지(index.html)·sitemap.xml처럼
 # "공개 사이트"로 보일 수 있는 산출물은 더 이상 만들지 않는다 (중복 콘텐츠 방지).
@@ -1508,18 +1508,124 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
 
 
 
+
 def _instatoon_slug(expression: str, title: str) -> str:
     base = (expression or title or "post").strip()
     base = re.sub(r"[^\w가-힣\-]+", "_", base)[:40].strip("_") or "post"
     return base
 
 
-def _sketch_ink(alpha: int = 255) -> Tuple[int, int, int]:
-    return (35, 35, 38)
+# --- 범용 인스타툰: 표현 → 감정·상황·장면 자동 선택 ---
+_EMOTION_KEYWORDS = [
+    ("미쳤다|대박| Legenda|최고|레전드|죽인다", "감탄", "positive_awe"),
+    ("눈치|조심|망설|머뭇", "당황", "hesitate"),
+    ("괜찮아|괜찮|걱정 마", "체념", "reassure"),
+    ("정이 들|그리워|아쉽", "감동", "warm"),
+    ("답답|미치겠|헐", "황당함", "frustrated"),
+    ("억울|아니|잘못 없", "억울", "wronged"),
+    ("애매|글쎄|애매하", "애매", "ambiguous"),
+    ("화나|짜증|열받", "분노", "angry"),
+    ("놀라|깜짝|헐", "놀람", "shock"),
+    ("귀여|사랑|조아", "귀여움", "cute"),
+    ("걱정|불안|조마", "걱정", "worry"),
+]
+
+_SITUATION_POOL = {
+    "positive_awe": [
+        ("음식", "식당에서 첫 입을 맛본 순간", "food"),
+        ("여행", "전망대에서 풍경을 본 순간", "travel"),
+        ("쇼핑", "예상보다 좋은 물건을 발견한 순간", "shop"),
+    ],
+    "hesitate": [
+        ("친구", "여럿이 있는 자리에서 말할지 고민하는 순간", "group"),
+        ("직장", "회의 중 의견을 말하려다 멈추는 순간", "office"),
+        ("온라인", "채팅 입력창에서 보내기 전 망설이는 순간", "phone"),
+    ],
+    "reassure": [
+        ("친구", "걱정하는 친구에게 먼저 말하는 순간", "friend"),
+        ("연애", "상대를 안심시키려 웃어 보이는 순간", "love"),
+        ("가족", "부모님이 걱정할 때 넘기는 순간", "family"),
+    ],
+    "warm": [
+        ("친구", "자주 보던 사람과 헤어지는 순간", "parting"),
+        ("일상", "익숙한 골목을 걸으며 문득 느끼는 순간", "street"),
+        ("가족", "오랜만에 집에 돌아온 순간", "home"),
+    ],
+    "frustrated": [
+        ("직장", "설명이 안 통해서 한숨을 쉬는 순간", "office"),
+        ("온라인", "같은 말을 세 번 설명하는 순간", "phone"),
+        ("친구", "상대가 핵심을 놓치는 순간", "friend"),
+    ],
+    "wronged": [
+        ("직장", "잘못하지 않았는데 지적받는 순간", "office"),
+        ("가족", "오해로 혼나는 순간", "family"),
+        ("일상", "줄 서다 끼어들린 순간", "street"),
+    ],
+    "ambiguous": [
+        ("일상", "둘 중 하나를 고르기 전 멍한 순간", "choice"),
+        ("연애", "호감인지 아닌지 알 수 없는 순간", "love"),
+        ("쇼핑", "살지 말지 고민하는 순간", "shop"),
+    ],
+    "angry": [
+        ("일상", "부당한 일을 마주한 순간", "street"),
+        ("직장", "반복된 실수에 참던 순간", "office"),
+        ("온라인", "황당한 메시지를 본 순간", "phone"),
+    ],
+    "shock": [
+        ("일상", "예상 못 한 소식을 들은 순간", "friend"),
+        ("온라인", "타임라인에서 믿기 힘든 글을 본 순간", "phone"),
+        ("직장", "갑작스러운 공지를 들은 순간", "office"),
+    ],
+    "cute": [
+        ("일상", "귀여운 것을 보고 심장이 느슨해진 순간", "street"),
+        ("가족", "아이/반려의 행동에 웃음이 난 순간", "home"),
+        ("온라인", "사진 한 장에 빠져든 순간", "phone"),
+    ],
+    "worry": [
+        ("가족", "연락이 늦어 마음이 급한 순간", "phone"),
+        ("연애", "답이 없어 초조한 순간", "phone"),
+        ("일상", "결과가 나오기 전 기다리는 순간", "home"),
+    ],
+    "default": [
+        ("일상", "카페에서 문득 그 말이 나온 순간", "cafe"),
+        ("친구", "대화 도중 자연스럽게 표현이 튀어나온 순간", "friend"),
+        ("온라인", "메시지를 읽고 반응하는 순간", "phone"),
+    ],
+}
+
+_EMOTION_PALETTE = {
+    "positive_awe": [(255, 248, 230), (255, 220, 180), (255, 140, 90)],
+    "hesitate": [(245, 245, 250), (220, 220, 235), (160, 160, 190)],
+    "reassure": [(240, 250, 245), (200, 230, 220), (100, 180, 150)],
+    "warm": [(255, 245, 240), (255, 210, 200), (230, 120, 100)],
+    "frustrated": [(248, 248, 245), (220, 215, 200), (140, 130, 110)],
+    "wronged": [(250, 240, 240), (230, 180, 180), (180, 80, 80)],
+    "ambiguous": [(245, 245, 248), (210, 210, 220), (140, 140, 160)],
+    "angry": [(255, 240, 235), (255, 180, 160), (200, 60, 50)],
+    "shock": [(245, 250, 255), (200, 220, 255), (80, 120, 220)],
+    "cute": [(255, 245, 250), (255, 200, 220), (255, 120, 160)],
+    "worry": [(245, 245, 250), (210, 215, 230), (120, 130, 170)],
+    "default": [(250, 248, 245), (230, 220, 210), (180, 140, 120)],
+}
 
 
-def _summarize_for_sketch(article: Dict[str, Any]) -> Dict[str, str]:
-    """블로그 글 내용을 한 컷용 짧은 스토리 요약으로 변환 (상황마다 다른 템플릿)."""
+def _detect_emotion_key(expression: str, meaning: str, situation: str) -> str:
+    blob = f"{expression} {meaning} {situation}".lower()
+    for pattern, _label, key in _EMOTION_KEYWORDS:
+        if re.search(pattern, blob):
+            return key
+    # meaning-based soft hints
+    if any(w in blob for w in ("감탄", "좋", "최고", "놀라움이 긍정")):
+        return "positive_awe"
+    if any(w in blob for w in ("망설", "눈치", "조심")):
+        return "hesitate"
+    if any(w in blob for w in ("안심", "위로", "괜찮")):
+        return "reassure"
+    return "default"
+
+
+def _plan_instatoon_scene(article: Dict[str, Any]) -> Dict[str, Any]:
+    """STEP1~6: 표현의 실제 사용 감정·상황·한 컷 콘티 자동 구성."""
     expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
     if not expr:
         expr = "이 표현"
@@ -1527,190 +1633,278 @@ def _summarize_for_sketch(article: Dict[str, Any]) -> Dict[str, str]:
     meta = (article.get("meta_description") or "").strip()
     body = re.sub(r"<[^>]+>", " ", article.get("html_body") or "")
     body = re.sub(r"\s+", " ", body).strip()
-    seed = int(hashlib.md5(f"{expr}|{title}|{meta[:40]}".encode()).hexdigest(), 16)
+    seed = int(hashlib.md5(f"{expr}|{title}|{meta[:60]}".encode()).hexdigest(), 16)
     rnd = random.Random(seed)
 
-    scenes = [
-        {
-            "setting": "카페에서",
-            "line1": f"친구가 문득 「{expr}」라고 말했다.",
-            "line2": f"“「{expr}」… 그게 정확히 무슨 뜻이야?”",
-            "line3": "직역하면 느낌이 달랐다.",
-            "punch": f"“그럴 때 쓰는 말이 「{expr}」야.”",
-            "footer": meta[:90] if meta else f"「{expr}」는 상황과 관계가 뜻을 완성한다.",
-            "mood": "talk",
-        },
-        {
-            "setting": "수업이 끝난 뒤",
-            "line1": f"노트에 「{expr}」만 적어두었는데",
-            "line2": "실제 대화에선 타이밍이 전부였다.",
-            "line3": f"“지금이 바로 「{expr}」 쓰는 순간이야.”",
-            "punch": "사전 한 줄보다, 그 공기가 먼저였다.",
-            "footer": (title[:90] if title else f"「{expr}」 — meaning lives in the moment."),
-            "mood": "study",
-        },
-        {
-            "setting": "길에서 스친 한마디",
-            "line1": f"처음 들은 「{expr}」는 낯설었다.",
-            "line2": f"“왜 하필 지금 「{expr}」라고 하지?”",
-            "line3": "되물어 보니 관계와 배려가 묻어 있었다.",
-            "punch": f"그래서 「{expr}」는 단어가 아니라 장면에 가깝다.",
-            "footer": meta[:90] if meta else f"Learners notice 「{expr}」 when the situation clicks.",
-            "mood": "street",
-        },
-        {
-            "setting": "집에서 연습하다가",
-            "line1": f"거울 앞에서 「{expr}」를 따라 말해 보았다.",
-            "line2": "어색했다. 왜냐하면 상황이 없었으니까.",
-            "line3": f"그때 떠올린 건, 한국 친구가 웃으며 건넨 「{expr}」.",
-            "punch": "말이 아니라, 그 순간의 온도였다.",
-            "footer": f"「{expr}」를 기억할 땐 예문보다 장면을 함께.",
-            "mood": "home",
-        },
-        {
-            "setting": "메신저 대화 중",
-            "line1": f"번역기가 뱉은 문장엔 「{expr}」가 없었다.",
-            "line2": f"그런데 상대는 「{expr}」로 답했다.",
-            "line3": "같은 뜻 같아도, 결이 달랐다.",
-            "punch": f"“아, 이런 결을 「{expr}」라고 하는구나.”",
-            "footer": meta[:90] if meta else title[:90],
-            "mood": "chat",
-        },
-    ]
-    sc = scenes[seed % len(scenes)]
-    sc = dict(sc)
-    sc["expression"] = expr
-    # body hint soft inject
-    if body and len(body) > 40:
-        hint = body[20:90].strip()
-        if hint and rnd.random() < 0.45:
-            sc["footer"] = hint + ("…" if len(body) > 90 else "")
-    return sc
+    emotion_key = _detect_emotion_key(expr, meta, body[:200])
+    pool = _SITUATION_POOL.get(emotion_key) or _SITUATION_POOL["default"]
+    domain, situation_line, stage = pool[seed % len(pool)]
+    palette = _EMOTION_PALETTE.get(emotion_key) or _EMOTION_PALETTE["default"]
 
+    # 말풍선: 짧게, 표현 중심
+    bubble_main = f"「{expr}」"
+    bubble_sub = ""
+    cultural = f"한국에서는 이런 순간에 「{expr}」라고 말해요."
+    use_foreign = False
 
-def _sketch_draw_people(draw, mood: str, seed: int, w: int, y0: int):
-    """연필선 느낌의 단순 인물 스케치 (흑백)."""
-    ink = _sketch_ink()
-    rnd = random.Random(seed + 17)
-
-    def head(cx, cy, r=48):
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ink, width=3)
-        # eyes
-        draw.arc([cx - 22, cy - 12, cx - 6, cy + 4], 200, 340, fill=ink, width=2)
-        draw.arc([cx + 6, cy - 12, cx + 22, cy + 4], 200, 340, fill=ink, width=2)
-        # smile / mouth by mood
-        if mood in ("talk", "chat"):
-            draw.arc([cx - 12, cy + 8, cx + 12, cy + 24], 20, 160, fill=ink, width=2)
-        elif mood == "study":
-            draw.line([(cx - 8, cy + 16), (cx + 8, cy + 16)], fill=ink, width=2)
+    if emotion_key == "positive_awe":
+        bubble_main = f"와… {expr}."
+        bubble_sub = "진짜?"
+        cultural = f"「{expr}」은(는) 나쁜 뜻이 아니라, 강렬한 감탄으로 자주 쓰여요."
+        use_foreign = rnd.random() < 0.35
+    elif emotion_key == "hesitate":
+        bubble_main = f"…{expr} 보이네."
+        cultural = f"「{expr}」는 분위기·관계를 읽는 행동에 가깝습니다."
+    elif emotion_key == "reassure":
+        bubble_main = expr if len(expr) <= 6 else f"{expr}."
+        bubble_sub = "걱정 마."
+        cultural = f"「{expr}」는 실제 상태보다 상대를 안심시키려는 말에 가깝기도 해요."
+    elif emotion_key == "warm":
+        bubble_main = f"{expr}…"
+        cultural = f"「{expr}」는 관계가 쌓인 뒤에야 나오는 말이에요."
+    elif emotion_key == "frustrated":
+        bubble_main = f"아, {expr}."
+        cultural = f"「{expr}」는 답답함이 터질 때 자주 나와요."
+    elif emotion_key == "wronged":
+        bubble_main = f"{expr}…"
+        cultural = f"「{expr}」는 잘못이 없을 때 느끼는 감정에 가깝습니다."
+    elif emotion_key == "ambiguous":
+        bubble_main = f"음… {expr}."
+        cultural = f"「{expr}」는 좋지도 싫지도 않을 때 고르는 말이에요."
+    elif emotion_key == "angry":
+        bubble_main = f"{expr}!"
+        cultural = f"「{expr}」는 참아 온 감정이 터질 때 쓰입니다."
+    elif emotion_key == "shock":
+        bubble_main = f"헐, {expr}."
+        cultural = f"「{expr}」는 예상 밖 순간에 바로 튀어나와요."
+    elif emotion_key == "cute":
+        bubble_main = f"{expr} ㅋㅋ"
+        cultural = f"「{expr}」는 마음이 느슨해질 때 나오는 말이에요."
+    elif emotion_key == "worry":
+        bubble_main = f"{expr}…"
+        cultural = f"「{expr}」는 결과가 나오기 전 마음이 드러날 때 써요."
+    else:
+        bubble_main = f"{expr}"
+        if meta:
+            cultural = meta[:70] + ("…" if len(meta) > 70 else "")
         else:
-            draw.arc([cx - 10, cy + 10, cx + 10, cy + 22], 30, 150, fill=ink, width=2)
+            cultural = f"「{expr}」가 자연스럽게 나오는 순간을 포착해 보세요."
 
-    def body(cx, cy, lean=0):
-        draw.line([(cx, cy + 48), (cx + lean, cy + 140)], fill=ink, width=3)
-        # arms
-        draw.line([(cx, cy + 70), (cx - 40, cy + 110)], fill=ink, width=3)
-        draw.line([(cx, cy + 70), (cx + 45, cy + 100)], fill=ink, width=3)
-        # legs
-        draw.line([(cx + lean, cy + 140), (cx - 25, cy + 200)], fill=ink, width=3)
-        draw.line([(cx + lean, cy + 140), (cx + 30, cy + 200)], fill=ink, width=3)
+    foreign_bubble = ""
+    if use_foreign:
+        foreign_bubble = "What?!"
+        cultural = f"직역하면 무섭게 들려도, 한국에선 감탄으로 「{expr}」를 써요."
 
-    # ground soft hatch
-    for i in range(6):
-        x1 = 120 + i * 140
-        draw.arc([x1, y0 + 210, x1 + 80, y0 + 230], 0, 180, fill=(180, 180, 180), width=1)
-
-    # two figures
-    head(w // 2 - 120, y0 + 40)
-    body(w // 2 - 120, y0 + 40, lean=-5)
-    head(w // 2 + 130, y0 + 50, r=46)
-    body(w // 2 + 130, y0 + 50, lean=8)
-
-    # small prop by mood
-    if mood == "study":
-        draw.rectangle([w // 2 - 30, y0 + 160, w // 2 + 40, y0 + 200], outline=ink, width=2)
-    elif mood == "street":
-        # simple tree
-        draw.ellipse([80, y0 - 20, 180, y0 + 80], outline=ink, width=2)
-        draw.line([(130, y0 + 80), (130, y0 + 200)], fill=ink, width=2)
-    elif mood == "home":
-        draw.rectangle([w - 220, y0 + 40, w - 100, y0 + 160], outline=ink, width=2)
-    # sparkles / ? like reference
-    draw.text((w // 2 + 180, y0 - 10), "?", font=_load_font(36), fill=ink)
-    if rnd.random() > 0.4:
-        draw.text((w // 2 - 200, y0 + 10), "+", font=_load_font(28), fill=(120, 120, 120))
-
-
-def _draw_pencil_sketch_one_cut(article: Dict[str, Any], blogger_url: str = "") -> Image.Image:
-    """9:16 연필 스케치 한 컷 — 블로그 요약 스토리."""
-    w, h = INSTATOON_SIZE
-    img = Image.new("RGB", (w, h), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-    ink = _sketch_ink()
-    sc = _summarize_for_sketch(article)
-    expr = sc["expression"]
-    seed = int(hashlib.md5(expr.encode()).hexdigest(), 16)
-
-    # top margin story text (reference style: narrative then quoted lines)
-    y = 100
-    title_font = _load_font(36)
-    body_font = _load_font(34)
-    quote_font = _load_font(36)
-
-    blocks = [
-        (sc["setting"], title_font, (90, 90, 90)),
-        (sc["line1"], body_font, ink),
-        (sc["line2"], quote_font, ink),
-        (sc["line3"], body_font, ink),
-        (sc["punch"], quote_font, ink),
+    # 상단 짧은 상황 문장 (설명문 X)
+    hook_lines = [
+        situation_line,
+        f"{domain} · 그 말이나온 순간",
     ]
-    for text_line, font, fill in blocks:
-        if not text_line:
-            continue
-        for line in _wrap_by_pixel_width(draw, text_line, font, w - 140)[:3]:
-            lb = draw.textbbox((0, 0), line, font=font)
-            draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=font, fill=fill)
-            y += (lb[3] - lb[1]) + 14
-        y += 10
 
-    # soft divider
-    y += 10
-    draw.line([(180, y), (w - 180, y)], fill=(200, 200, 200), width=1)
-    y += 30
+    return {
+        "expression": expr,
+        "emotion_key": emotion_key,
+        "domain": domain,
+        "situation": situation_line,
+        "stage": stage,
+        "palette": palette,
+        "hook": hook_lines[0],
+        "bubble_main": bubble_main,
+        "bubble_sub": bubble_sub,
+        "foreign_bubble": foreign_bubble,
+        "cultural": cultural,
+        "pose": emotion_key,
+        "seed": seed,
+    }
 
-    # sketch area
-    _sketch_draw_people(draw, sc.get("mood") or "talk", seed, w, y + 40)
 
-    # footer narration (not a box — natural line like Instagram caption area inside image)
-    foot = sc.get("footer") or ""
+def _gemini_refine_scene(article: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
+    """가능하면 Gemini로 상황·대사를 한 번 더 다듬음 (실패 시 base 유지)."""
+    if not GEMINI_API_KEY:
+        return base
+    expr = base["expression"]
+    prompt = (
+        "You are a Korean instatoon director. Return ONLY compact JSON keys: "
+        "hook, bubble_main, bubble_sub, cultural, situation, emotion_key. "
+        "Rules: show the MOMENT Koreans actually say the expression; short natural speech; "
+        "1 cultural line max 40 chars; no long explanation; Korean for dialogue.\n"
+        f"expression: {expr}\n"
+        f"blog_title: {article.get('title','')}\n"
+        f"meta: {(article.get('meta_description') or '')[:160]}\n"
+        f"hint_situation: {base.get('situation')}\n"
+        f"hint_emotion: {base.get('emotion_key')}\n"
+    )
+    try:
+        url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
+        resp = requests.post(
+            url,
+            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                  "generationConfig": {"temperature": 0.8, "maxOutputTokens": 400}},
+            timeout=25,
+        )
+        if not resp.ok:
+            return base
+        data = resp.json()
+        text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+        m = re.search(r"\{[\s\S]*\}", text_out)
+        if not m:
+            return base
+        parsed = json.loads(m.group(0))
+        for k in ("hook", "bubble_main", "bubble_sub", "cultural", "situation", "emotion_key"):
+            if parsed.get(k):
+                base[k] = str(parsed[k]).strip()[:120]
+        return base
+    except Exception as e:
+        logger.warning(f"[인스타툰] Gemini 장면 보강 생략: {e}")
+        return base
+
+
+def _draw_emotion_face(draw, cx, cy, pose: str, ink=(30, 30, 30), scale=1.0):
+    s = scale
+    # head
+    draw.ellipse([cx - 55 * s, cy - 55 * s, cx + 55 * s, cy + 55 * s], fill=(255, 230, 200), outline=ink, width=3)
+    # eyes / mouth by pose
+    if pose in ("positive_awe", "cute", "shock"):
+        for ex in (-20, 20):
+            draw.ellipse([cx + (ex - 10) * s, cy - 18 * s, cx + (ex + 10) * s, cy + 6 * s], fill=ink)
+            draw.ellipse([cx + (ex - 4) * s, cy - 12 * s, cx + (ex + 2) * s, cy - 4 * s], fill=(255, 255, 255))
+        draw.arc([cx - 16 * s, cy + 8 * s, cx + 16 * s, cy + 28 * s], 20, 160, fill=ink, width=3)
+        if pose == "shock":
+            draw.ellipse([cx - 8 * s, cy + 10 * s, cx + 8 * s, cy + 28 * s], fill=ink)
+    elif pose in ("hesitate", "worry", "ambiguous"):
+        for ex in (-20, 20):
+            draw.arc([cx + (ex - 10) * s, cy - 10 * s, cx + (ex + 10) * s, cy + 8 * s], 200, 340, fill=ink, width=3)
+        draw.line([(cx - 10 * s, cy + 18 * s), (cx + 10 * s, cy + 18 * s)], fill=ink, width=2)
+        # sweat
+        draw.ellipse([cx + 40 * s, cy - 20 * s, cx + 50 * s, cy - 5 * s], fill=(160, 210, 255), outline=ink, width=1)
+    elif pose in ("frustrated", "angry", "wronged"):
+        for ex in (-20, 20):
+            draw.ellipse([cx + (ex - 8) * s, cy - 12 * s, cx + (ex + 8) * s, cy + 4 * s], fill=ink)
+        draw.line([(cx - 30 * s, cy - 28 * s), (cx - 10 * s, cy - 18 * s)], fill=ink, width=3)
+        draw.line([(cx + 10 * s, cy - 18 * s), (cx + 30 * s, cy - 28 * s)], fill=ink, width=3)
+        draw.arc([cx - 14 * s, cy + 14 * s, cx + 14 * s, cy + 30 * s], 200, 340, fill=ink, width=3)
+    elif pose in ("reassure", "warm"):
+        for ex in (-20, 20):
+            draw.arc([cx + (ex - 12) * s, cy - 8 * s, cx + (ex + 12) * s, cy + 10 * s], 200, 340, fill=ink, width=3)
+        draw.arc([cx - 14 * s, cy + 6 * s, cx + 14 * s, cy + 26 * s], 20, 160, fill=ink, width=3)
+    else:
+        for ex in (-20, 20):
+            draw.ellipse([cx + (ex - 7) * s, cy - 12 * s, cx + (ex + 7) * s, cy + 4 * s], fill=ink)
+        draw.arc([cx - 12 * s, cy + 8 * s, cx + 12 * s, cy + 24 * s], 20, 160, fill=ink, width=2)
+    # blush
+    for ex in (-32, 32):
+        draw.ellipse([cx + (ex - 8) * s, cy + 8 * s, cx + (ex + 8) * s, cy + 18 * s], fill=(255, 170, 160))
+
+
+def _draw_scene_props(draw, stage: str, w: int, y_mid: int, ink, accent):
+    if stage == "food":
+        draw.ellipse([w // 2 - 50, y_mid + 120, w // 2 + 50, y_mid + 160], outline=ink, width=3)
+        draw.arc([w // 2 - 40, y_mid + 100, w // 2 + 40, y_mid + 140], 0, 180, fill=accent, width=4)
+    elif stage == "phone":
+        draw.rounded_rectangle([w // 2 + 80, y_mid - 20, w // 2 + 150, y_mid + 100], radius=12, outline=ink, width=3)
+    elif stage == "office":
+        draw.rectangle([80, y_mid + 80, 200, y_mid + 160], outline=ink, width=2)
+    elif stage == "travel":
+        draw.polygon([(80, y_mid + 140), (150, y_mid + 40), (220, y_mid + 140)], outline=ink, width=3)
+    elif stage == "cafe":
+        draw.ellipse([w - 200, y_mid + 80, w - 120, y_mid + 140], outline=ink, width=3)
+        draw.rectangle([w - 175, y_mid + 140, w - 145, y_mid + 170], outline=ink, width=2)
+    elif stage == "home":
+        draw.rectangle([70, y_mid + 40, 160, y_mid + 150], outline=ink, width=2)
+    elif stage == "group":
+        for i, ox in enumerate((-90, 0, 90)):
+            draw.ellipse([w // 2 + ox - 25, y_mid + 100, w // 2 + ox + 25, y_mid + 150], outline=ink, width=2)
+    elif stage == "shop":
+        draw.rectangle([w - 220, y_mid + 60, w - 80, y_mid + 160], outline=ink, width=2)
+    # soft ground
+    draw.arc([200, y_mid + 200, w - 200, y_mid + 240], 0, 180, fill=(200, 200, 200), width=2)
+
+
+def _draw_bubble(draw, x, y, text, font, ink=(30, 30, 30), max_w=700):
+    if not text:
+        return y
+    lines = _wrap_by_pixel_width(draw, text, font, max_w)[:3]
+    pad, gap = 18, 6
+    widths = [draw.textbbox((0, 0), ln, font=font)[2] - draw.textbbox((0, 0), ln, font=font)[0] for ln in lines]
+    heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
+    bw = max(widths) + pad * 2
+    bh = sum(heights) + gap * (len(lines) - 1) + pad * 2
+    draw.rounded_rectangle([x, y, x + bw, y + bh], radius=24, fill=(255, 255, 255), outline=ink, width=3)
+    draw.polygon([(x + 36, y + bh - 1), (x + 22, y + bh + 22), (x + 64, y + bh - 1)], fill=(255, 255, 255), outline=ink)
+    cy = y + pad
+    for i, ln in enumerate(lines):
+        draw.text((x + pad, cy), ln, font=font, fill=ink)
+        cy += heights[i] + gap
+    return y + bh + 28
+
+
+def _draw_instatoon_one_cut(article: Dict[str, Any], blogger_url: str = "") -> Image.Image:
+    """표현의 '실제 사용 순간'을 한 장(4:5)으로 시각화."""
+    scene = _plan_instatoon_scene(article)
+    scene = _gemini_refine_scene(article, scene)
+    w, h = INSTATOON_SIZE
+    pal = scene["palette"]
+    # soft gradient bg
+    img = _make_random_gradient_background((w, h), [pal[0], (255, 255, 255), pal[1]], seed=scene["seed"] % 10000).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    ink = (32, 32, 36)
+    accent = pal[2]
+
+    # hook (situation) — top
+    y = 64
+    hf = _load_font(34)
+    for line in _wrap_by_pixel_width(draw, scene["hook"], hf, w - 120)[:2]:
+        lb = draw.textbbox((0, 0), line, font=hf)
+        draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=hf, fill=(90, 90, 95))
+        y += (lb[3] - lb[1]) + 8
+    y += 12
+
+    # main bubble (expression moment)
+    y = _draw_bubble(draw, 90, y, scene["bubble_main"], _load_font(44), ink, max_w=820)
+    if scene.get("bubble_sub"):
+        y = _draw_bubble(draw, 160, y - 8, scene["bubble_sub"], _load_font(32), ink, max_w=500)
+    if scene.get("foreign_bubble"):
+        _draw_bubble(draw, w - 420, y - 40, scene["foreign_bubble"], _load_font(30), ink, max_w=320)
+
+    # characters center
+    cy = int(h * 0.55)
+    _draw_emotion_face(draw, w // 2 - (80 if scene.get("foreign_bubble") else 0), cy - 40, scene["pose"], ink, scale=1.15)
+    # body simple
+    draw.rounded_rectangle(
+        [w // 2 - 100, cy + 20, w // 2 + 40, cy + 160],
+        radius=28, fill=accent + (0,) if False else _blend_rgb(accent, (255, 255, 255), 0.35),
+        outline=ink, width=3,
+    )
+    if scene.get("foreign_bubble"):
+        _draw_emotion_face(draw, w // 2 + 140, cy - 20, "shock", ink, scale=0.95)
+
+    _draw_scene_props(draw, scene.get("stage") or "cafe", w, cy, ink, accent)
+
+    # cultural one-liner (bottom, not a heavy box)
+    foot = scene.get("cultural") or ""
     if blogger_url:
-        foot = (foot + "\n" if foot else "") + blogger_url
-    fy = h - 200
+        foot = foot + (f" · {blogger_url}" if len(foot) < 50 else "")
+    fy = h - 120
     ff = _load_font(28)
-    for line in _wrap_by_pixel_width(draw, foot, ff, w - 120)[:4]:
+    for line in _wrap_by_pixel_width(draw, foot, ff, w - 100)[:3]:
         lb = draw.textbbox((0, 0), line, font=ff)
-        draw.text(((w - (lb[2] - lb[0])) / 2, fy), line, font=ff, fill=(70, 70, 70))
-        fy += (lb[3] - lb[1]) + 8
+        draw.text(((w - (lb[2] - lb[0])) / 2, fy), line, font=ff, fill=(70, 70, 75))
+        fy += (lb[3] - lb[1]) + 6
 
-    # expression tag tiny
-    tag = f"「{expr}」"
+    # expression tag
+    tag = f"「{scene['expression']}」"
     tf = _load_font(24)
     tb = draw.textbbox((0, 0), tag, font=tf)
-    draw.text((w - 48 - (tb[2] - tb[0]), 48), tag, font=tf, fill=(130, 130, 130))
-
-    # light paper noise (pencil feel)
-    rnd = random.Random(seed)
-    px = img.load()
-    for _ in range(1200):
-        x, yy = rnd.randint(0, w - 1), rnd.randint(0, h - 1)
-        g = rnd.randint(230, 250)
-        px[x, yy] = (g, g, g)
-
+    draw.rounded_rectangle(
+        [w - 60 - (tb[2] - tb[0]), 36, w - 28, 36 + (tb[3] - tb[1]) + 12],
+        radius=10, fill=(255, 255, 255), outline=accent, width=2,
+    )
+    draw.text((w - 50 - (tb[2] - tb[0]), 40), tag, font=tf, fill=accent)
     return img
 
 
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """블로그 요약 연필스케치 9:16 한 컷 생성."""
+    """표현 기반 상황 자동 선정 → 4:5 인스타툰 한 컷."""
     expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
     slug = _instatoon_slug(expr, article.get("title") or "")
     public_dir = os.path.join(INSTATOON_PUBLIC_DIR, slug)
@@ -1718,16 +1912,14 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
     os.makedirs(public_dir, exist_ok=True)
     os.makedirs(download_dir, exist_ok=True)
 
-    img = _draw_pencil_sketch_one_cut(article, blogger_url)
+    img = _draw_instatoon_one_cut(article, blogger_url)
     fname = "01.png"
     pub_path = os.path.join(public_dir, fname)
     dl_path = os.path.join(download_dir, fname)
     img.save(pub_path, format="PNG", optimize=True)
     img.save(dl_path, format="PNG", optimize=True)
-    public_urls = []
-    if SITE_URL:
-        public_urls.append(f"{SITE_URL.rstrip('/')}/instatoon/{slug}/{fname}")
-    logger.info(f"[스케치한컷] 9:16 저장 → {dl_path}")
+    public_urls = [f"{SITE_URL.rstrip('/')}/instatoon/{slug}/{fname}"] if SITE_URL else []
+    logger.info(f"[인스타툰] 4:5 한컷 → {dl_path}")
     return {
         "slug": slug,
         "local_paths": [dl_path],
@@ -1742,10 +1934,6 @@ def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") ->
 
 
 def _card_news_slug(expression: str, title: str) -> str:
-    return _instatoon_slug(expression, title)
-
-
-def _instatoon_slug_alias(expression: str, title: str) -> str:
     return _instatoon_slug(expression, title)
 
 
