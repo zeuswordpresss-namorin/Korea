@@ -88,13 +88,6 @@ jobs:
           WORDPRESS_CLIENT_SECRET: ${{ secrets.WORDPRESS_CLIENT_SECRET }}
           # --- 썸네일용 무료 스톡 이미지(Pexels) ---
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          # --- [NEW] Cloudflare Workers AI FLUX 인스타툰 (무료 일일 Neurons) ---
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          # --- [선택] Hugging Face FLUX 보조 ---
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # --- [선택] OpenAI 이미지 ---
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # --- SNS (있으면 자동 공유) ---
           THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
