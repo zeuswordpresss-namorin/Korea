@@ -64,6 +64,11 @@ QUEUE_FILE = "keywords_queue.json"
 # 환경변수로 받는 설정값
 # =====================================================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+XAI_API_KEY = os.environ.get("XAI_API_KEY", "")  # (미사용·하위호환)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")  # (선택)
+CLOUDFLARE_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")  # Workers AI FLUX
+CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")  # (선택) Hugging Face
 SITE_TITLE = os.environ.get("SITE_TITLE", "오늘의 한국어")
 SITE_TAGLINE = os.environ.get("SITE_TAGLINE", "한국어를 배우면 한국인이 보인다 - 외국인을 위한 한국어 표현과 사고방식")
 # [NEW] 타깃(외국인 한국어 학습자)이 3초 안에 "누구를 위한 블로그인지" 파악하도록 영문 슬로건을 전면 배치
@@ -1749,138 +1754,223 @@ _MOOD_PALETTE = {
 
 
 
-def _try_gemini_image_bytes(prompt: str, negative: str = "") -> Optional[bytes]:
-    """Gemini 네이티브 이미지 생성 (Nano Banana / Flash Image / Pro Image).
 
-    REST: models/{model}:generateContent
-    generationConfig.responseModalities = ["IMAGE"]
+
+
+
+def _try_cloudflare_flux_bytes(prompt: str) -> Optional[bytes]:
+    """완전 무료 고성능: Cloudflare Workers AI FLUX.1-schnell
+
+    매일 10,000 Neurons 무료 (≈ 100장+/일, UTC 리셋)
+    Secrets: CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN
     """
-    # 글 생성과 동일한 Secrets의 GEMINI_API_KEY 만 사용 (추가 키 불필요)
-    if not GEMINI_API_KEY:
-        logger.warning("[인스타툰] GEMINI_API_KEY 시크릿 없음 — 이미지 API 건너뜀")
+    account = (CLOUDFLARE_ACCOUNT_ID or "").strip()
+    token = (CLOUDFLARE_API_TOKEN or "").strip()
+    if not account or not token:
+        logger.info("[인스타툰] Cloudflare Secrets 없음 — FLUX 건너뜀")
         return None
-    full_prompt = (prompt or "").strip()
-    if not full_prompt:
+
+    full = (prompt or "").strip()[:2000]
+    if not full:
         return None
-    # 웹툰 지시 보강
-    full_prompt = (
-        full_prompt
-        + "\n\nCreate ONE finished image only. Korean Instagram webtoon style, "
-        "clean line art, expressive faces, simple background, 4:5 or 3:4 portrait. "
-        "Speech bubbles must use exact Korean spelling when Korean text is specified."
+    full += (
+        " Korean Instagram webtoon illustration, clean line art, expressive face, "
+        "simple background, vertical composition, speech bubble with accurate Korean text when specified, "
+        "no photorealism, no watermark"
     )
-    if negative:
-        full_prompt += f"\n\nDo not include: {negative[:300]}"
 
-    import base64 as b64mod
-
-    def _extract_image(data: dict) -> Optional[bytes]:
-        for cand in data.get("candidates") or []:
-            content = cand.get("content") or {}
-            for p in content.get("parts") or []:
-                inline = p.get("inlineData") or p.get("inline_data") or {}
-                data_b64 = inline.get("data")
-                mime = str(inline.get("mimeType") or inline.get("mime_type") or "")
-                if data_b64 and (not mime or "image" in mime):
-                    try:
-                        return b64mod.b64decode(data_b64)
-                    except Exception:
-                        continue
-            # finishReason logging
-            fr = cand.get("finishReason") or cand.get("finish_reason")
-            if fr:
-                logger.warning(f"[인스타툰] finishReason={fr}")
-        # Imagen predict
-        for pred in data.get("predictions") or []:
-            b64 = pred.get("bytesBase64Encoded") or pred.get("image") or ""
-            if b64:
-                return b64mod.b64decode(b64)
-        # promptFeedback
-        fb = data.get("promptFeedback") or data.get("prompt_feedback")
-        if fb:
-            logger.warning(f"[인스타툰] promptFeedback={fb}")
-        return None
-
-    # 기존 GEMINI_API_KEY(Google AI Studio)로 호출 — 추가 시크릿 불필요
-    # 선택: GEMINI_IMAGE_MODEL 로 모델만 지정 가능 (키는 항상 GEMINI_API_KEY)
-    env_model = os.environ.get("GEMINI_IMAGE_MODEL", "").strip()
     models = [
-        env_model,
-        "gemini-2.5-flash-image",           # Nano Banana (2.5 계열, 동일 API 키)
-        "gemini-2.0-flash-preview-image-generation",
-        "gemini-3.1-flash-image",
-        "gemini-3.1-flash-image-preview",
-        "gemini-3-pro-image-preview",
-        "imagen-3.0-generate-002",
+        "@cf/black-forest-labs/flux-1-schnell",
+        "black-forest-labs/flux-1-schnell",
     ]
-    # unique preserve order
-    seen = set()
-    models = [m for m in models if m and not (m in seen or seen.add(m))]
-
+    # 4:5에 가까운 해상도 (타일 단위 과금 완화: 768x1024)
+    sizes = [(768, 1024), (512, 768), (1024, 1024)]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
     last_err = ""
     for model in models:
-        try:
-            if model.startswith("imagen"):
-                endpoint = (
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predict"
-                    f"?key={GEMINI_API_KEY}"
-                )
-                payload = {
-                    "instances": [{"prompt": full_prompt}],
-                    "parameters": {"sampleCount": 1, "aspectRatio": "3:4"},
-                }
-            else:
-                endpoint = (
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-                    f"?key={GEMINI_API_KEY}"
-                )
-                # 공식 문서: responseModalities IMAGE + aspectRatio
-                payload = {
-                    "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
-                    "generationConfig": {
-                        "responseModalities": ["IMAGE"],
-                        "imageConfig": {"aspectRatio": "3:4"},
-                    },
-                }
-            logger.info(f"[인스타툰] Gemini 이미지 요청 (GEMINI_API_KEY): {model}")
-            r = requests.post(endpoint, json=payload, timeout=150)
-            if r.status_code in (429, 503):
-                last_err = f"{model} HTTP {r.status_code}"
-                logger.warning(f"[인스타툰] {last_err} — 다음 모델 시도")
-                time.sleep(8)
-                continue
-            if r.status_code == 404:
-                last_err = f"{model} not found (404)"
-                logger.warning(f"[인스타툰] {last_err}")
-                continue
-            if not r.ok:
-                last_err = f"{model} HTTP {r.status_code}: {r.text[:300]}"
-                logger.warning(f"[인스타툰] {last_err}")
-                # responseModalities 키 대소문자 변형 재시도
-                if r.status_code == 400 and "responseModalities" in r.text:
-                    payload2 = {
-                        "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
-                        "generationConfig": {
-                            "responseModalities": ["Text", "Image"],
-                        },
-                    }
-                    r2 = requests.post(endpoint, json=payload2, timeout=150)
-                    if r2.ok:
-                        raw = _extract_image(r2.json())
-                        if raw:
-                            logger.info(f"[인스타툰] AI 이미지 성공(재시도): {model}")
+        url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
+        for w, h in sizes:
+            body = {
+                "prompt": full,
+                "width": w,
+                "height": h,
+                "num_steps": 4,
+            }
+            try:
+                logger.info(f"[인스타툰] Cloudflare FLUX 요청: {model} {w}x{h}")
+                r = requests.post(url, headers=headers, json=body, timeout=120)
+                if r.status_code in (401, 403):
+                    last_err = f"인증 실패 HTTP {r.status_code}: {r.text[:200]}"
+                    logger.warning(f"[인스타툰] {last_err}")
+                    return None
+                if r.status_code in (429, 503):
+                    last_err = f"HTTP {r.status_code}"
+                    logger.warning(f"[인스타툰] Cloudflare {last_err}")
+                    time.sleep(8)
+                    continue
+                if not r.ok:
+                    last_err = f"HTTP {r.status_code}: {r.text[:220]}"
+                    logger.warning(f"[인스타툰] Cloudflare {last_err}")
+                    continue
+                ctype = r.headers.get("Content-Type", "")
+                if "image" in ctype and r.content and len(r.content) > 2000:
+                    logger.info(f"[인스타툰] Cloudflare FLUX 성공 ({len(r.content)} bytes)")
+                    return r.content
+                # JSON base64 응답
+                try:
+                    data = r.json()
+                    img_b64 = None
+                    if isinstance(data, dict):
+                        img_b64 = data.get("image") or data.get("result", {}).get("image")
+                        if isinstance(data.get("result"), str):
+                            img_b64 = data["result"]
+                    if img_b64:
+                        import base64 as b64mod
+                        raw = b64mod.b64decode(img_b64)
+                        if len(raw) > 2000:
+                            logger.info(f"[인스타툰] Cloudflare FLUX 성공(b64) ({len(raw)} bytes)")
                             return raw
-                continue
-            raw = _extract_image(r.json())
-            if raw:
-                logger.info(f"[인스타툰] AI 이미지 성공: {model} ({len(raw)} bytes)")
-                return raw
-            last_err = f"{model} 응답에 이미지 파트 없음: {r.text[:250]}"
-            logger.warning(f"[인스타툰] {last_err}")
+                except Exception:
+                    pass
+                last_err = f"이미지 바디 없음 ctype={ctype}"
+            except Exception as e:
+                last_err = str(e)
+                logger.warning(f"[인스타툰] Cloudflare 예외: {e}")
+    logger.warning(f"[인스타툰] Cloudflare FLUX 실패 — {last_err}")
+    return None
+
+
+def _try_hf_flux_bytes(prompt: str) -> Optional[bytes]:
+    """Hugging Face Inference — FLUX.1-schnell (무료 토큰).
+
+    Secrets: HF_TOKEN (https://huggingface.co/settings/tokens)
+    """
+    token = (HF_TOKEN or os.environ.get("HUGGINGFACE_TOKEN", "") or "").strip()
+    if not token:
+        return None
+    full = (prompt or "").strip()[:1500]
+    if not full:
+        return None
+    full += " Korean webtoon style, clean lines, expressive face, vertical portrait"
+
+    models = [
+        "black-forest-labs/FLUX.1-schnell",
+        "black-forest-labs/FLUX.1-dev",
+    ]
+    headers = {"Authorization": f"Bearer {token}"}
+    for model in models:
+        url = f"https://api-inference.huggingface.co/models/{model}"
+        try:
+            logger.info(f"[인스타툰] HF FLUX 요청: {model}")
+            r = requests.post(
+                url,
+                headers=headers,
+                json={"inputs": full, "parameters": {"width": 768, "height": 1024}},
+                timeout=120,
+            )
+            if r.status_code in (401, 403):
+                logger.warning(f"[인스타툰] HF 인증 실패 HTTP {r.status_code}")
+                return None
+            if r.status_code == 503:
+                # 모델 로딩
+                time.sleep(15)
+                r = requests.post(
+                    url, headers=headers,
+                    json={"inputs": full, "parameters": {"width": 768, "height": 1024}},
+                    timeout=120,
+                )
+            if r.ok and r.content and len(r.content) > 2000 and "image" in (r.headers.get("Content-Type") or "image"):
+                logger.info(f"[인스타툰] HF FLUX 성공 ({len(r.content)} bytes)")
+                return r.content
+            logger.warning(f"[인스타툰] HF HTTP {r.status_code}: {r.text[:180]}")
         except Exception as e:
-            last_err = f"{model} 예외: {e}"
-            logger.warning(f"[인스타툰] {last_err}")
-    logger.error(f"[인스타툰] Gemini 이미지 생성 최종 실패 — {last_err}")
+            logger.warning(f"[인스타툰] HF 예외: {e}")
+    return None
+
+
+def _try_pollinations_image_bytes(prompt: str) -> Optional[bytes]:
+    """완전 무료·키 불필요 — Pollinations (보조)."""
+    full = (prompt or "").strip()
+    if not full:
+        return None
+    short = full[:700].replace("\n", " ")
+    import urllib.parse
+    q = urllib.parse.quote(short)
+    urls = [
+        f"https://image.pollinations.ai/prompt/{q}?width=1080&height=1350&nologo=true&model=flux",
+        f"https://image.pollinations.ai/prompt/{q}?width=768&height=1024&nologo=true",
+    ]
+    for url in urls:
+        try:
+            logger.info("[인스타툰] Pollinations 무료 요청")
+            r = requests.get(url, timeout=90, headers={"User-Agent": "LearnKoreanBot/1.0"})
+            if r.ok and r.content and len(r.content) > 2000:
+                ctype = r.headers.get("Content-Type") or ""
+                if "image" in ctype or r.content[:3] in (b"\xff\xd8\xff", b"\x89PN"):
+                    logger.info(f"[인스타툰] Pollinations 성공 ({len(r.content)} bytes)")
+                    return r.content
+            logger.warning(f"[인스타툰] Pollinations HTTP {r.status_code}")
+        except Exception as e:
+            logger.warning(f"[인스타툰] Pollinations 예외: {e}")
+        time.sleep(3)
+    return None
+
+
+def _try_openai_image_bytes(prompt: str, negative: str = "") -> Optional[bytes]:
+    """선택: OPENAI_API_KEY 가 있을 때만."""
+    key = (OPENAI_API_KEY or "").strip()
+    if not key:
+        return None
+    import base64 as b64mod
+    full = (prompt or "").strip()[:3000]
+    if not full:
+        return None
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    for model, size in (("dall-e-2", "1024x1024"), ("gpt-image-1-mini", "1024x1536")):
+        try:
+            payload = {"model": model, "prompt": full, "n": 1, "size": size}
+            if model.startswith("dall-e"):
+                payload["response_format"] = "b64_json"
+            r = requests.post("https://api.openai.com/v1/images/generations", headers=headers, json=payload, timeout=90)
+            if not r.ok:
+                continue
+            item = ((r.json() or {}).get("data") or [{}])[0]
+            b64 = item.get("b64_json")
+            if b64:
+                logger.info(f"[인스타툰] OpenAI 성공: {model}")
+                return b64mod.b64decode(b64)
+            url = item.get("url")
+            if url:
+                ir = requests.get(url, timeout=60)
+                if ir.ok:
+                    return ir.content
+        except Exception:
+            continue
+    return None
+
+
+def _try_ai_image_bytes(prompt: str, negative: str = "") -> Optional[bytes]:
+    """무료 고성능 우선순위:
+    1) Cloudflare FLUX.1-schnell (일 1만 Neurons 무료)
+    2) Hugging Face FLUX (무료 토큰)
+    3) Pollinations (키 없음)
+    4) OpenAI (선택, 유료)
+    """
+    for fn, name in (
+        (lambda: _try_cloudflare_flux_bytes(prompt), "Cloudflare FLUX"),
+        (lambda: _try_hf_flux_bytes(prompt), "HF FLUX"),
+        (lambda: _try_pollinations_image_bytes(prompt), "Pollinations"),
+        (lambda: _try_openai_image_bytes(prompt, negative), "OpenAI"),
+    ):
+        try:
+            raw = fn()
+            if raw:
+                return raw
+        except Exception as e:
+            logger.warning(f"[인스타툰] {name} 예외: {e}")
     return None
 
 
@@ -2102,7 +2192,7 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
     pub_path = os.path.join(public_dir, fname)
     dl_path = os.path.join(download_dir, fname)
 
-    raw = _try_gemini_image_bytes(plan.get("final_image_prompt") or "", plan.get("negative_prompt") or "")
+    raw = _try_ai_image_bytes(plan.get("final_image_prompt") or "", plan.get("negative_prompt") or "")
     if raw:
         try:
             from io import BytesIO
@@ -2118,7 +2208,7 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
         board = _render_plan_storyboard(plan, blogger_url)
         board.save(pub_path, format="PNG", optimize=True)
         board.save(dl_path, format="PNG", optimize=True)
-        logger.warning("[인스타툰] Gemini 이미지 실패 → 웹툰 폴백 저장 (API 모델/권한 확인 필요)")
+        logger.warning("[인스타툰] AI 이미지 실패 → 웹툰 폴백 (Cloudflare/HF/Pollinations 확인)")
 
     target = (blogger_url or "").strip() or (SITE_URL or "https://learnkoreanseekoreans.blogspot.com").rstrip("/")
     safe_target = html.escape(target, quote=True)
