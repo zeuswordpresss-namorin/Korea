@@ -1747,53 +1747,249 @@ _MOOD_PALETTE = {
 }
 
 
+
+
 def _try_gemini_image_bytes(prompt: str, negative: str = "") -> Optional[bytes]:
-    """가능하면 Gemini/Imagen 계열로 이미지 바이트 생성. 실패 시 None."""
+    """Gemini 네이티브 이미지 생성 (Nano Banana / Flash Image / Pro Image).
+
+    REST: models/{model}:generateContent
+    generationConfig.responseModalities = ["IMAGE"]
+    """
+    # 글 생성과 동일한 Secrets의 GEMINI_API_KEY 만 사용 (추가 키 불필요)
     if not GEMINI_API_KEY:
+        logger.warning("[인스타툰] GEMINI_API_KEY 시크릿 없음 — 이미지 API 건너뜀")
         return None
-    full_prompt = prompt.strip()
+    full_prompt = (prompt or "").strip()
+    if not full_prompt:
+        return None
+    # 웹툰 지시 보강
+    full_prompt = (
+        full_prompt
+        + "\n\nCreate ONE finished image only. Korean Instagram webtoon style, "
+        "clean line art, expressive faces, simple background, 4:5 or 3:4 portrait. "
+        "Speech bubbles must use exact Korean spelling when Korean text is specified."
+    )
     if negative:
-        full_prompt += f"\n\nAvoid: {negative[:400]}"
-    # 후보 모델 (환경변수로 덮어쓰기 가능)
-    models = [
-        os.environ.get("GEMINI_IMAGE_MODEL", "").strip(),
-        "gemini-2.0-flash-preview-image-generation",
-        "gemini-2.0-flash-exp-image-generation",
-    ]
-    models = [m for m in models if m]
-    for model in models:
-        try:
-            endpoint = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-                f"?key={GEMINI_API_KEY}"
-            )
-            payload = {
-                "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
-                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-            }
-            r = requests.post(endpoint, json=payload, timeout=90)
-            if r.status_code in (429, 503):
-                logger.warning(f"[인스타툰] 이미지 API {r.status_code} ({model})")
-                continue
-            if not r.ok:
-                logger.warning(f"[인스타툰] 이미지 API HTTP {r.status_code} ({model}): {r.text[:180]}")
-                continue
-            parts = (((r.json().get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
-            for p in parts:
+        full_prompt += f"\n\nDo not include: {negative[:300]}"
+
+    import base64 as b64mod
+
+    def _extract_image(data: dict) -> Optional[bytes]:
+        for cand in data.get("candidates") or []:
+            content = cand.get("content") or {}
+            for p in content.get("parts") or []:
                 inline = p.get("inlineData") or p.get("inline_data") or {}
                 data_b64 = inline.get("data")
-                mime = (inline.get("mimeType") or inline.get("mime_type") or "")
-                if data_b64 and "image" in mime:
-                    import base64 as b64
-                    logger.info(f"[인스타툰] 이미지 모델 생성 성공: {model}")
-                    return b64.b64decode(data_b64)
+                mime = str(inline.get("mimeType") or inline.get("mime_type") or "")
+                if data_b64 and (not mime or "image" in mime):
+                    try:
+                        return b64mod.b64decode(data_b64)
+                    except Exception:
+                        continue
+            # finishReason logging
+            fr = cand.get("finishReason") or cand.get("finish_reason")
+            if fr:
+                logger.warning(f"[인스타툰] finishReason={fr}")
+        # Imagen predict
+        for pred in data.get("predictions") or []:
+            b64 = pred.get("bytesBase64Encoded") or pred.get("image") or ""
+            if b64:
+                return b64mod.b64decode(b64)
+        # promptFeedback
+        fb = data.get("promptFeedback") or data.get("prompt_feedback")
+        if fb:
+            logger.warning(f"[인스타툰] promptFeedback={fb}")
+        return None
+
+    # 기존 GEMINI_API_KEY(Google AI Studio)로 호출 — 추가 시크릿 불필요
+    # 선택: GEMINI_IMAGE_MODEL 로 모델만 지정 가능 (키는 항상 GEMINI_API_KEY)
+    env_model = os.environ.get("GEMINI_IMAGE_MODEL", "").strip()
+    models = [
+        env_model,
+        "gemini-2.5-flash-image",           # Nano Banana (2.5 계열, 동일 API 키)
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
+        "imagen-3.0-generate-002",
+    ]
+    # unique preserve order
+    seen = set()
+    models = [m for m in models if m and not (m in seen or seen.add(m))]
+
+    last_err = ""
+    for model in models:
+        try:
+            if model.startswith("imagen"):
+                endpoint = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predict"
+                    f"?key={GEMINI_API_KEY}"
+                )
+                payload = {
+                    "instances": [{"prompt": full_prompt}],
+                    "parameters": {"sampleCount": 1, "aspectRatio": "3:4"},
+                }
+            else:
+                endpoint = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                    f"?key={GEMINI_API_KEY}"
+                )
+                # 공식 문서: responseModalities IMAGE + aspectRatio
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
+                    "generationConfig": {
+                        "responseModalities": ["IMAGE"],
+                        "imageConfig": {"aspectRatio": "3:4"},
+                    },
+                }
+            logger.info(f"[인스타툰] Gemini 이미지 요청 (GEMINI_API_KEY): {model}")
+            r = requests.post(endpoint, json=payload, timeout=150)
+            if r.status_code in (429, 503):
+                last_err = f"{model} HTTP {r.status_code}"
+                logger.warning(f"[인스타툰] {last_err} — 다음 모델 시도")
+                time.sleep(8)
+                continue
+            if r.status_code == 404:
+                last_err = f"{model} not found (404)"
+                logger.warning(f"[인스타툰] {last_err}")
+                continue
+            if not r.ok:
+                last_err = f"{model} HTTP {r.status_code}: {r.text[:300]}"
+                logger.warning(f"[인스타툰] {last_err}")
+                # responseModalities 키 대소문자 변형 재시도
+                if r.status_code == 400 and "responseModalities" in r.text:
+                    payload2 = {
+                        "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
+                        "generationConfig": {
+                            "responseModalities": ["Text", "Image"],
+                        },
+                    }
+                    r2 = requests.post(endpoint, json=payload2, timeout=150)
+                    if r2.ok:
+                        raw = _extract_image(r2.json())
+                        if raw:
+                            logger.info(f"[인스타툰] AI 이미지 성공(재시도): {model}")
+                            return raw
+                continue
+            raw = _extract_image(r.json())
+            if raw:
+                logger.info(f"[인스타툰] AI 이미지 성공: {model} ({len(raw)} bytes)")
+                return raw
+            last_err = f"{model} 응답에 이미지 파트 없음: {r.text[:250]}"
+            logger.warning(f"[인스타툰] {last_err}")
         except Exception as e:
-            logger.warning(f"[인스타툰] 이미지 모델 실패({model}): {e}")
+            last_err = f"{model} 예외: {e}"
+            logger.warning(f"[인스타툰] {last_err}")
+    logger.error(f"[인스타툰] Gemini 이미지 생성 최종 실패 — {last_err}")
     return None
 
 
+
+def _emotion_pose_key(emotion: str) -> str:
+    e = (emotion or "").lower()
+    pairs = [
+        (("감탄", "기쁨", "설렘", "귀여"), "happy"),
+        (("놀람",), "shock"),
+        (("당황", "민망", "부끄", "애매"), "think"),
+        (("황당", "어이", "실망", "답답"), "annoyed"),
+        (("분노", "억울"), "angry"),
+        (("걱정",), "worry"),
+        (("체념", "괜찮"), "tired_smile"),
+        (("감동", "공감", "정"), "warm"),
+    ]
+    for keys, pose in pairs:
+        if any(k in e for k in keys):
+            return pose
+    return "neutral"
+
+
+def _draw_webtoon_character(draw, cx, cy, pose: str, scale: float = 1.0):
+    """귀여운 웹툰 인물 (메타 라벨 없음)."""
+    s = scale
+    ink = (30, 30, 30)
+    skin = (255, 224, 198)
+    hair = (40, 40, 45)
+    blush = (255, 160, 150)
+    # hair
+    draw.ellipse([cx - 58 * s, cy - 78 * s, cx + 58 * s, cy - 10 * s], fill=hair, outline=ink, width=3)
+    # head
+    draw.ellipse([cx - 52 * s, cy - 58 * s, cx + 52 * s, cy + 48 * s], fill=skin, outline=ink, width=3)
+    # eyes + mouth by pose
+    ey = cy - 8 * s
+    if pose in ("happy", "warm"):
+        for ex in (-20, 20):
+            draw.arc([cx + (ex - 12) * s, ey - 6 * s, cx + (ex + 12) * s, ey + 12 * s], 200, 340, fill=ink, width=3)
+        draw.arc([cx - 14 * s, cy + 12 * s, cx + 14 * s, cy + 30 * s], 20, 160, fill=ink, width=3)
+    elif pose == "shock":
+        for ex in (-20, 20):
+            draw.ellipse([cx + (ex - 10) * s, ey - 14 * s, cx + (ex + 10) * s, ey + 8 * s], fill=ink)
+            draw.ellipse([cx + (ex - 3) * s, ey - 8 * s, cx + (ex + 4) * s, ey - 1 * s], fill=(255, 255, 255))
+        draw.ellipse([cx - 10 * s, cy + 10 * s, cx + 10 * s, cy + 30 * s], fill=ink)
+        draw.ellipse([cx + 48 * s, cy - 50 * s, cx + 62 * s, cy - 36 * s], fill=(255, 80, 80))
+        draw.rectangle([cx + 53 * s, cy - 70 * s, cx + 58 * s, cy - 52 * s], fill=(255, 80, 80))
+    elif pose in ("think", "worry"):
+        for ex in (-20, 20):
+            draw.arc([cx + (ex - 10) * s, ey - 4 * s, cx + (ex + 10) * s, ey + 12 * s], 200, 340, fill=ink, width=3)
+        draw.line([(cx - 8 * s, cy + 18 * s), (cx + 8 * s, cy + 18 * s)], fill=ink, width=2)
+        draw.ellipse([cx + 40 * s, cy - 25 * s, cx + 52 * s, cy - 8 * s], fill=(150, 210, 255), outline=ink, width=2)
+        draw.text((cx + 55 * s, cy - 70 * s), "?", font=_load_font(int(34 * s)), fill=ink)
+    elif pose in ("annoyed", "angry"):
+        for ex in (-20, 20):
+            draw.ellipse([cx + (ex - 8) * s, ey - 10 * s, cx + (ex + 8) * s, ey + 6 * s], fill=ink)
+        draw.line([(cx - 32 * s, ey - 22 * s), (cx - 8 * s, ey - 12 * s)], fill=ink, width=3)
+        draw.line([(cx + 8 * s, ey - 12 * s), (cx + 32 * s, ey - 22 * s)], fill=ink, width=3)
+        draw.arc([cx - 12 * s, cy + 16 * s, cx + 12 * s, cy + 32 * s], 200, 340, fill=ink, width=3)
+    elif pose == "tired_smile":
+        for ex in (-20, 20):
+            draw.arc([cx + (ex - 11) * s, ey - 2 * s, cx + (ex + 11) * s, ey + 14 * s], 200, 340, fill=ink, width=3)
+        draw.arc([cx - 12 * s, cy + 14 * s, cx + 12 * s, cy + 28 * s], 20, 150, fill=ink, width=2)
+        draw.ellipse([cx + 38 * s, cy - 5 * s, cx + 48 * s, cy + 12 * s], fill=(150, 210, 255), outline=ink, width=1)
+    else:
+        for ex in (-20, 20):
+            draw.ellipse([cx + (ex - 7) * s, ey - 10 * s, cx + (ex + 7) * s, ey + 6 * s], fill=ink)
+        draw.arc([cx - 12 * s, cy + 10 * s, cx + 12 * s, cy + 26 * s], 20, 160, fill=ink, width=2)
+    # blush
+    for ex in (-30, 30):
+        draw.ellipse([cx + (ex - 9) * s, cy + 8 * s, cx + (ex + 9) * s, cy + 18 * s], fill=blush)
+    # body
+    shirt = (120, 170, 230) if pose != "angry" else (220, 100, 100)
+    draw.rounded_rectangle(
+        [cx - 55 * s, cy + 48 * s, cx + 55 * s, cy + 150 * s],
+        radius=int(22 * s), fill=shirt, outline=ink, width=3,
+    )
+    # arm gesture
+    if pose in ("happy", "shock"):
+        draw.line([(cx + 55 * s, cy + 70 * s), (cx + 95 * s, cy + 30 * s)], fill=ink, width=5)
+        draw.ellipse([cx + 88 * s, cy + 18 * s, cx + 110 * s, cy + 40 * s], fill=skin, outline=ink, width=2)
+    elif pose in ("think", "worry"):
+        draw.line([(cx + 50 * s, cy + 70 * s), (cx + 75 * s, cy + 20 * s)], fill=ink, width=5)
+        draw.ellipse([cx + 68 * s, cy + 5 * s, cx + 90 * s, cy + 28 * s], fill=skin, outline=ink, width=2)
+
+
+def _draw_place_simple(draw, place: str, w: int, ground_y: int, ink, accent):
+    p = (place or "").lower()
+    if any(k in p for k in ("식당", "카페", "음식", "편의")):
+        # table + cup
+        draw.ellipse([w // 2 - 90, ground_y - 20, w // 2 + 90, ground_y + 30], outline=ink, width=3)
+        draw.ellipse([w // 2 + 100, ground_y - 50, w // 2 + 150, ground_y], outline=ink, width=3)
+        draw.rectangle([w // 2 + 118, ground_y, w // 2 + 132, ground_y + 40], outline=ink, width=2)
+    elif any(k in p for k in ("직장", "회사", "회의", "학교")):
+        draw.rectangle([60, ground_y - 80, 180, ground_y + 20], outline=ink, width=2)
+        draw.rectangle([w - 200, ground_y - 100, w - 70, ground_y + 20], outline=ink, width=2)
+    elif any(k in p for k in ("메신저", "sns", "전화")):
+        draw.rounded_rectangle([w // 2 + 80, ground_y - 120, w // 2 + 170, ground_y + 20], radius=16, outline=ink, width=3)
+    elif any(k in p for k in ("거리", "여행", "지하철", "버스")):
+        draw.polygon([(50, ground_y), (120, ground_y - 100), (190, ground_y)], outline=ink, width=3)
+        draw.line([(40, ground_y + 10), (w - 40, ground_y + 10)], fill=(180, 180, 180), width=3)
+    elif any(k in p for k in ("집", "가족")):
+        draw.polygon([(70, ground_y - 20), (130, ground_y - 90), (190, ground_y - 20)], outline=ink, width=3)
+        draw.rectangle([85, ground_y - 20, 175, ground_y + 40], outline=ink, width=2)
+    elif any(k in p for k in ("쇼핑",)):
+        draw.rectangle([w - 220, ground_y - 90, w - 80, ground_y + 20], outline=ink, width=2)
+
+
 def _render_plan_storyboard(plan: Dict[str, Any], blogger_url: str = "") -> Image.Image:
-    """이미지 API 없을 때: 마스터 콘티 기반 4:5 스토리보드(웹툰 톤) 렌더."""
+    """마스터 콘티 → 실제 웹툰 1컷 (메타 라벨 박스 없음)."""
     w, h = INSTATOON_SIZE
     mood = (plan.get("color_mood") or "soft").lower()
     pal = _MOOD_PALETTE.get(mood) or _MOOD_PALETTE["soft"]
@@ -1803,86 +1999,79 @@ def _render_plan_storyboard(plan: Dict[str, Any], blogger_url: str = "") -> Imag
     ink = (30, 30, 34)
     accent = pal[2]
     expr = plan.get("highlight_expression") or ""
+    pose = _emotion_pose_key(str(plan.get("emotion_primary") or ""))
 
-    # 상단: 상황(사건) — 설명문이 아닌 훅
-    y = 56
+    # 1) situation hook (short)
+    y = 48
     hook = plan.get("visual_hook") or plan.get("situation") or ""
-    for line in _wrap_by_pixel_width(draw, hook, _load_font(32), w - 100)[:2]:
-        lb = draw.textbbox((0, 0), line, font=_load_font(32))
-        draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=_load_font(32), fill=(90, 90, 95))
-        y += (lb[3] - lb[1]) + 8
-    y += 20
+    for line in _wrap_by_pixel_width(draw, hook, _load_font(30), w - 120)[:2]:
+        lb = draw.textbbox((0, 0), line, font=_load_font(30))
+        draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=_load_font(30), fill=(100, 100, 105))
+        y += (lb[3] - lb[1]) + 6
+    y += 18
 
-    # 말풍선
+    # 2) speech bubbles only
     for i, b in enumerate((plan.get("bubbles") or [expr])[:3]):
         b = str(b).strip()
         if not b:
             continue
-        font = _load_font(44 if expr and expr in b else 34)
-        lines = _wrap_by_pixel_width(draw, b, font, 780)[:3]
+        font = _load_font(42 if expr and expr in b else 34)
+        lines = _wrap_by_pixel_width(draw, b, font, 760)[:3]
         pad = 18
         widths = [draw.textbbox((0, 0), ln, font=font)[2] - draw.textbbox((0, 0), ln, font=font)[0] for ln in lines]
         heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
         bw = max(widths) + pad * 2
-        bh = sum(heights) + 8 * (len(lines) - 1) + pad * 2
-        x = 90 if i == 0 else 130
-        outline = accent if (expr and expr in b) else ink
-        draw.rounded_rectangle([x, y, x + bw, y + bh], radius=22, fill=(255, 255, 255), outline=outline, width=4)
-        draw.polygon([(x + 36, y + bh - 1), (x + 22, y + bh + 20), (x + 62, y + bh - 1)], fill=(255, 255, 255), outline=outline)
+        bh = sum(heights) + 8 * max(len(lines) - 1, 0) + pad * 2
+        x = 100 if i == 0 else 140
+        hi = bool(expr and expr in b)
+        draw.rounded_rectangle([x, y, x + bw, y + bh], radius=24, fill=(255, 255, 255), outline=accent if hi else ink, width=4 if hi else 3)
+        draw.polygon([(x + 40, y + bh - 1), (x + 24, y + bh + 22), (x + 70, y + bh - 1)], fill=(255, 255, 255), outline=accent if hi else ink)
         cy = y + pad
         for j, ln in enumerate(lines):
             draw.text((x + pad, cy), ln, font=font, fill=ink)
             cy += heights[j] + 8
-        y += bh + 28
+        y += bh + 30
 
     if plan.get("use_foreigner") and plan.get("foreign_bubble"):
-        fb = str(plan["foreign_bubble"])
-        ff = _load_font(30)
-        draw.rounded_rectangle([w - 380, y - 20, w - 40, y + 60], radius=18, fill=(255, 255, 255), outline=ink, width=3)
-        draw.text((w - 360, y), fb, font=ff, fill=ink)
+        fb = str(plan["foreign_bubble"])[:40]
+        draw.rounded_rectangle([w - 360, max(y - 90, 200), w - 50, max(y - 90, 200) + 70], radius=20, fill=(255, 255, 255), outline=ink, width=3)
+        draw.text((w - 340, max(y - 75, 215)), fb, font=_load_font(28), fill=ink)
 
-    # 중앙 감정 라벨 + 장소 (캐릭터 과장 드로잉 대신 콘티 시각화)
-    mid_y = int(h * 0.52)
-    draw.rounded_rectangle([80, mid_y - 40, w - 80, mid_y + 160], radius=28, fill=(255, 255, 255), outline=ink, width=3)
-    em = f"{plan.get('emotion_primary') or ''} {plan.get('emotion_secondary') or ''}".strip()
-    draw.text((110, mid_y - 20), f"감정 · {em}", font=_load_font(28), fill=accent)
-    draw.text((110, mid_y + 20), f"장소 · {plan.get('place') or ''}", font=_load_font(28), fill=ink)
-    cam = plan.get("camera") or "medium"
-    draw.text((110, mid_y + 60), f"카메라 · {cam}", font=_load_font(26), fill=(80, 80, 80))
-    chars = plan.get("characters") or []
-    if chars:
-        ch0 = chars[0]
-        draw.text(
-            (110, mid_y + 100),
-            f"{ch0.get('role','')}: {ch0.get('face','')} / {ch0.get('action','')}"[:42],
-            font=_load_font(26),
-            fill=(60, 60, 60),
-        )
+    # 3) character + place (center-bottom of art area)
+    char_y = int(h * 0.55)
+    ground = char_y + 160
+    _draw_place_simple(draw, str(plan.get("place") or ""), w, ground, ink, accent)
+    if plan.get("use_foreigner"):
+        _draw_webtoon_character(draw, w // 2 - 120, char_y, pose, scale=1.1)
+        _draw_webtoon_character(draw, w // 2 + 140, char_y + 10, "shock", scale=1.0)
+    else:
+        _draw_webtoon_character(draw, w // 2, char_y, pose, scale=1.2)
 
-    # 하단 문화 메시지 + 블로그 CTA
+    # 4) cultural footer + CTA
     foot = (plan.get("footer") or "").strip()
-    fy = h - 160
+    fy = h - 150
     for line in _wrap_by_pixel_width(draw, foot, _load_font(26), w - 100)[:2]:
         lb = draw.textbbox((0, 0), line, font=_load_font(26))
         draw.text(((w - (lb[2] - lb[0])) / 2, fy), line, font=_load_font(26), fill=(70, 70, 75))
         fy += (lb[3] - lb[1]) + 6
     if blogger_url:
-        draw.rectangle([0, h - 72, w, h], fill=accent)
+        draw.rectangle([0, h - 70, w, h], fill=accent)
         cta = "탭하면 구글 블로그에서 이어서 읽기"
         b = draw.textbbox((0, 0), cta, font=_load_font(28))
         draw.text(((w - (b[2] - b[0])) / 2, h - 58), cta, font=_load_font(28), fill=(255, 255, 255))
-        u = blogger_url.replace("https://", "").replace("http://", "")
-        b2 = draw.textbbox((0, 0), u, font=_load_font(20))
-        draw.text(((w - (b2[2] - b2[0])) / 2, h - 28), u, font=_load_font(20), fill=(255, 255, 255))
+        u = blogger_url.replace("https://", "").replace("http://", "")[:60]
+        b2 = draw.textbbox((0, 0), u, font=_load_font(18))
+        draw.text(((w - (b2[2] - b2[0])) / 2, h - 26), u, font=_load_font(18), fill=(255, 255, 255))
 
     tag = f"「{expr}」"
     tb = draw.textbbox((0, 0), tag, font=_load_font(22))
     draw.rounded_rectangle(
-        [w - 56 - (tb[2] - tb[0]), 28, w - 24, 28 + (tb[3] - tb[1]) + 12],
+        [w - 56 - (tb[2] - tb[0]), 24, w - 24, 24 + (tb[3] - tb[1]) + 12],
         radius=10, fill=(255, 255, 255), outline=accent, width=2,
     )
-    draw.text((w - 48 - (tb[2] - tb[0]), 32), tag, font=_load_font(22), fill=accent)
+    draw.text((w - 48 - (tb[2] - tb[0]), 28), tag, font=_load_font(22), fill=accent)
     return img
+
 
 
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
@@ -1929,7 +2118,7 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
         board = _render_plan_storyboard(plan, blogger_url)
         board.save(pub_path, format="PNG", optimize=True)
         board.save(dl_path, format="PNG", optimize=True)
-        logger.info("[인스타툰] 마스터 콘티 스토리보드 저장")
+        logger.warning("[인스타툰] Gemini 이미지 실패 → 웹툰 폴백 저장 (API 모델/권한 확인 필요)")
 
     target = (blogger_url or "").strip() or (SITE_URL or "https://learnkoreanseekoreans.blogspot.com").rstrip("/")
     safe_target = html.escape(target, quote=True)
