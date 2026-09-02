@@ -2416,17 +2416,377 @@ def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str
 
 
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """인스타툰 생성 비활성화 — 블로그 본문·썸네일·발행만 유지."""
-    logger.info("[인스타툰] 생성 비활성화됨 — 건너뜀")
+    """첨부 참고용 8컷 교육형 웹툰 1장 생성 (2열×4행 인포그래픽 스타일)."""
+    expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "") or "이 표현"
+    slug = _instatoon_slug(expr, article.get("title") or "")
+    public_dir = os.path.join(INSTATOON_PUBLIC_DIR, slug)
+    download_dir = os.path.join(INSTATOON_DOWNLOAD_DIR, slug)
+    os.makedirs(public_dir, exist_ok=True)
+    os.makedirs(download_dir, exist_ok=True)
+
+    plan = _plan_edu8_webtoon(article)
+    try:
+        with open(os.path.join(download_dir, "plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f, ensure_ascii=False, indent=2)
+        with open(os.path.join(public_dir, "plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"[인스타툰] plan 저장 실패: {e}")
+
+    img = _render_edu8_webtoon(plan, blogger_url)
+    fname = "01.png"
+    pub_path = os.path.join(public_dir, fname)
+    dl_path = os.path.join(download_dir, fname)
+    img.save(pub_path, format="PNG", optimize=True)
+    img.save(dl_path, format="PNG", optimize=True)
+    logger.info(f"[인스타툰] 8컷 교육형 웹툰 저장: {dl_path}")
+
+    target = (blogger_url or "").strip() or (SITE_URL or "https://learnkoreanseekoreans.blogspot.com").rstrip("/")
+    safe_target = html.escape(target, quote=True)
+    click_html = (
+        "<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        f"<title>{html.escape(expr)}</title>"
+        f"<meta http-equiv=\"refresh\" content=\"0;url={safe_target}\">"
+        f"<script>location.replace({json.dumps(target)});</script></head><body>"
+        f"<a href=\"{safe_target}\"><img src=\"{html.escape(fname)}\" style=\"width:100%\" alt=\"edu webtoon\"></a>"
+        "</body></html>"
+    )
+    for folder in (download_dir, public_dir):
+        try:
+            with open(os.path.join(folder, "index.html"), "w", encoding="utf-8") as hf:
+                hf.write(click_html)
+        except Exception:
+            pass
+
+    public_urls = [f"{SITE_URL.rstrip('/')}/instatoon/{slug}/{fname}"] if SITE_URL else []
     return {
-        "slug": "",
-        "local_paths": [],
-        "public_urls": [],
-        "click_url": "",
-        "blogger_url": (blogger_url or "").strip(),
-        "download_dir": "",
-        "disabled": True,
+        "slug": slug,
+        "local_paths": [dl_path],
+        "public_urls": public_urls,
+        "click_url": f"{SITE_URL.rstrip('/')}/instatoon/{slug}/" if SITE_URL else "",
+        "blogger_url": target,
+        "download_dir": download_dir,
+        "style": "edu8",
     }
+
+
+def _plan_edu8_webtoon(article: Dict[str, Any]) -> Dict[str, Any]:
+    """표현+본문 → 8컷 교육 콘티 (Gemini JSON, 실패 시 로컬 폴백)."""
+    expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "") or "이 표현"
+    title = article.get("title") or ""
+    meta = article.get("meta_description") or ""
+    body = _strip_html_for_instatoon(article.get("html_body") or "", 2200)
+    fallback = _fallback_edu8_plan(expr, meta, body)
+
+    if not GEMINI_API_KEY:
+        return fallback
+
+    system = (
+        "당신은 한국어 교육 인스타툰 작가다. 표현+블로그 본문만으로 "
+        "첨부 예시와 같은 8컷 교육형 웹툰 콘티를 JSON으로만 작성한다. "
+        "본문에 없는 사실·과장 일반화 금지. 대사는 구어체. "
+        "마크다운 없이 JSON만 출력.\n"
+        "스키마:{\n"
+        '  "expression":"표현",\n'
+        '  "panel1":{"title":"상황 한 줄","staff":"직원/상대 대사","learner":"학습자 생각"},\n'
+        '  "panel2":{"title":"직역 의문 한 줄","thought":"학습자 생각"},\n'
+        '  "panel3":{"title":"의미 다양성 한 줄","items":[{"icon":"⚠️|❤️|🌿|ℹ️","label":"상황","en":"영어 뉘앙스"}]},\n'
+        '  "panel4":{"title":"실제 한국인 말","ex1_label":"예시1 상황","ex1_a":"A대사","ex1_b":"B대사","ex2_label":"예시2 상황","ex2_a":"A","ex2_b":"B"},\n'
+        '  "panel5":{"title":"핵심 한 줄","points":["포인트1","포인트2","포인트3","포인트4"]},\n'
+        '  "panel6":{"title":"문화 메시지","left":"한국인 대사","right":"학습자 반응"},\n'
+        '  "panel7":{"title":"말 속에 담긴 마음","items":["마음1","마음2","마음3"],"closing":"한 줄 마무리"},\n'
+        '  "panel8":{"title":"독자 질문","q1":"질문1","q2":"질문2","cta":"댓글 유도 한 줄"}\n'
+        "}"
+    )
+    user = f"표현: {expr}\n제목: {title}\n메타: {meta}\n본문:\n{body or '(없음)'}"
+    try:
+        url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
+        resp = requests.post(
+            url,
+            json={
+                "system_instruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 2500,
+                    "responseMimeType": "application/json",
+                },
+            },
+            timeout=55,
+        )
+        if not resp.ok:
+            logger.warning(f"[인스타툰] edu8 Gemini HTTP {resp.status_code}")
+            return fallback
+        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        m = re.search(r"\{[\s\S]*\}", text_out)
+        if not m:
+            return fallback
+        parsed = json.loads(m.group(0))
+        parsed["expression"] = expr
+        # merge missing keys from fallback
+        for k, v in fallback.items():
+            if k not in parsed or parsed[k] in (None, "", [], {}):
+                parsed[k] = v
+        logger.info(f"[인스타툰] edu8 콘티 OK — {expr}")
+        return parsed
+    except Exception as e:
+        logger.warning(f"[인스타툰] edu8 콘티 폴백: {e}")
+        return fallback
+
+
+def _fallback_edu8_plan(expr: str, meta: str, body: str) -> Dict[str, Any]:
+    short = (meta or body or f"「{expr}」의 실제 쓰임")[:80]
+    return {
+        "expression": expr,
+        "panel1": {
+            "title": f"일상에서 「{expr}」를 들었을 때",
+            "staff": f"{expr}~!",
+            "learner": "어? 이 상황에서 왜 저 말이지…?",
+        },
+        "panel2": {
+            "title": f"「{expr}」를 직역하면 어색할 수 있어요",
+            "thought": "영어로는 뭐라고 하지? 느낌이 다른 것 같은데…",
+        },
+        "panel3": {
+            "title": f"한국어 「{expr}」는 상황에 따라 의미가 달라져요",
+            "items": [
+                {"icon": "⚠️", "label": "경계·주의할 때", "en": "Be careful"},
+                {"icon": "❤️", "label": "배려·걱정할 때", "en": "Take care"},
+                {"icon": "🌿", "label": "안부를 물을 때", "en": "Get home safely"},
+                {"icon": "ℹ️", "label": "상황을 챙길 때", "en": "Be mindful"},
+            ],
+        },
+        "panel4": {
+            "title": "실제 한국 사람들은 이렇게 말해요",
+            "ex1_label": "예시 1 · 일상 배려",
+            "ex1_a": f"{expr}~",
+            "ex1_b": "네! 감사해요~",
+            "ex2_label": "예시 2 · 걱정할 때",
+            "ex2_a": "요즘 좀 힘든가 봐…",
+            "ex2_b": f"그럼 {expr}, 푹 쉬어!",
+        },
+        "panel5": {
+            "title": f"그래서 「{expr}」는 항상 직역이 아니에요!",
+            "points": [
+                f"「{expr}」= 상황에 따라 다른 뉘앙스",
+                "상대를 챙기는 마음이 핵심일 때가 많아요",
+                short,
+                "말보다 상황이 의미를 정해 주기도 해요",
+            ],
+        },
+        "panel6": {
+            "title": "한국어는 위험을 경고하기보다 안부를 전하는 경우가 많아요",
+            "left": f"{expr}~",
+            "right": "따뜻한 마음이 느껴져요!",
+        },
+        "panel7": {
+            "title": f"「{expr}」라는 짧은 말 속에는 이런 마음이 담겨 있어요",
+            "items": ["당신을 걱정해요", "좋은 관계를 이어가고 싶어요", "서로를 배려하는 문화예요"],
+            "closing": "한국어를 배우면 단어가 아니라 한국인이 보입니다.",
+        },
+        "panel8": {
+            "title": "여러분의 언어에서는 어떤가요?",
+            "q1": "비슷한 상황에서 뭐라고 말하나요?",
+            "q2": "직역하면 어색한 표현이 있나요?",
+            "cta": "댓글로 알려 주세요! 서로의 문화를 함께 나눠요",
+        },
+    }
+
+
+def _render_edu8_webtoon(plan: Dict[str, Any], blogger_url: str = "") -> Image.Image:
+    """2열×4행 교육형 웹툰 (참고 이미지 레이아웃)."""
+    W, H = 1080, 1920  # 인스타 스토리/세로 가독성
+    bg = (252, 250, 246)
+    card_bg = (255, 255, 255)
+    ink = (40, 40, 45)
+    muted = (90, 90, 98)
+    accent = (255, 105, 120)
+    accent2 = (120, 170, 230)
+    green = (90, 170, 120)
+    pink = (255, 150, 170)
+
+    img = Image.new("RGB", (W, H), bg)
+    draw = ImageDraw.Draw(img)
+    expr = plan.get("expression") or ""
+    margin = 18
+    gap = 12
+    cols, rows = 2, 4
+    usable_w = W - margin * 2 - gap
+    usable_h = H - margin * 2 - gap * 3 - 70  # 하단 CTA
+    cw = usable_w // cols
+    ch = usable_h // rows
+
+    def panel_box(i: int):
+        r, c = divmod(i, cols)
+        x0 = margin + c * (cw + gap)
+        y0 = margin + r * (ch + gap)
+        return x0, y0, x0 + cw, y0 + ch
+
+    def round_card(box, fill=card_bg):
+        draw.rounded_rectangle(box, radius=18, fill=fill, outline=(230, 225, 220), width=2)
+
+    def badge(x, y, n, color=accent):
+        draw.ellipse([x, y, x + 36, y + 36], fill=color)
+        f = _load_font(22)
+        t = str(n)
+        b = draw.textbbox((0, 0), t, font=f)
+        draw.text((x + 18 - (b[2] - b[0]) / 2, y + 18 - (b[3] - b[1]) / 2 - 2), t, font=f, fill=(255, 255, 255))
+
+    def wrap(text, font, max_w):
+        return _wrap_by_pixel_width(draw, text or "", font, max_w)
+
+    def text_block(x, y, lines, font, fill, line_gap=4):
+        cy = y
+        for ln in lines:
+            draw.text((x, cy), ln, font=font, fill=fill)
+            bb = draw.textbbox((0, 0), ln, font=font)
+            cy += (bb[3] - bb[1]) + line_gap
+        return cy
+
+    # —— Panel 1 ——
+    p1 = plan.get("panel1") or {}
+    x0, y0, x1, y1 = panel_box(0)
+    round_card([x0, y0, x1, y1])
+    badge(x0 + 12, y0 + 12, 1)
+    title_f = _load_font(22)
+    body_f = _load_font(20)
+    small_f = _load_font(18)
+    text_block(x0 + 56, y0 + 14, wrap(p1.get("title") or "", title_f, cw - 70)[:2], title_f, ink)
+    # simple cafe characters
+    draw.ellipse([x0 + 40, y0 + 90, x0 + 100, y0 + 150], outline=ink, width=2)  # learner head
+    draw.ellipse([x0 + cw - 110, y0 + 85, x0 + cw - 50, y0 + 145], outline=ink, width=2)  # staff
+    draw.rounded_rectangle([x0 + 30, y0 + 160, x0 + 55, y0 + ch - 20], radius=4, outline=ink, width=2)
+    draw.rounded_rectangle([x0 + cw - 90, y0 + 150, x0 + cw - 30, y0 + ch - 20], radius=4, outline=ink, width=2)
+    # bubbles
+    bf = _load_font(18)
+    staff = p1.get("staff") or expr
+    learner = p1.get("learner") or ""
+    for bx, by, msg, side in (
+        (x0 + cw // 2 - 20, y0 + 70, staff, "r"),
+        (x0 + 30, y0 + ch - 70, learner, "l"),
+    ):
+        lines = wrap(msg, bf, 200)[:2]
+        if not lines:
+            continue
+        tw = max(draw.textbbox((0, 0), ln, font=bf)[2] for ln in lines) + 16
+        th = sum(draw.textbbox((0, 0), ln, font=bf)[3] - draw.textbbox((0, 0), ln, font=bf)[1] for ln in lines) + 12
+        draw.rounded_rectangle([bx, by, bx + tw, by + th], radius=10, fill=(255, 255, 255), outline=ink, width=2)
+        text_block(bx + 8, by + 6, lines, bf, ink, 2)
+
+    # —— Panel 2 ——
+    p2 = plan.get("panel2") or {}
+    x0, y0, x1, y1 = panel_box(1)
+    round_card([x0, y0, x1, y1], fill=(255, 248, 235))
+    badge(x0 + 12, y0 + 12, 2, accent2)
+    text_block(x0 + 56, y0 + 14, wrap(p2.get("title") or "", title_f, cw - 70)[:3], title_f, ink)
+    draw.ellipse([x0 + cw // 2 - 40, y0 + 95, x0 + cw // 2 + 40, y0 + 175], outline=ink, width=2)
+    thought = p2.get("thought") or ""
+    lines = wrap(thought, small_f, cw - 50)[:3]
+    text_block(x0 + 24, y0 + ch - 90, lines, small_f, muted)
+
+    # —— Panel 3 ——
+    p3 = plan.get("panel3") or {}
+    x0, y0, x1, y1 = panel_box(2)
+    round_card([x0, y0, x1, y1])
+    badge(x0 + 12, y0 + 12, 3, green)
+    cy = text_block(x0 + 56, y0 + 14, wrap(p3.get("title") or "", title_f, cw - 70)[:2], title_f, ink)
+    items = p3.get("items") or []
+    iy = cy + 8
+    for it in items[:4]:
+        if not isinstance(it, dict):
+            continue
+        label = f"{it.get('icon') or '•'} {it.get('label') or ''}"
+        en = it.get("en") or ""
+        draw.rounded_rectangle([x0 + 16, iy, x1 - 16, iy + 48], radius=10, fill=(248, 250, 255), outline=(220, 225, 235), width=1)
+        text_block(x0 + 26, iy + 6, wrap(label, small_f, cw - 50)[:1], small_f, ink)
+        text_block(x0 + 26, iy + 26, wrap(f"→ {en}", small_f, cw - 50)[:1], small_f, muted)
+        iy += 54
+
+    # —— Panel 4 ——
+    p4 = plan.get("panel4") or {}
+    x0, y0, x1, y1 = panel_box(3)
+    round_card([x0, y0, x1, y1])
+    badge(x0 + 12, y0 + 12, 4, pink)
+    cy = text_block(x0 + 56, y0 + 14, wrap(p4.get("title") or "", title_f, cw - 70)[:2], title_f, ink)
+    for label_key, a_key, b_key, yy in (
+        ("ex1_label", "ex1_a", "ex1_b", cy + 6),
+        ("ex2_label", "ex2_a", "ex2_b", cy + ch // 2 - 20),
+    ):
+        draw.rounded_rectangle([x0 + 14, yy, x1 - 14, yy + 22], radius=8, fill=accent, outline=accent)
+        text_block(x0 + 22, yy + 2, wrap(str(p4.get(label_key) or ""), small_f, cw - 40)[:1], small_f, (255, 255, 255))
+        text_block(x0 + 22, yy + 28, wrap(str(p4.get(a_key) or ""), body_f, cw - 40)[:1], body_f, ink)
+        text_block(x0 + 22, yy + 52, wrap(str(p4.get(b_key) or ""), body_f, cw - 40)[:1], body_f, muted)
+
+    # —— Panel 5 ——
+    p5 = plan.get("panel5") or {}
+    x0, y0, x1, y1 = panel_box(4)
+    round_card([x0, y0, x1, y1], fill=(255, 245, 248))
+    badge(x0 + 12, y0 + 12, 5, accent)
+    cy = text_block(x0 + 56, y0 + 14, wrap(p5.get("title") or "", title_f, cw - 70)[:3], title_f, ink)
+    for pt in (p5.get("points") or [])[:4]:
+        cy = text_block(x0 + 24, cy + 6, wrap(f"• {pt}", body_f, cw - 40)[:2], body_f, ink)
+
+    # —— Panel 6 ——
+    p6 = plan.get("panel6") or {}
+    x0, y0, x1, y1 = panel_box(5)
+    round_card([x0, y0, x1, y1])
+    badge(x0 + 12, y0 + 12, 6, accent2)
+    cy = text_block(x0 + 56, y0 + 14, wrap(p6.get("title") or "", title_f, cw - 70)[:3], title_f, ink)
+    draw.ellipse([x0 + 40, y0 + 110, x0 + 100, y0 + 170], outline=ink, width=2)
+    draw.ellipse([x0 + cw - 110, y0 + 110, x0 + cw - 50, y0 + 170], outline=ink, width=2)
+    text_block(x0 + 20, y0 + ch - 80, wrap(str(p6.get("left") or ""), body_f, cw // 2 - 20)[:2], body_f, ink)
+    text_block(x0 + cw // 2, y0 + ch - 80, wrap(str(p6.get("right") or ""), body_f, cw // 2 - 20)[:2], body_f, muted)
+
+    # —— Panel 7 ——
+    p7 = plan.get("panel7") or {}
+    x0, y0, x1, y1 = panel_box(6)
+    round_card([x0, y0, x1, y1])
+    badge(x0 + 12, y0 + 12, 7, green)
+    cy = text_block(x0 + 56, y0 + 14, wrap(p7.get("title") or "", title_f, cw - 70)[:2], title_f, ink)
+    for it in (p7.get("items") or [])[:3]:
+        draw.rounded_rectangle([x0 + 16, cy + 4, x1 - 16, cy + 40], radius=10, fill=(248, 255, 250), outline=(210, 230, 215), width=1)
+        text_block(x0 + 28, cy + 10, wrap(f"♥ {it}", body_f, cw - 50)[:1], body_f, ink)
+        cy += 46
+    text_block(x0 + 20, min(cy + 8, y1 - 50), wrap(str(p7.get("closing") or ""), small_f, cw - 40)[:2], small_f, muted)
+
+    # —— Panel 8 ——
+    p8 = plan.get("panel8") or {}
+    x0, y0, x1, y1 = panel_box(7)
+    round_card([x0, y0, x1, y1], fill=(255, 252, 240))
+    badge(x0 + 12, y0 + 12, 8, pink)
+    cy = text_block(x0 + 56, y0 + 14, wrap(p8.get("title") or "", title_f, cw - 70)[:2], title_f, ink)
+    for q in (p8.get("q1"), p8.get("q2")):
+        if not q:
+            continue
+        draw.rounded_rectangle([x0 + 16, cy + 6, x1 - 16, cy + 50], radius=12, fill=(255, 255, 255), outline=(230, 220, 200), width=1)
+        text_block(x0 + 26, cy + 14, wrap(str(q), body_f, cw - 50)[:2], body_f, ink)
+        cy += 56
+    text_block(x0 + 20, min(cy + 4, y1 - 40), wrap(str(p8.get("cta") or ""), small_f, cw - 40)[:2], small_f, accent)
+
+    # bottom CTA bar
+    draw.rectangle([0, H - 64, W, H], fill=accent)
+    cta = "탭하면 구글 블로그에서 자세히 읽기"
+    if blogger_url:
+        cta = "탭하면 구글 블로그에서 이어서 읽기"
+    bf = _load_font(26)
+    bb = draw.textbbox((0, 0), cta, font=bf)
+    draw.text(((W - (bb[2] - bb[0])) / 2, H - 52), cta, font=bf, fill=(255, 255, 255))
+    if blogger_url:
+        u = blogger_url.replace("https://", "").replace("http://", "")[:60]
+        uf = _load_font(16)
+        ub = draw.textbbox((0, 0), u, font=uf)
+        draw.text(((W - (ub[2] - ub[0])) / 2, H - 22), u, font=uf, fill=(255, 255, 255))
+
+    # expression chip
+    tag = f"「{expr}」"
+    tf = _load_font(20)
+    tb = draw.textbbox((0, 0), tag, font=tf)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    draw.rounded_rectangle([W - tw - 40, 8, W - 12, 8 + th + 12], radius=8, fill=(255, 255, 255), outline=accent, width=2)
+    draw.text((W - tw - 26, 14), tag, font=tf, fill=accent)
+
+    return img
 
 
 
@@ -4774,8 +5134,8 @@ def repair_old_posts() -> None:
                     "meta_description": (p.get("meta_description") or title),
                     "html_body": "",
                 }
-                # 인스타툰 생성 제거됨 — 스킵
-                pass
+                generate_instatoon_images(article_stub, (p.get("blogger_url") or "").strip())
+                fixed_card_news += 1
                 logger.info(f"[복구] 인스타툰 생성: {slug_cn}")
         except Exception as e:
             logger.warning(f"[복구] 인스타툰 생성 실패({title}): {e}")
