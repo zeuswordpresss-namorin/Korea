@@ -7,7 +7,11 @@ GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립
 - H.O.L.D. 내러티브(Hook → Obstacle → Loop → Deliver)로 읽히게 하되, 소제목·순서·훅 스타일을 매 글마다 무작위로 변주
   (고정 5단 문구/순서 반복을 피해서 AdSense "패턴화된 AI 대량생산" 리스크를 낮춤)
 - 문화 섹션은 무출처 단정 표현을 완화 ("~인 경우가 많다", "많은 한국인에게 ~로 느껴진다" 등)
-- 에버그린 주제 뱅크(100개 표현/문화 주제, 4개 카테고리 요일별 로테이션) 기반, 하루 발행 상한
+- 에버그린 주제 뱅크(100개 시드 + 자동 확장·중복 삭제) 기반, 하루 발행 상한
+- [품질 게이트] 본문 길이·expression 본문 등장·SEO 제목·문화 절대 단정·H2 개수·meta 길이 검사
+- [주제 확장] 큐 고갈 임박 시 Gemini로 신규 표현 제안 → 정규화 중복 제거 후 pending/extra_topics 편입
+- [A/B 제목] 발행 시 SEO 제목 2안 생성·선택, posts.json에 variant 기록 (장기 성과 추적 기반)
+- [인스타툰 품질] 플랜/본문 기반 가독·표현 일관성 점수 → 낮으면 1회 재생성 유도
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 - [AdSense] 심사 모드(ADSENSE_REVIEW_MODE): 본문 수동광고·제휴 블록 생략, 품질 게이트,
   편집 고지, Blogger About/Privacy/Contact 페이지 동기화, 라벨 구조화
@@ -200,11 +204,20 @@ SYSTEM_PROMPT = """당신은 외국인에게 한국어와 한국인의 사고방
 1) 표현 소개 + 훅: 한국어 원문, 간결한 뜻, 누구에게/어떤 상황에서 쓰는지. 반드시 훅으로 연다.
 2) 직역이 안 되는 이유: 영어(또는 다른 언어)의 가장 가까운 단어와 비교하고, 그 단어가 못 담는 한국인만의 뉘앙스를 설명한다. 표현의 한국어 원문을 최소 1회 <strong>으로 강조한다.
 3) 실제 사용 장면: 대화체에 가까운 일상 예시 1~2개 (누가, 어떤 상황에서, 어떤 말투로). 가능하면 <ul><li>로 정리한다.
-4) 문화/관계 맥락: 이 표현이 관계·일상과 어떻게 맞닿는지. [중요 — 단정 완화]
-   금지에 가까운 표현: "한국인은 항상/절대/모두", "obsessed with", "한국 문화는 ~이다"(단정).
-   권장: "이 표현은 흔히 ~한 맥락에서 설명됩니다", "한 가지 배경으로 자주 언급되는 것은 ~입니다",
-   "나이·지역·관계에 따라 뉘앙스가 달라질 수 있습니다", "learners often notice that…".
-   역사·사회 배경을 들 때는 인과를 단정하지 말고 "한 가지 해석으로는", "종종 연결해 설명하곤 합니다" 정도만 쓴다.
+4) 문화/관계 맥락: 이 표현이 관계·일상과 어떻게 맞닿는지. [중요 — 문화 절대 단정 금지]
+   절대 쓰지 말 것 (무출처 일반화):
+   - 한국어: "한국인은 항상/절대/모두/반드시", "한국인들은 언제나", "한국 문화에서는 ~이다/한다",
+     "예외 없이", "절대적으로", "모든 한국인"
+   - 영어: "Koreans always/never", "all Koreans", "obsessed with", "every Korean",
+     "Korean culture is…"(단정), "Koreans are always…"
+   대신 쓸 것 (관찰·경향 완화):
+   - "이 표현은 흔히 ~한 맥락에서 설명됩니다"
+   - "많은 한국인에게 ~로 느껴지는 경우가 많다"
+   - "한 가지 배경으로 자주 언급되는 것은 ~입니다"
+   - "나이·지역·관계·세대에 따라 뉘앙스가 달라질 수 있습니다"
+   - "learners often notice that…", "a tendency often observed is…"
+   역사·사회 배경은 인과를 단정하지 말고 "한 가지 해석으로는", "종종 연결해 설명하곤 합니다"만 쓴다.
+   본문 어디에든 위 금지 표현이 한 번이라도 들어가면 안 된다.
 5) 참여형 클로징: 막연한 "어떻게 생각하세요?" 대신, 한 가지만 떠올리면 바로 답할 수 있는 구체적 질문 1~2개.
 
 H2 소제목 변주 예시 (그대로 복사하지 말고, 표현명을 넣어 매번 다르게):
@@ -445,14 +458,97 @@ def _cluster_for_article(article: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _topic_category(topic: str) -> Optional[str]:
+def _topic_category(topic: str, queue: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """시드 뱅크 + queue.extra_topics 에서 카테고리 조회."""
     for category, topics in EVERGREEN_TOPIC_BANK.items():
         if topic in topics:
             return category
+    if queue is None:
+        try:
+            queue = load_queue()
+        except Exception:
+            queue = {}
+    extra = (queue or {}).get("extra_topics") or {}
+    if isinstance(extra, dict):
+        for category, topics in extra.items():
+            if isinstance(topics, list) and topic in topics:
+                return category
     return None
 
+
+def _all_known_topics(queue: Optional[Dict[str, Any]] = None) -> set:
+    """시드 + extra_topics 전체 집합."""
+    known = set()
+    for topics in EVERGREEN_TOPIC_BANK.values():
+        known.update(topics)
+    if queue is None:
+        try:
+            queue = load_queue()
+        except Exception:
+            queue = {}
+    extra = (queue or {}).get("extra_topics") or {}
+    if isinstance(extra, dict):
+        for topics in extra.values():
+            if isinstance(topics, list):
+                known.update(topics)
+    return known
+
+
+def _normalize_for_dedupe(s: str) -> str:
+    """중복 판정용 정규화: 공백·괄호 부연·조사 유사형 축약."""
+    s = _normalize_topic_key(s)
+    s = re.sub(r"\s+", "", s)
+    s = s.replace("하다", "").replace("되다", "")
+    return s.strip().lower()
+
+
+def dedupe_queue_topics(queue: Dict[str, Any]) -> Dict[str, Any]:
+    """pending / completed / extra_topics 에서 정규화 중복을 제거하고 정리한다."""
+    seen: set = set()
+    new_pending = []
+    for t in queue.get("pending", []):
+        key = _normalize_for_dedupe(t)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        new_pending.append(t)
+    new_completed = []
+    for t in queue.get("completed", []):
+        key = _normalize_for_dedupe(t)
+        if not key:
+            continue
+        # completed는 이력 보존하되 완전 동일 정규화 키만 1회 유지
+        if key in {_normalize_for_dedupe(x) for x in new_completed}:
+            continue
+        new_completed.append(t)
+        seen.add(key)
+
+    extra = queue.get("extra_topics") or {}
+    if isinstance(extra, dict):
+        cleaned_extra: Dict[str, List[str]] = {}
+        for cat, topics in extra.items():
+            if not isinstance(topics, list):
+                continue
+            cleaned = []
+            for t in topics:
+                key = _normalize_for_dedupe(t)
+                if not key or key in {_normalize_for_dedupe(x) for x in cleaned}:
+                    continue
+                cleaned.append(t)
+            cleaned_extra[cat] = cleaned
+        queue["extra_topics"] = cleaned_extra
+
+    removed_p = len(queue.get("pending", [])) - len(new_pending)
+    removed_c = len(queue.get("completed", [])) - len(new_completed)
+    queue["pending"] = new_pending
+    queue["completed"] = new_completed
+    if removed_p or removed_c:
+        logger.info(f"[주제 중복삭제] pending -{removed_p}, completed -{removed_c}")
+    return queue
+
+
 def pick_next_topic(queue: Dict[str, Any]) -> Optional[str]:
-    """[NEW] 오늘이 월~금이면 해당 요일의 우선 테마 카테고리에 속한 대기 주제를 최우선으로 뽑고,
+    """오늘이 월~금이면 해당 요일의 우선 테마 카테고리에 속한 대기 주제를 최우선으로 뽑고,
     없으면 기존 순서(FIFO)대로 뽑습니다."""
     pending: List[str] = queue.get("pending", [])
     if not pending:
@@ -460,7 +556,7 @@ def pick_next_topic(queue: Dict[str, Any]) -> Optional[str]:
 
     today_category = WEEKDAY_THEME_CATEGORY.get(datetime.now().weekday())
     if today_category:
-        matches = [t for t in pending if _topic_category(t) == today_category]
+        matches = [t for t in pending if _topic_category(t, queue) == today_category]
         if matches:
             chosen = random.choice(matches)
             pending.remove(chosen)
@@ -468,56 +564,179 @@ def pick_next_topic(queue: Dict[str, Any]) -> Optional[str]:
 
     return pending.pop(0)
 
+
 def load_queue() -> Dict[str, Any]:
+    default = {
+        "pending": [],
+        "completed": [],
+        "daily_stats": {"date": "", "count": 0},
+        "extra_topics": {"번역감정": [], "일상표현": [], "한국문화": [], "리액션": []},
+        "pending_review": [],
+        "ab_title_log": [],
+    }
     if not os.path.exists(QUEUE_FILE):
-        return {"pending": [], "completed": [], "daily_stats": {"date": "", "count": 0}}
+        return dict(default)
     try:
         with open(QUEUE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            data.setdefault("pending", [])
-            data.setdefault("completed", [])
-            data.setdefault("daily_stats", {"date": "", "count": 0})
-            return data
+        for k, v in default.items():
+            data.setdefault(k, v if not isinstance(v, dict) else dict(v))
+        if not isinstance(data.get("extra_topics"), dict):
+            data["extra_topics"] = default["extra_topics"]
+        return data
     except (json.JSONDecodeError, IOError) as e:
         logger.warning(f"큐 파일을 불러오는 데 실패했습니다: {e}")
-        return {"pending": [], "completed": [], "daily_stats": {"date": "", "count": 0}}
+        return dict(default)
+
 
 def save_queue(queue: Dict[str, Any]) -> None:
     with open(QUEUE_FILE, "w", encoding="utf-8") as f:
         json.dump(queue, f, ensure_ascii=False, indent=2)
 
+
+def _suggest_new_topics_via_gemini(used_topics: set, per_category: int = 4) -> Dict[str, List[str]]:
+    """Gemini로 4카테고리 신규 표현을 제안받는다. 실패 시 빈 dict."""
+    if not GEMINI_API_KEY:
+        logger.warning("[주제 확장] GEMINI_API_KEY 없음 — 자동 제안 건너뜀")
+        return {}
+    used_sample = sorted(list(used_topics))[:80]
+    prompt = (
+        "You help expand a Korean-expression teaching blog topic bank for foreign learners.\n"
+        "Return ONLY pure JSON (no markdown) with this shape:\n"
+        '{"번역감정": ["expr1", ...], "일상표현": [...], "한국문화": [...], "리액션": [...]}\n'
+        f"Propose {per_category} NEW Korean expressions or short culture keywords per category.\n"
+        "Rules:\n"
+        "- Must be real, commonly used Korean words/phrases suitable for learners.\n"
+        "- Do NOT repeat any of these already-used topics: " + ", ".join(used_sample) + "\n"
+        "- Prefer 1~6 syllable everyday items; avoid obscure slang and proper nouns.\n"
+        "- 번역감정 = hard-to-translate feelings; 일상표현 = daily phrases; "
+        "한국문화 = cultural concepts; 리액션 = short reaction words.\n"
+    )
+    url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048},
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=45)
+        if resp.status_code != 200:
+            logger.warning(f"[주제 확장] Gemini HTTP {resp.status_code}")
+            return {}
+        data = resp.json()
+        parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
+        text = (parts[0].get("text") or "").strip() if parts else ""
+        text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        parsed = json.loads(text)
+        out: Dict[str, List[str]] = {}
+        for cat in ("번역감정", "일상표현", "한국문화", "리액션"):
+            raw = parsed.get(cat) or []
+            cleaned = []
+            for item in raw:
+                if not isinstance(item, str):
+                    continue
+                item = item.strip()
+                if not item or len(item) > 30:
+                    continue
+                cleaned.append(item)
+            out[cat] = cleaned[:per_category]
+        return out
+    except Exception as e:
+        logger.warning(f"[주제 확장] 제안 실패: {e}")
+        return {}
+
+
+def expand_evergreen_topics_if_needed(queue: Dict[str, Any], min_pending: int = 8, suggest_per_cat: int = 4) -> Dict[str, Any]:
+    """시드+extra 미사용분이 부족하면 Gemini 제안 → 중복 제거 후 extra_topics·pending에 편입."""
+    queue = dedupe_queue_topics(queue)
+    used = set(queue.get("pending", [])) | set(queue.get("completed", []))
+    used_norm = {_normalize_for_dedupe(t) for t in used}
+    known = _all_known_topics(queue)
+
+    pool_count = 0
+    for cat in ("번역감정", "일상표현", "한국문화", "리액션"):
+        seed = EVERGREEN_TOPIC_BANK.get(cat, [])
+        extra = (queue.get("extra_topics") or {}).get(cat, [])
+        for t in list(seed) + list(extra):
+            if _normalize_for_dedupe(t) not in used_norm:
+                pool_count += 1
+
+    if len(queue.get("pending", [])) >= min_pending and pool_count >= min_pending:
+        return queue
+
+    logger.info(f"[주제 확장] 대기 {len(queue.get('pending', []))} / 미사용풀 {pool_count} → Gemini 신규 제안 시도")
+    suggestions = _suggest_new_topics_via_gemini(used | known, per_category=suggest_per_cat)
+    if not suggestions:
+        return queue
+
+    added_total = 0
+    extra = queue.setdefault("extra_topics", {"번역감정": [], "일상표현": [], "한국문화": [], "리액션": []})
+    for cat, items in suggestions.items():
+        if cat not in extra or not isinstance(extra[cat], list):
+            extra[cat] = []
+        for t in items:
+            nkey = _normalize_for_dedupe(t)
+            if not nkey or nkey in used_norm:
+                continue
+            # extra·pending 양쪽 중복 방지
+            if any(_normalize_for_dedupe(x) == nkey for x in extra[cat]):
+                continue
+            extra[cat].append(t)
+            if t not in queue["pending"]:
+                queue["pending"].append(t)
+            used_norm.add(nkey)
+            added_total += 1
+            logger.info(f"[주제 확장] +[{cat}] {t}")
+
+    queue["extra_topics"] = extra
+    queue = dedupe_queue_topics(queue)
+    save_queue(queue)
+    logger.info(f"[주제 확장] 신규 편입 {added_total}개 (대기 {len(queue.get('pending', []))}개)")
+    return queue
+
+
 def refill_evergreen_queue(target_size: int = 20) -> None:
-    """[개편] 에버그린 주제 뱅크에서 카테고리 가중치를 반영해 큐를 채웁니다.
-    이미 사용(pending/completed)된 주제는 다시 넣지 않습니다."""
+    """시드 뱅크 + extra_topics에서 카테고리 가중치로 큐를 채우고,
+    고갈 임박 시 Gemini 자동 확장을 시도한다. 중복은 정규화 후 삭제한다."""
     logger.info("=" * 60)
     logger.info("[에버그린 주제뱅크] 큐 보충 시작...")
     queue = load_queue()
+    queue = dedupe_queue_topics(queue)
 
-    # [FIX] 구글 트렌드 시절 남아있던 잔여 키워드(주제뱅크에 없는 항목)를 자동 정리
-    stale = [t for t in queue.get("pending", []) if _topic_category(t) is None]
+    # 시드에도 extra에도 없는 고아 pending 정리 (단, extra 편입 전 확장 대상은 유지)
+    known = _all_known_topics(queue)
+    known_norm = {_normalize_for_dedupe(t) for t in known}
+    stale = [t for t in queue.get("pending", []) if _normalize_for_dedupe(t) not in known_norm and _topic_category(t, queue) is None]
     if stale:
-        queue["pending"] = [t for t in queue.get("pending", []) if _topic_category(t) is not None]
-        save_queue(queue)
-        logger.info(f"[에버그린 주제뱅크] 예전 트렌드 키워드 잔여분 {len(stale)}개 정리 완료: {stale[:5]}{' ...' if len(stale) > 5 else ''}")
+        # 확장 전이므로 고아는 제거하되 로그
+        queue["pending"] = [t for t in queue.get("pending", []) if t not in stale]
+        logger.info(f"[에버그린 주제뱅크] 미등록 잔여 키워드 {len(stale)}개 정리: {stale[:5]}{' ...' if len(stale) > 5 else ''}")
+
+    # 고갈 임박이면 먼저 확장
+    queue = expand_evergreen_topics_if_needed(queue, min_pending=max(8, target_size // 2))
 
     used = set(queue.get("pending", [])) | set(queue.get("completed", []))
+    used_norm = {_normalize_for_dedupe(t) for t in used}
 
-    # 카테고리별 미사용 주제 후보 목록
-    pool: List[Tuple[str, int]] = []  # (주제, 가중치)
-    for category, topics in EVERGREEN_TOPIC_BANK.items():
+    pool: List[Tuple[str, int]] = []
+    for category in ("번역감정", "일상표현", "한국문화", "리액션"):
         weight = CATEGORY_WEIGHT.get(category, 1)
-        for topic in topics:
-            if topic not in used:
+        seed = EVERGREEN_TOPIC_BANK.get(category, [])
+        extra = (queue.get("extra_topics") or {}).get(category, [])
+        for topic in list(seed) + list(extra):
+            if _normalize_for_dedupe(topic) not in used_norm:
                 pool.append((topic, weight))
+                used_norm.add(_normalize_for_dedupe(topic))  # pool 내 중복 방지
 
     if not pool:
-        logger.info("[에버그린 주제뱅크] 모든 주제를 이미 사용했습니다. EVERGREEN_TOPIC_BANK에 새 주제를 추가해주세요.")
+        logger.info("[에버그린 주제뱅크] 사용 가능 주제 없음 — 확장 후에도 고갈. 수동 주제 추가를 검토하세요.")
+        save_queue(queue)
         logger.info("=" * 60)
         return
 
     need = max(0, target_size - len(queue["pending"]))
     if need == 0:
-        logger.info(f"[에버그린 주제뱅크] 큐가 이미 충분합니다 (대기 {len(queue['pending'])}개).")
+        save_queue(queue)
+        logger.info(f"[에버그린 주제뱅크] 큐 충분 (대기 {len(queue['pending'])}개).")
         logger.info("=" * 60)
         return
 
@@ -534,6 +753,7 @@ def refill_evergreen_queue(target_size: int = 20) -> None:
         remaining_weights.pop(pos)
 
     queue["pending"].extend(picked)
+    queue = dedupe_queue_topics(queue)
     save_queue(queue)
     logger.info(f"[에버그린 주제뱅크] 신규 편성: {len(picked)}개 (대기 {len(queue['pending'])}개)")
     logger.info("=" * 60)
@@ -1174,7 +1394,7 @@ def generate_article(title: str) -> Dict[str, Any]:
     url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": f"오늘 날짜: {datetime.now().strftime('%Y년 %m월 %d일')}\n\n주제: '{title}'\n\n이 한국어 표현/문화 주제에 대해, H.O.L.D. 흐름(훅→긴장→열린 궁금증→핵심 전달)을 살려 외국인 학습자가 끝까지 읽고 싶어하는 글을 작성해주세요. 소제목(H2) 문구와 순서는 매 글마다 변주하고, 문화 설명은 무출처 절대 단정을 피하세요. 시점을 언급할 때는 반드시 위에 적힌 '오늘 날짜'를 기준으로 하세요."}]}],
+        "contents": [{"role": "user", "parts": [{"text": f"오늘 날짜: {datetime.now().strftime('%Y년 %m월 %d일')}\n\n주제: '{title}'\n\n이 한국어 표현/문화 주제에 대해, H.O.L.D. 흐름(훅→긴장→열린 궁금증→핵심 전달)을 살려 외국인 학습자가 끝까지 읽고 싶어하는 글을 작성해주세요. 소제목(H2) 문구와 순서는 매 글마다 변주하세요.\n\n[문화 절대 단정 금지 — 매우 중요]\n'한국인은 항상/절대/모두', '한국 문화에서는 ~이다', 'Koreans always', 'all Koreans', 'obsessed with' 같은 무출처 일반화를 본문에 넣지 마세요.\n대신 '~인 경우가 많다', '많은 한국인에게 ~로 느껴진다', '흔히 관찰되는 경향이다', 'learners often notice that…'처럼 완화해 쓰세요.\n시점을 언급할 때는 반드시 위에 적힌 '오늘 날짜'를 기준으로 하세요."}]}],
         # [FIX] JSON 파싱 실패를 줄이기 위해 순수 JSON 출력을 강제하고 출력 토큰 한도를 명시적으로 늘림
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -2416,8 +2636,19 @@ def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str
 
 
 def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """인스타툰·교육용 웹툰 생성 제거됨 — 블로그 본문/썸네일/발행만 유지."""
-    logger.info("[인스타툰] 교육용 웹툰 생성 비활성화 — 건너뜀")
+    """인스타툰·교육용 웹툰.
+    현재 이미지 파이프라인은 비활성화 상태이지만, 본문 기반 품질 점수는 항상 산출한다.
+    점수 < 55이면 로그로 재생성 권고를 남겨 장기적으로 재활성 시 자동 재시도 기반을 제공한다.
+    """
+    score, reason = score_content_for_visual(article)
+    article["_visual_quality_score"] = score
+    article["_visual_quality_reason"] = reason
+    if score < 55:
+        logger.warning(f"[인스타툰 품질] 점수 {score:.0f}/100 ({reason}) — 시각 콘텐츠 재생성 권고")
+    else:
+        logger.info(f"[인스타툰 품질] 점수 {score:.0f}/100 ({reason})")
+
+    logger.info("[인스타툰] 교육용 웹툰 이미지 생성 비활성화 — 품질 점수만 기록")
     return {
         "slug": "",
         "local_paths": [],
@@ -2426,6 +2657,8 @@ def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") ->
         "blogger_url": (blogger_url or "").strip(),
         "download_dir": "",
         "disabled": True,
+        "quality_score": score,
+        "quality_reason": reason,
     }
 
 
@@ -2691,18 +2924,117 @@ def _strip_html_text(html_body: str) -> str:
     return text_only.strip()
 
 
+# [품질 게이트 강화] 문화 절대 단정 / 고정 템플릿 / SEO 제목 — AdSense·장기 신뢰
+# 생성 단계에서 금지 + 리페어 치환 + 품질 게이트 실패로 3중 차단
+_CULTURE_ABSOLUTE_PATTERNS = [
+    # 한국어 일반화
+    r"한국인은\s*항상",
+    r"한국인들은\s*항상",
+    r"한국인은\s*언제나",
+    r"한국인들은\s*언제나",
+    r"한국인은\s*절대",
+    r"한국인들은\s*절대",
+    r"한국인은\s*반드시",
+    r"한국인들은\s*반드시",
+    r"모든\s*한국인은",
+    r"모든\s*한국인들은",
+    r"전부\s*한국인은",
+    r"한국\s*문화에서는\s*반드시",
+    r"한국\s*문화에서는\s*(항상|절대|모두)",
+    r"한국\s*사회에서는\s*반드시",
+    r"한국\s*사회에서는\s*(항상|절대)",
+    r"한국\s*문화는\s*(항상|절대|모두|반드시)",
+    r"예외\s*없이",
+    r"절대적으로",
+    r"언제나\s*그렇다",
+    r"언제나\s*그렇게",
+    # 영어 일반화 (본문이 영문 혼용일 때)
+    r"obsessed\s+with",
+    r"all\s+koreans\s+(always|never|are)",
+    r"koreans\s+are\s+always",
+    r"koreans\s+always\s+",
+    r"koreans\s+never\s+",
+    r"every\s+korean\s+(always|never|is)",
+    r"korean\s+culture\s+is\s+(always|never|simply)",
+]
+_FIXED_H2_MARKERS = (
+    "오늘의 표현",
+    "왜 영어로 직역이 안 될까?",
+    "한국인은 어떤 상황에서 쓸까?",
+    "문화 이야기",
+    "여러분의 언어에서는 어떤가요?",
+)
+# 참여 질문 유도 키워드 (소프트 신호 — 없으면 경고만)
+_PARTICIPATION_HINTS = (
+    "how would you", "in your language", "similar phrase", "what about you",
+    "당신", "당신의 언어", "비슷한 말", "어떻게 말하", "떠올려",
+)
+
+
+def _count_h2(html_body: str) -> int:
+    return len(re.findall(r"<h2\b", html_body or "", flags=re.IGNORECASE))
+
+
+def _has_culture_absolute_claims(html_body: str) -> List[str]:
+    hits = []
+    text = html_body or ""
+    for pat in _CULTURE_ABSOLUTE_PATTERNS:
+        if re.search(pat, text, flags=re.IGNORECASE):
+            hits.append(pat)
+    return hits
+
+
+def _has_participation_prompt(html_body: str) -> bool:
+    text = (html_body or "").lower()
+    return any(h in text for h in _PARTICIPATION_HINTS)
+
+
 def validate_article_quality(article: Dict[str, Any]) -> Tuple[bool, str]:
-    """AdSense에 불리한 초단문·표현 누락·고정 템플릿 잔존을 검사한다."""
+    """AdSense·SEO·H.O.L.D. 품질 게이트.
+    - 초단문 / expression 누락 / 고정 5단 H2 잔존
+    - SEO 제목(Meaning / What Does) 패턴
+    - 문화 절대 단정 잔존
+    - H2 개수(4~6 권장), expression 본문 등장, meta 길이
+    - 참여형 클로징 소프트 체크 (없으면 경고 로그, 치명 실패는 아님)
+    """
     body = article.get("html_body", "") or ""
     text_only = _strip_html_text(body)
+    title = (article.get("title") or "").strip()
+    expr = (article.get("expression") or "").strip()
+    meta = (article.get("meta_description") or "").strip()
+    is_fallback = "일시적 AI 한도" in body or "요약본이 발행" in body
+
     if len(text_only) < ADSENSE_MIN_BODY_CHARS:
         return False, f"본문 텍스트 {len(text_only)}자 < 최소 {ADSENSE_MIN_BODY_CHARS}자"
-    if not (article.get("expression") or "").strip():
+    if not expr:
         return False, "expression 필드 비어 있음"
-    # 고정 5단 소제목이 한 글에 3개 이상이면 패턴 잔존으로 간주
-    fixed_hits = sum(1 for k in ("오늘의 표현", "왜 영어로 직역이 안 될까?", "한국인은 어떤 상황에서 쓸까?", "문화 이야기", "여러분의 언어에서는 어떤가요?") if k in body)
+    if expr and expr not in body and expr not in text_only:
+        if expr not in text_only:
+            return False, f"expression '{expr}'이 본문에 등장하지 않음"
+
+    fixed_hits = sum(1 for k in _FIXED_H2_MARKERS if k in body)
     if fixed_hits >= 3:
         return False, f"고정 5단 H2 잔존 {fixed_hits}개"
+
+    # SEO 제목: 폴백 글은 완화된 통과 (재생성 유도는 본 생성에만)
+    if title and not is_fallback and not _title_already_seo(title):
+        if f'"{expr}"' not in title and f"'{expr}'" not in title:
+            return False, f"SEO 제목 패턴 미충족(Meaning/What Does 또는 표현 인용 없음): {title[:60]}"
+
+    abs_hits = _has_culture_absolute_claims(body)
+    if abs_hits:
+        return False, f"문화 절대 단정 잔존: {abs_hits[0]}"
+
+    h2_n = _count_h2(body)
+    if not is_fallback and h2_n > 0 and (h2_n < 3 or h2_n > 8):
+        return False, f"H2 개수 비정상({h2_n}개) — 4~6개 권장"
+
+    if not is_fallback and meta and (len(meta) < 70 or len(meta) > 180):
+        return False, f"meta_description 길이 {len(meta)}자 (80~160 권장)"
+
+    if not is_fallback and not _has_participation_prompt(body):
+        logger.warning("[품질] 참여형 클로징 신호가 약합니다 — 발행은 계속하되 다음 생성에서 보강 권장")
+
     return True, "ok"
 
 
@@ -3036,6 +3368,10 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         "title": title, "file": f"posts/{post_filename}", "thumb": f"thumbs/{thumb_filename}",
         "date": today, "category": category, "accent": theme["accent"], "badge": theme["badge"],
         "blogger_url": "",  # [NEW] Blogger 발행 성공 후 run()에서 채워 넣는다 (관련글 링크에 사용)
+        "expression": (article.get("expression") or "").strip(),
+        "title_variant_id": article.get("title_variant_id", "A"),
+        "title_variants": article.get("title_variants") or [title],
+        "visual_quality_score": article.get("_visual_quality_score"),
     }
     local_thumb = os.path.join(DOCS_DIR, "thumbs", thumb_filename)
     if not os.path.isfile(local_thumb):
@@ -4570,26 +4906,54 @@ def _vary_fixed_h2_titles(html: str, seed: str) -> str:
 
 
 def _soften_culture_claims(html: str) -> str:
-    """문화 섹션 등에서 흔히 나오는 무출처 절대 단정을 완화된 표현으로 치환한다."""
+    """무출처 문화 절대 단정을 관찰·경향 표현으로 치환한다.
+    생성 직후 안전망 + 과거 글 리페어 공용. 한·영 모두 처리."""
     if not html:
         return html
     replacements = [
-        (r'한국인은 항상', '많은 한국인은 종종'),
-        (r'한국인들은 항상', '많은 한국인들은 종종'),
-        (r'모든 한국인은', '많은 한국인은'),
-        (r'모든 한국인들은', '많은 한국인들은'),
-        (r'한국 문화에서는 반드시', '한국 문화에서 흔히'),
-        (r'한국 문화에서는', '한국 문화에서 흔히'),
-        (r'한국 사회에서는 반드시', '한국 사회에서 흔히'),
-        (r'한국 사회에서는', '한국 사회에서 흔히'),
-        (r'반드시 그렇게 한다', '그렇게 하는 경우가 많다'),
+        # 한국어 — 사람 일반화
+        (r'한국인들은\s*항상', '많은 한국인들은 종종'),
+        (r'한국인은\s*항상', '많은 한국인은 종종'),
+        (r'한국인들은\s*언제나', '많은 한국인들은 종종'),
+        (r'한국인은\s*언제나', '많은 한국인은 종종'),
+        (r'한국인들은\s*절대', '많은 한국인들은 대체로'),
+        (r'한국인은\s*절대', '많은 한국인은 대체로'),
+        (r'한국인들은\s*반드시', '많은 한국인들은 흔히'),
+        (r'한국인은\s*반드시', '많은 한국인은 흔히'),
+        (r'모든\s*한국인들은', '많은 한국인들은'),
+        (r'모든\s*한국인은', '많은 한국인은'),
+        (r'전부\s*한국인들은', '많은 한국인들은'),
+        (r'전부\s*한국인은', '많은 한국인은'),
+        # 한국어 — 문화/사회 단정
+        (r'한국\s*문화에서는\s*반드시', '한국 문화에서 흔히'),
+        (r'한국\s*문화에서는\s*항상', '한국 문화에서 흔히'),
+        (r'한국\s*문화에서는\s*절대', '한국 문화에서 흔히'),
+        (r'한국\s*문화에서는', '한국 문화에서 흔히'),
+        (r'한국\s*문화는\s*반드시', '한국 문화에서는 흔히'),
+        (r'한국\s*문화는\s*항상', '한국 문화에서는 흔히'),
+        (r'한국\s*사회에서는\s*반드시', '한국 사회에서 흔히'),
+        (r'한국\s*사회에서는\s*항상', '한국 사회에서 흔히'),
+        (r'한국\s*사회에서는', '한국 사회에서 흔히'),
+        (r'반드시\s*그렇게\s*한다', '그렇게 하는 경우가 많다'),
         (r'절대적으로', '비교적'),
-        (r'예외 없이', '대체로'),
-        (r'언제나 그렇다', '그런 경우가 많다'),
+        (r'예외\s*없이', '대체로'),
+        (r'언제나\s*그렇다', '그런 경우가 많다'),
+        (r'언제나\s*그렇게', '그런 경우가 많다'),
+        # 영어
+        (r'(?i)koreans\s+are\s+always', 'many Koreans often'),
+        (r'(?i)koreans\s+always\s+', 'many Koreans often '),
+        (r'(?i)koreans\s+never\s+', 'many Koreans rarely '),
+        (r'(?i)all\s+koreans\s+are', 'many Koreans are'),
+        (r'(?i)all\s+koreans\s+', 'many Koreans '),
+        (r'(?i)every\s+korean\s+is', 'many Koreans are'),
+        (r'(?i)every\s+korean\s+', 'many Koreans '),
+        (r'(?i)obsessed\s+with', 'often associated with'),
+        (r'(?i)korean\s+culture\s+is\s+always', 'Korean culture is often described as'),
+        (r'(?i)korean\s+culture\s+is\s+simply', 'one common reading of Korean culture is'),
     ]
     out = html
     for pat, repl in replacements:
-        out = re.sub(pat, repl, out)
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE if pat.startswith('(?i)') else 0)
     return out
 
 
@@ -4635,6 +4999,106 @@ def _seo_rewrite_title(old_title: str, expression: str = "") -> str:
     if len(new_title) > 90:
         new_title = f'What Does "{expr}" Mean? Korean Expression Explained'
     return new_title
+
+
+def build_ab_title_variants(article: Dict[str, Any]) -> Dict[str, Any]:
+    """SEO 제목 A/B 2안을 만들고 하나를 선택한다.
+    - A: 모델이 준 제목(이미 SEO형이면 유지, 아니면 리라이트)
+    - B: 다른 SEO 패턴으로 강제 변주
+    posts.json / queue.ab_title_log 에 variant_id를 남겨 장기 성과 추적 기반을 쌓는다.
+    """
+    expr = (article.get("expression") or "").strip()
+    original = (article.get("title") or "").strip()
+    if not expr:
+        article["title_variant_id"] = "A"
+        article["title_variants"] = [original]
+        return article
+
+    title_a = original if _title_already_seo(original) else _seo_rewrite_title(original, expr)
+    # B안: A와 다른 패턴 강제
+    h = int(hashlib.md5((expr + "|B").encode("utf-8")).hexdigest(), 16)
+    pattern_b = _SEO_TITLE_PATTERNS[h % len(_SEO_TITLE_PATTERNS)]
+    title_b = pattern_b.format(expr=expr)
+    if title_b == title_a:
+        pattern_b = _SEO_TITLE_PATTERNS[(h + 1) % len(_SEO_TITLE_PATTERNS)]
+        title_b = pattern_b.format(expr=expr)
+    if len(title_b) > 90:
+        title_b = f'What Does "{expr}" Mean? Korean Expression Explained'
+
+    # 결정적 선택(표현 해시) — 같은 표현이면 재실행해도 동일 variant
+    pick = "A" if (int(hashlib.md5(expr.encode("utf-8")).hexdigest(), 16) % 2 == 0) else "B"
+    chosen = title_a if pick == "A" else title_b
+
+    article["title"] = chosen
+    article["title_variant_id"] = pick
+    article["title_variants"] = [title_a, title_b]
+    article["_title_ab"] = {"A": title_a, "B": title_b, "chosen": pick}
+
+    # 큐에 간단 로그 (최근 200개만 유지)
+    try:
+        queue = load_queue()
+        log = queue.get("ab_title_log") or []
+        log.append({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "expression": expr,
+            "variant": pick,
+            "title": chosen,
+            "alt": title_b if pick == "A" else title_a,
+        })
+        queue["ab_title_log"] = log[-200:]
+        save_queue(queue)
+    except Exception as e:
+        logger.warning(f"[A/B 제목] 로그 저장 실패: {e}")
+
+    logger.info(f"[A/B 제목] 선택={pick} | A={title_a[:50]} | B={title_b[:50]}")
+    return article
+
+
+def score_content_for_visual(article: Dict[str, Any]) -> Tuple[float, str]:
+    """인스타툰·카드뉴스용 본문 품질 점수 (0~100).
+    텍스트 가독·표현 일관성·카테고리 신호 기반. 낮으면 재생성 유도에 사용.
+    """
+    expr = (article.get("expression") or "").strip()
+    body = article.get("html_body") or ""
+    text = _strip_html_text(body)
+    score = 0.0
+    reasons = []
+
+    if expr and expr in text:
+        score += 30
+    else:
+        reasons.append("expression_missing_in_body")
+
+    n = len(text)
+    if 700 <= n <= 2000:
+        score += 25
+    elif 400 <= n < 700 or 2000 < n <= 3000:
+        score += 12
+        reasons.append("length_suboptimal")
+    else:
+        reasons.append("length_poor")
+
+    h2_n = _count_h2(body)
+    if 3 <= h2_n <= 7:
+        score += 15
+    else:
+        reasons.append(f"h2_count_{h2_n}")
+
+    if not _has_culture_absolute_claims(body):
+        score += 15
+    else:
+        reasons.append("absolute_claims")
+
+    if _has_participation_prompt(body):
+        score += 10
+    else:
+        reasons.append("weak_cta")
+
+    cat = (article.get("category") or "").strip()
+    if cat in CATEGORY_THEMES:
+        score += 5
+
+    return min(100.0, score), ",".join(reasons) if reasons else "ok"
 
 
 def _rewrite_title_in_html(html_body: str, old_title: str, new_title: str) -> str:
@@ -5138,23 +5602,40 @@ def run() -> None:
     except Exception as e:
         logger.error(f"[Gemini] 글 생성 실패 → 로컬 폴백 사용: {e}")
         article = _fallback_article_local(title)
-    article = fix_character_count_claims(article)  # [NEW] AI의 글자 수 오기재를 Python이 강제 교정
+    article = fix_character_count_claims(article)  # AI 글자 수 오기재 교정
+    # [문화 절대 단정 지양] 생성 직후 안전망 — 금지 패턴을 완화 표현으로 치환한 뒤 품질 검사
+    if article.get("html_body"):
+        before = article["html_body"]
+        article["html_body"] = _soften_culture_claims(before)
+        if article["html_body"] != before:
+            logger.info("[문화 단정] 생성본에서 절대 단정 표현을 완화 치환했습니다")
     ok, reason = validate_article_quality(article)
     if not ok:
         logger.warning(f"[품질] 1차 생성 미달({reason}) — 1회 재생성 시도")
         try:
             article = generate_article(title)
             article = fix_character_count_claims(article)
+            if article.get("html_body"):
+                article["html_body"] = _soften_culture_claims(article["html_body"])
         except Exception as e2:
             logger.warning(f"[품질] 재생성 불가({e2}) — 폴백/기존 본문으로 발행 계속")
             if not article.get("html_body"):
                 article = _fallback_article_local(title)
+                if article.get("html_body"):
+                    article["html_body"] = _soften_culture_claims(article["html_body"])
         ok2, reason2 = validate_article_quality(article)
         if not ok2:
             logger.warning(f"[품질] 재생성 후에도 미달({reason2}) — 발행은 계속하되 로그에 남김")
         else:
             logger.info("[품질] 재생성 후 기준 통과")
-    logger.info(f"글 생성 완료: {article['title']}")
+
+    # [A/B 제목] SEO 2안 생성·선택 + queue 로그 (장기 성과 추적)
+    article = build_ab_title_variants(article)
+    # [인스타툰 품질] 본문 기반 점수 선산출 (이미지 파이프라인 비활성 시에도 메타에 남김)
+    v_score, v_reason = score_content_for_visual(article)
+    article["_visual_quality_score"] = v_score
+    article["_visual_quality_reason"] = v_reason
+    logger.info(f"글 생성 완료: {article['title']} (variant={article.get('title_variant_id')}, visual={v_score:.0f})")
 
     article = add_internal_link(article)
     article = insert_manual_ads(article)  # ADSENSE_REVIEW_MODE=true면 내부에서 no-op
