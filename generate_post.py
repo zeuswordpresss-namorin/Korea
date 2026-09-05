@@ -34,7 +34,7 @@ import sys
 import textwrap
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 
 import requests
@@ -58,6 +58,39 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+# =====================================================================
+# [FIX] 타임존: GitHub Actions 러너는 UTC로 동작하지만, 하루 발행 한도·요일별
+# 카테고리 로테이션·에버그린 재사용 판정은 모두 한국 서비스 기준(KST, UTC+9)이어야 한다.
+# datetime.now()를 그대로 쓰면 UTC 자정에 "하루"가 바뀌어 버려(KST 오전 9시),
+# 요일 로테이션과 일일 한도 리셋 시점이 실제 한국 시각과 최대 9시간 어긋난다.
+# =====================================================================
+KST = timezone(timedelta(hours=9))
+
+
+def now_kst() -> datetime:
+    return datetime.now(KST)
+
+
+def _mask_secrets(text: str) -> str:
+    """[FIX] 예외 메시지(특히 requests 커넥션 오류)에 API 키가 쿼리스트링으로
+    그대로 포함되어 GitHub Actions 로그에 노출되는 것을 방지한다."""
+    if not text:
+        return text
+    for secret in (
+        globals().get("GEMINI_API_KEY", ""),
+        globals().get("GOOGLE_CLIENT_SECRET", ""),
+        globals().get("GOOGLE_REFRESH_TOKEN", ""),
+        globals().get("CLOUDFLARE_API_TOKEN", ""),
+        globals().get("HF_TOKEN", ""),
+        globals().get("OPENAI_API_KEY", ""),
+        globals().get("PEXELS_API_KEY", ""),
+        globals().get("THREADS_ACCESS_TOKEN", ""),
+        globals().get("INSTAGRAM_ACCESS_TOKEN", ""),
+    ):
+        if secret and secret in text:
+            text = text.replace(secret, "***REDACTED***")
+    return text
 
 # =====================================================================
 # 큐 파일 설정
@@ -144,18 +177,6 @@ GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 #   canva_backgrounds/한국문화.png
 #   canva_backgrounds/리액션.png
 CANVA_BG_DIR = os.environ.get("CANVA_BG_DIR", "canva_backgrounds")
-
-# --- [NEW] 워드프레스 동시 자동 발행 관련 환경변수 ---
-# [FIX] *.wordpress.com 호스팅 블로그(예: kresonate.wordpress.com)는 자체 호스팅 워드프레스와
-# 완전히 다른 API(public-api.wordpress.com)를 쓰고, Basic Auth(Application Password)가 아니라
-# OAuth2만 지원합니다. 그래서 WORDPRESS_CLIENT_ID/SECRET이 설정되면 워드프레스닷컴 OAuth2 방식을,
-# 없으면 자체 호스팅용 Basic Auth 방식(wp-json/wp/v2)을 자동으로 사용합니다.
-WORDPRESS_URL = os.environ.get("WORDPRESS_URL", "").rstrip("/")          # 예: kresonate.wordpress.com 또는 https://myblog.com
-WORDPRESS_USERNAME = os.environ.get("WORDPRESS_USERNAME", "")            # 워드프레스 로그인 아이디
-WORDPRESS_APP_PASSWORD = os.environ.get("WORDPRESS_APP_PASSWORD", "")    # Application Password (워드프레스닷컴은 계정보안>2단계인증 페이지에서 발급)
-# 워드프레스닷컴 전용: https://developer.wordpress.com/apps/new/ 에서 앱 등록 후 발급되는 값
-WORDPRESS_CLIENT_ID = os.environ.get("WORDPRESS_CLIENT_ID", "")
-WORDPRESS_CLIENT_SECRET = os.environ.get("WORDPRESS_CLIENT_SECRET", "")
 
 # --- [NEW] 네이버 블로그 자동 발행 관련 환경변수 ---
 # 주의: 네이버 '글쓰기 오픈API'(writePost)는 2020-05-06자로 공식 종료되어 더 이상 사용할 수 없습니다.
@@ -396,6 +417,11 @@ WEEKDAY_THEME_CATEGORY: Dict[int, str] = {
     4: "번역감정",   # 금요일 (플래그십 카테고리 재순환)
 }
 
+# [NEW] 에버그린 365일 자동확장 + 재사용 쿨다운.
+# 한 번 발행한 키워드는 최소 이 일수(365일) 동안 재발행 후보에서 제외되어 중복발행을 막고,
+# 쿨다운이 지나면 다시 후보 풀에 편입되어 100개 시드 + Gemini 자동확장분을 반영구적으로 순환한다.
+TOPIC_REUSE_COOLDOWN_DAYS = 365
+
 
 # =====================================================================
 # [SEO] Topic Cluster — 내부링크를 같은 주제 묶음으로 연결 (진단 권고)
@@ -476,6 +502,50 @@ def _topic_category(topic: str, queue: Optional[Dict[str, Any]] = None) -> Optio
     return None
 
 
+def _record_topic_published(queue: Dict[str, Any], topic: str) -> None:
+    """[NEW] 발행 확정된 키워드를 completed + 날짜가 찍힌 history에 함께 기록한다.
+    history의 날짜가 365일 재사용 쿨다운/중복발행 판정의 유일한 근거가 된다."""
+    queue.setdefault("completed", [])
+    if topic not in queue["completed"]:
+        queue["completed"].append(topic)
+    queue.setdefault("history", [])
+    queue["history"].append({"topic": topic, "date": now_kst().strftime("%Y-%m-%d")})
+
+
+def _topics_blocked_by_cooldown(queue: Optional[Dict[str, Any]] = None) -> set:
+    """[NEW] history에서 최근 TOPIC_REUSE_COOLDOWN_DAYS(365일) 이내에 발행된 키워드의
+    정규화 키 집합을 반환한다. 이 안에 있으면 '아직 재사용 불가(=중복발행 후보 제외)',
+    쿨다운이 지난 키워드는 여기 포함되지 않으므로 다시 후보 풀에 편입될 수 있다."""
+    if queue is None:
+        try:
+            queue = load_queue()
+        except Exception:
+            queue = {}
+    blocked: set = set()
+    cutoff = now_kst() - timedelta(days=TOPIC_REUSE_COOLDOWN_DAYS)
+    history = (queue or {}).get("history") or []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        topic = entry.get("topic")
+        date_str = entry.get("date")
+        if not topic or not date_str:
+            continue
+        try:
+            entry_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=KST)
+        except ValueError:
+            continue
+        if entry_date >= cutoff:
+            blocked.add(_normalize_for_dedupe(topic))
+    # [호환] history가 아직 없는(날짜 정보가 없는) 구버전 completed 항목은 안전하게 계속 차단 처리
+    history_topics_norm = {_normalize_for_dedupe(e.get("topic", "")) for e in history if isinstance(e, dict)}
+    for t in (queue or {}).get("completed", []) or []:
+        nkey = _normalize_for_dedupe(t)
+        if nkey and nkey not in history_topics_norm:
+            blocked.add(nkey)
+    return blocked
+
+
 def _all_known_topics(queue: Optional[Dict[str, Any]] = None) -> set:
     """시드 + extra_topics 전체 집합."""
     known = set()
@@ -554,7 +624,7 @@ def pick_next_topic(queue: Dict[str, Any]) -> Optional[str]:
     if not pending:
         return None
 
-    today_category = WEEKDAY_THEME_CATEGORY.get(datetime.now().weekday())
+    today_category = WEEKDAY_THEME_CATEGORY.get(now_kst().weekday())
     if today_category:
         matches = [t for t in pending if _topic_category(t, queue) == today_category]
         if matches:
@@ -569,6 +639,7 @@ def load_queue() -> Dict[str, Any]:
     default = {
         "pending": [],
         "completed": [],
+        "history": [],  # [NEW] {"topic": str, "date": "YYYY-MM-DD"} — 365일 재사용 쿨다운/중복발행 판정용
         "daily_stats": {"date": "", "count": 0},
         "extra_topics": {"번역감정": [], "일상표현": [], "한국문화": [], "리액션": []},
         "pending_review": [],
@@ -583,6 +654,8 @@ def load_queue() -> Dict[str, Any]:
             data.setdefault(k, v if not isinstance(v, dict) else dict(v))
         if not isinstance(data.get("extra_topics"), dict):
             data["extra_topics"] = default["extra_topics"]
+        if not isinstance(data.get("history"), list):
+            data["history"] = []
         return data
     except (json.JSONDecodeError, IOError) as e:
         logger.warning(f"큐 파일을 불러오는 데 실패했습니다: {e}")
@@ -641,15 +714,16 @@ def _suggest_new_topics_via_gemini(used_topics: set, per_category: int = 4) -> D
             out[cat] = cleaned[:per_category]
         return out
     except Exception as e:
-        logger.warning(f"[주제 확장] 제안 실패: {e}")
+        logger.warning(f"[주제 확장] 제안 실패: {_mask_secrets(str(e))}")
         return {}
 
 
 def expand_evergreen_topics_if_needed(queue: Dict[str, Any], min_pending: int = 8, suggest_per_cat: int = 4) -> Dict[str, Any]:
-    """시드+extra 미사용분이 부족하면 Gemini 제안 → 중복 제거 후 extra_topics·pending에 편입."""
+    """시드+extra 미사용분이 부족하면 Gemini 제안 → 중복 제거 후 extra_topics·pending에 편입.
+    [NEW] '사용중'은 현재 대기열(pending) + 365일 쿨다운 이내에 발행된 키워드(history)만 포함한다.
+    쿨다운이 지난 completed 키워드는 여기서 제외되어 자동으로 재사용 후보가 된다."""
     queue = dedupe_queue_topics(queue)
-    used = set(queue.get("pending", [])) | set(queue.get("completed", []))
-    used_norm = {_normalize_for_dedupe(t) for t in used}
+    used_norm = {_normalize_for_dedupe(t) for t in queue.get("pending", [])} | _topics_blocked_by_cooldown(queue)
     known = _all_known_topics(queue)
 
     pool_count = 0
@@ -664,7 +738,9 @@ def expand_evergreen_topics_if_needed(queue: Dict[str, Any], min_pending: int = 
         return queue
 
     logger.info(f"[주제 확장] 대기 {len(queue.get('pending', []))} / 미사용풀 {pool_count} → Gemini 신규 제안 시도")
-    suggestions = _suggest_new_topics_via_gemini(used | known, per_category=suggest_per_cat)
+    # [NEW] 제안 다양성을 위해 쿨다운 여부와 무관하게 "지금까지 한 번이라도 쓴 적 있는" 전체 이력을 회피 대상으로 전달
+    ever_used = set(queue.get("pending", [])) | set(queue.get("completed", [])) | known
+    suggestions = _suggest_new_topics_via_gemini(ever_used, per_category=suggest_per_cat)
     if not suggestions:
         return queue
 
@@ -714,8 +790,9 @@ def refill_evergreen_queue(target_size: int = 20) -> None:
     # 고갈 임박이면 먼저 확장
     queue = expand_evergreen_topics_if_needed(queue, min_pending=max(8, target_size // 2))
 
-    used = set(queue.get("pending", [])) | set(queue.get("completed", []))
-    used_norm = {_normalize_for_dedupe(t) for t in used}
+    # [NEW] pending(대기중) + 365일 쿨다운 이내 발행 이력만 '사용중'으로 간주.
+    # 쿨다운이 지난 completed 키워드는 여기서 제외되어 풀에 다시 편입될 수 있다 (365일 자동 순환).
+    used_norm = {_normalize_for_dedupe(t) for t in queue.get("pending", [])} | _topics_blocked_by_cooldown(queue)
 
     pool: List[Tuple[str, int]] = []
     for category in ("번역감정", "일상표현", "한국문화", "리액션"):
@@ -763,7 +840,7 @@ GITHUB_EVENT_NAME = os.environ.get("GITHUB_EVENT_NAME", "")  # "schedule"=자동
 
 def check_daily_limit() -> bool:
     queue = load_queue()
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = now_kst().strftime("%Y-%m-%d")
     daily_stats = queue.get("daily_stats", {"date": "", "count": 0})
     if daily_stats.get("date") != today_str:
         return True
@@ -772,9 +849,11 @@ def check_daily_limit() -> bool:
 def _should_publish_now_random() -> bool:
     """[NEW] '하루 랜덤 자동 2번 발행' — 매시 정각마다 cron이 돌지만, 실제 발행 여부는
     저수지 표본추출(reservoir sampling) 방식의 확률로 결정해 하루 중 무작위 시각에
-    총 DAILY_PUBLISH_LIMIT회만 발행되도록 한다. (수동 실행은 이 함수를 타지 않음 — 제한 없음)"""
+    총 DAILY_PUBLISH_LIMIT회만 발행되도록 한다. (수동 실행은 이 함수를 타지 않음 — 제한 없음)
+    [FIX] '하루'와 '시각'은 반드시 KST 기준이어야 한다 — UTC 기준이면 GitHub Actions 러너의
+    UTC 자정(=KST 오전 9시)에 날짜가 바뀌어 한도 리셋 시점과 확률 분포가 실제 한국 시간과 어긋난다."""
     queue = load_queue()
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = now_kst().strftime("%Y-%m-%d")
     daily_stats = queue.get("daily_stats", {"date": "", "count": 0})
     published_today = daily_stats.get("count", 0) if daily_stats.get("date") == today_str else 0
 
@@ -782,16 +861,16 @@ def _should_publish_now_random() -> bool:
     if slots_remaining <= 0:
         return False
 
-    now = datetime.now()
+    now = now_kst()
     hours_remaining = 24 - now.hour  # 이번 시각의 실행도 후보에 포함
     probability = min(1.0, slots_remaining / max(1, hours_remaining))
     roll = random.random()
-    logger.info(f"[랜덤 발행 판정] 오늘 발행 {published_today}/{DAILY_PUBLISH_LIMIT}회, 남은 시간대 {hours_remaining}개, 발행 확률 {probability:.2f}, 주사위 {roll:.2f}")
+    logger.info(f"[랜덤 발행 판정] 오늘 발행 {published_today}/{DAILY_PUBLISH_LIMIT}회, 남은 시간대(KST) {hours_remaining}개, 발행 확률 {probability:.2f}, 주사위 {roll:.2f}")
     return roll < probability
 
 def increment_daily_count() -> None:
     queue = load_queue()
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = now_kst().strftime("%Y-%m-%d")
     daily_stats = queue.get("daily_stats", {"date": today_str, "count": 0})
     if daily_stats.get("date") == today_str:
         daily_stats["count"] = daily_stats.get("count", 0) + 1
@@ -1387,6 +1466,13 @@ def _fallback_article_local(title: str) -> Dict[str, Any]:
     }
 
 
+# [FIX-API보완] 재시도 최대 횟수와, 워크플로우 timeout(20분)을 넘기지 않도록 하는
+# 전체 재시도 시간 예산(초). 예산을 넘기면 남은 재시도를 포기하고 즉시 실패 처리해
+# 이미지 생성·발행·git push에 쓸 시간을 확보한다.
+GEMINI_MAX_ATTEMPTS = 6
+GEMINI_RETRY_BUDGET_SECONDS = 480  # 8분
+
+
 def generate_article(title: str) -> Dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 비어있습니다. 저장소 Secrets 설정을 확인하세요.")
@@ -1394,7 +1480,7 @@ def generate_article(title: str) -> Dict[str, Any]:
     url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": f"오늘 날짜: {datetime.now().strftime('%Y년 %m월 %d일')}\n\n주제: '{title}'\n\n이 한국어 표현/문화 주제에 대해, H.O.L.D. 흐름(훅→긴장→열린 궁금증→핵심 전달)을 살려 외국인 학습자가 끝까지 읽고 싶어하는 글을 작성해주세요. 소제목(H2) 문구와 순서는 매 글마다 변주하세요.\n\n[문화 절대 단정 금지 — 매우 중요]\n'한국인은 항상/절대/모두', '한국 문화에서는 ~이다', 'Koreans always', 'all Koreans', 'obsessed with' 같은 무출처 일반화를 본문에 넣지 마세요.\n대신 '~인 경우가 많다', '많은 한국인에게 ~로 느껴진다', '흔히 관찰되는 경향이다', 'learners often notice that…'처럼 완화해 쓰세요.\n시점을 언급할 때는 반드시 위에 적힌 '오늘 날짜'를 기준으로 하세요."}]}],
+        "contents": [{"role": "user", "parts": [{"text": f"오늘 날짜: {now_kst().strftime('%Y년 %m월 %d일')}\n\n주제: '{title}'\n\n이 한국어 표현/문화 주제에 대해, H.O.L.D. 흐름(훅→긴장→열린 궁금증→핵심 전달)을 살려 외국인 학습자가 끝까지 읽고 싶어하는 글을 작성해주세요. 소제목(H2) 문구와 순서는 매 글마다 변주하세요.\n\n[문화 절대 단정 금지 — 매우 중요]\n'한국인은 항상/절대/모두', '한국 문화에서는 ~이다', 'Koreans always', 'all Koreans', 'obsessed with' 같은 무출처 일반화를 본문에 넣지 마세요.\n대신 '~인 경우가 많다', '많은 한국인에게 ~로 느껴진다', '흔히 관찰되는 경향이다', 'learners often notice that…'처럼 완화해 쓰세요.\n시점을 언급할 때는 반드시 위에 적힌 '오늘 날짜'를 기준으로 하세요."}]}],
         # [FIX] JSON 파싱 실패를 줄이기 위해 순수 JSON 출력을 강제하고 출력 토큰 한도를 명시적으로 늘림
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -1403,14 +1489,20 @@ def generate_article(title: str) -> Dict[str, Any]:
     }
 
     last_error = None
-    for attempt in range(1, 7):  # 429 대비 재시도 확대
+    retry_start = time.time()
+    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+        elapsed = time.time() - retry_start
+        if elapsed > GEMINI_RETRY_BUDGET_SECONDS:
+            last_error = f"재시도 시간 예산({GEMINI_RETRY_BUDGET_SECONDS}초) 초과로 중단 (마지막 오류: {last_error})"
+            logger.warning(f"[Gemini] {last_error}")
+            break
         try:
             resp = requests.post(url, json=payload, timeout=60)
             if resp.status_code in (429, 503):
-                # Gemini free-tier 429: 지수 백오프 (30s → 최대 3분)
-                wait = min(30 * attempt, 180)
+                # Gemini free-tier 429: 지수 백오프 (30s → 최대 3분). 단, 남은 시간 예산을 넘지 않게 캡핑.
+                wait = min(30 * attempt, 180, max(0, GEMINI_RETRY_BUDGET_SECONDS - elapsed))
                 logger.warning(
-                    f"일시적 오류({resp.status_code}), {wait}초 대기 후 재시도 ({attempt}/6) "
+                    f"일시적 오류({resp.status_code}), {wait:.0f}초 대기 후 재시도 ({attempt}/{GEMINI_MAX_ATTEMPTS}) "
                     f"— API 할당량/동시요청 한도일 수 있습니다"
                 )
                 time.sleep(wait)
@@ -1423,14 +1515,14 @@ def generate_article(title: str) -> Dict[str, Any]:
             if not candidates:
                 block_reason = data.get("promptFeedback", {}).get("blockReason", "알 수 없음")
                 last_error = f"candidates가 비어있음 (blockReason: {block_reason})"
-                logger.warning(f"[Gemini] 응답에 candidates가 없습니다 ({attempt}/3): {last_error}")
+                logger.warning(f"[Gemini] 응답에 candidates가 없습니다 ({attempt}/{GEMINI_MAX_ATTEMPTS}): {last_error}")
                 continue
 
             finish_reason = candidates[0].get("finishReason", "")
             parts = candidates[0].get("content", {}).get("parts", [])
             if not parts:
                 last_error = f"content.parts가 비어있음 (finishReason: {finish_reason})"
-                logger.warning(f"[Gemini] 빈 응답 ({attempt}/3): {last_error}")
+                logger.warning(f"[Gemini] 빈 응답 ({attempt}/{GEMINI_MAX_ATTEMPTS}): {last_error}")
                 continue
 
             text = parts[0].get("text", "")
@@ -1442,14 +1534,14 @@ def generate_article(title: str) -> Dict[str, Any]:
             except json.JSONDecodeError as e:
                 last_error = f"JSON 파싱 실패: {e} (finishReason: {finish_reason}, 응답 길이: {len(text)}자)"
                 logger.warning(
-                    f"[Gemini] {last_error} ({attempt}/3)\n"
+                    f"[Gemini] {last_error} ({attempt}/{GEMINI_MAX_ATTEMPTS})\n"
                     f"  응답 앞부분: {text[:200]!r}\n  응답 뒷부분: {text[-200:]!r}"
                 )
                 continue
 
             if not article.get("title") or not article.get("html_body"):
                 last_error = "응답 JSON에 title 또는 html_body가 없습니다."
-                logger.warning(f"[Gemini] {last_error} ({attempt}/3)")
+                logger.warning(f"[Gemini] {last_error} ({attempt}/{GEMINI_MAX_ATTEMPTS})")
                 continue
 
             article["keyword"] = title
@@ -1474,9 +1566,11 @@ def generate_article(title: str) -> Dict[str, Any]:
             return article
         except (KeyError, IndexError) as e:
             last_error = f"Gemini 응답 형식이 예상과 다릅니다: {e}"
-            logger.warning(f"[Gemini] {last_error} ({attempt}/3)")
+            logger.warning(f"[Gemini] {last_error} ({attempt}/{GEMINI_MAX_ATTEMPTS})")
         except requests.exceptions.RequestException as e:
-            last_error = str(e)
+            # [FIX-보안] 커넥션 오류 메시지에는 요청 URL(=API 키 쿼리스트링)이 그대로 포함될 수 있어 마스킹 후 저장/로깅
+            last_error = _mask_secrets(str(e))
+            logger.warning(f"[Gemini] 네트워크 오류 ({attempt}/{GEMINI_MAX_ATTEMPTS}): {last_error}")
             time.sleep(10)
 
     raise RuntimeError(f"Gemini 글 생성 실패(재시도 소진): {last_error}")
@@ -2049,7 +2143,7 @@ def plan_instatoon_from_blog(article: Dict[str, Any]) -> Dict[str, Any]:
         )
         return plan
     except Exception as e:
-        logger.warning(f"[인스타툰] 마스터 설계 실패, 폴백: {e}")
+        logger.warning(f"[인스타툰] 마스터 설계 실패, 폴백: {_mask_secrets(str(e))}")
         return plan
 
 
@@ -2182,8 +2276,8 @@ def _try_cloudflare_flux_bytes(prompt: str) -> Optional[bytes]:
                 last_err = f"응답 파싱 실패 ctype={r.headers.get('Content-Type')} body={r.text[:160]}"
                 logger.warning(f"[인스타툰] {last_err}")
             except Exception as e:
-                last_err = str(e)
-                logger.warning(f"[인스타툰] Cloudflare 예외: {e}")
+                last_err = _mask_secrets(str(e))
+                logger.warning(f"[인스타툰] Cloudflare 예외: {last_err}")
     logger.warning(f"[인스타툰] Cloudflare FLUX 실패 — {last_err}")
     return None
 
@@ -2233,7 +2327,7 @@ def _try_hf_flux_bytes(prompt: str) -> Optional[bytes]:
                 return r.content
             logger.warning(f"[인스타툰] HF HTTP {r.status_code}: {r.text[:180]}")
         except Exception as e:
-            logger.warning(f"[인스타툰] HF 예외: {e}")
+            logger.warning(f"[인스타툰] HF 예외: {_mask_secrets(str(e))}")
     return None
 
 
@@ -3291,7 +3385,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
     category = article.get("category", "번역감정")
     theme = get_theme(category)
     slug = slugify(article["keyword"])
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_kst().strftime("%Y-%m-%d")
     thumb_filename = f"{slug}-{today}.jpg"
     post_filename = f"{slug}-{today}.html"
     thumb_path = os.path.join(DOCS_DIR, "thumbs", thumb_filename)
@@ -3433,7 +3527,7 @@ def render_index_html(posts: List[Dict[str, Any]]) -> None:
             category_pills=category_pills, search_console_meta=_search_console_meta(),
             eng_slogan=ENGLISH_SLOGAN, lead_magnet_html=_lead_magnet_html(), social_row_html=_social_row_html(),
             footer_html='<div class="site-footer"><a href="about.html">블로그 소개</a>·<a href="privacy.html">개인정보처리방침</a>·<a href="contact.html">문의하기</a>'
-                        f'<div style="margin-top:8px;">© {datetime.now().year} {SITE_TITLE}</div></div>',
+                        f'<div style="margin-top:8px;">© {now_kst().year} {SITE_TITLE}</div></div>',
             translate_widget=_translate_widget(),
             site_title_short=SITE_TITLE[:12],
         ))
@@ -3598,7 +3692,7 @@ def build_lead_magnet_pdf(posts: List[Dict[str, Any]]) -> bool:
         c.setFont(font_name, 13)
         c.drawCentredString(w / 2, h - 195, "Korean Expressions Guide")
         c.setFont(font_name, 10)
-        c.drawCentredString(w / 2, h - 220, f"{len(posts)}개 표현 · {datetime.now().strftime('%Y-%m-%d')} 기준")
+        c.drawCentredString(w / 2, h - 220, f"{len(posts)}개 표현 · {now_kst().strftime('%Y-%m-%d')} 기준")
         c.showPage()
 
         # 목록 (표현 + 뜻 요약)
@@ -3710,62 +3804,6 @@ def strip_interactive_widgets(html_body: str) -> str:
     html_body = re.sub(r'<div id="tblzoom[^"]*"[^>]*>.*?</div>\s*</div>', '', html_body, flags=re.DOTALL)
     # 혹시 남아있는 onclick 속성 전체 제거 (안전망)
     html_body = re.sub(r'\s*onclick="[^"]*"', '', html_body)
-    return html_body
-
-def convert_tables_to_lists_for_wordpress(html_body: str) -> str:
-    """[FIX-5차·최종] style 속성을 다 제거해도 <table> 태그 자체가 여전히 텍스트로 노출되는 것을
-    스크린샷으로 재확인 — 즉 워드프레스닷컴은 속성 유무와 무관하게 <table> 태그 자체를 콘텐츠
-    저장 과정에서 정상 처리하지 못합니다(자체 kses 화이트리스트에서 table 계열 태그가 제외되어
-    있는 것으로 추정). <table>을 아예 쓰지 않고 행 단위 목록(<ul><li>)으로 변환해 문제 자체를
-    피해갑니다."""
-    def _cell_text(cell_html: str) -> str:
-        return re.sub(r'<[^>]+>', '', cell_html).strip()
-
-    def _convert(m: "re.Match") -> str:
-        table_html = m.group(0)
-        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_html, re.DOTALL)
-        if not rows:
-            return ''
-        header_cells = [_cell_text(c) for c in re.findall(r'<t[hd][^>]*>(.*?)</t[hd]>', rows[0], re.DOTALL)]
-        body_rows = rows[1:] if re.search(r'<th\b', rows[0]) else rows
-        items = []
-        for row in body_rows:
-            cells = [_cell_text(c) for c in re.findall(r'<t[hd][^>]*>(.*?)</t[hd]>', row, re.DOTALL)]
-            if not any(cells):
-                continue
-            # [FIX] 한 줄에 " · "로 몰아넣으면 가독성이 떨어진다는 피드백 반영.
-            # 첫 열은 이 항목의 제목처럼 굵게, 나머지는 "라벨: 값" 형태로 줄바꿈해서 나열.
-            first_cell, rest_cells = cells[0], cells[1:]
-            lines = [f'<b>{first_cell}</b>']
-            for i, cell in enumerate(rest_cells, start=1):
-                if not cell:
-                    continue
-                label = header_cells[i] if i < len(header_cells) else ''
-                lines.append(f'<b>{label}</b> {cell}' if label else cell)
-            items.append('<li style="margin-bottom:10px;">' + '<br>'.join(lines) + '</li>')
-        return '<ul>' + ''.join(items) + '</ul>' if items else ''
-
-    return re.sub(r'<table\b.*?</table>', _convert, html_body, flags=re.DOTALL)
-
-def _make_wordpress_images_responsive(html_body: str) -> str:
-    """[FIX] style 속성을 제거하면서 고정 픽셀 width="1280" 같은 값만 남아, 좁은 모바일 화면에서도
-    그대로 1280px로 렌더링되어 이미지가 화면 밖으로 넘치던 문제를 해결합니다. width는 100%로,
-    height는 제거해 종횡비를 유지한 채 컨테이너 폭에 맞게 자동으로 줄어들게 합니다."""
-    def _fix(m: "re.Match") -> str:
-        tag = m.group(0)
-        tag = re.sub(r'\swidth="\d+"', ' width="100%"', tag)
-        tag = re.sub(r'\sheight="\d+"', '', tag)
-        return tag
-    return re.sub(r'<img\b[^>]*>', _fix, html_body)
-
-def build_wordpress_gutenberg_content(html_body: str) -> str:
-    """[FIX-5차·최종 원인 확정] <table> 태그 자체가 속성 유무와 무관하게 워드프레스닷컴에서
-    텍스트로 노출되는 것으로 최종 확인됨. table을 목록으로 완전히 대체하고, 나머지 style 속성도
-    kses 안전성을 위해 제거합니다."""
-    html_body = strip_interactive_widgets(html_body)
-    html_body = convert_tables_to_lists_for_wordpress(html_body)  # [FIX] <table> 자체를 배제
-    html_body = re.sub(r'\s+style="[^"]*"', '', html_body)  # 나머지 style 속성도 안전을 위해 제거
-    html_body = _make_wordpress_images_responsive(html_body)  # [FIX] 이미지 크기 오버 방지
     return html_body
 
 def _make_blogger_safe_html(html_body: str) -> str:
@@ -3949,7 +3987,7 @@ def _maybe_auto_repair_once() -> None:
     if not AUTO_REPAIR_ONCE_PER_DAY:
         return
     marker = os.path.join(DOCS_DIR, ".last_auto_repair_date")
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_kst().strftime("%Y-%m-%d")
     try:
         if os.path.exists(marker):
             with open(marker, "r", encoding="utf-8") as f:
@@ -4462,7 +4500,7 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
     try:
         access_token = _get_blogger_access_token()
         theme = get_theme(article.get("category", "번역감정"))
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = now_kst().strftime("%Y-%m-%d")
         blogger_json_ld = build_json_ld(article, canonical_url, thumb_url, today, platform="blogger")
         # [FIX] base64는 요약 스니펫 글자수 제한 안에서 이미지가 아예 안 뜨는 원인이었음.
         # 사전 push가 보장되므로 실제 GitHub Pages URL(thumb_url)을 그대로 사용.
@@ -4564,213 +4602,6 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         logger.error(f"[블로거] 발행 실패: {e}")
         return None
 
-# =====================================================================
-# [NEW] 워드프레스 동시 자동 발행 (워드프레스닷컴/Jetpack용 OAuth2 + 자체호스팅용 Basic Auth 자동 분기)
-# - [FIX] *.wordpress.com 호스팅 사이트(예: kresonate.wordpress.com)는 자체 호스팅 워드프레스와 전혀
-#   다른 API(public-api.wordpress.com)를 쓰고 Basic Auth(Application Password)를 지원하지 않습니다.
-#   OAuth2만 가능합니다. 그래서 WORDPRESS_CLIENT_ID/SECRET이 설정되어 있으면 워드프레스닷컴 OAuth2
-#   "password grant" 방식을 쓰고, 없으면 기존 자체호스팅용 Basic Auth 방식으로 동작합니다.
-# - [워드프레스닷컴 준비물]
-#   1) https://developer.wordpress.com/apps/new/ 에서 앱 등록 → Client ID / Client Secret 발급
-#      (Redirect URI는 password grant에는 쓰이지 않으므로 아무 값이나 입력 가능, 예: https://localhost)
-#   2) 워드프레스닷컴 계정 보안 설정(2단계 인증 활성화 후 my.wordpress.com/me/security)에서
-#      Application Password 발급 → WORDPRESS_APP_PASSWORD 로 사용
-#   3) WORDPRESS_URL에는 사이트 주소(예: kresonate.wordpress.com)를 입력
-# - 미설정 시 조용히 건너뛰며(로그로 사유 표시), 실패해도 다른 발행 채널에는 영향 없습니다.
-# =====================================================================
-def _wordpress_configured() -> bool:
-    return bool(WORDPRESS_URL and WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD)
-
-def _wordpress_is_com_mode() -> bool:
-    # Client ID/Secret이 있으면 워드프레스닷컴(OAuth2) 모드로 판단
-    return bool(WORDPRESS_CLIENT_ID and WORDPRESS_CLIENT_SECRET)
-
-def _get_wordpress_com_access_token() -> str:
-    resp = requests.post(
-        "https://public-api.wordpress.com/oauth2/token",
-        data={
-            "client_id": WORDPRESS_CLIENT_ID,
-            "client_secret": WORDPRESS_CLIENT_SECRET,
-            "grant_type": "password",
-            "username": WORDPRESS_USERNAME,
-            "password": WORDPRESS_APP_PASSWORD,
-        },
-        timeout=15,
-    )
-    if not resp.ok:
-        # [FIX] resp.raise_for_status()만 쓰면 "400 Client Error"만 남고 정작 왜 실패했는지
-        # (invalid_client/invalid_grant/invalid_request 등) 알 수 없었음 → 응답 본문을 그대로 노출
-        raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패 (HTTP {resp.status_code}): {resp.text[:500]}")
-    data = resp.json()
-    if "access_token" not in data:
-        raise RuntimeError(f"워드프레스닷컴 토큰 발급 실패: {data}")
-    return data["access_token"]
-
-def _upload_media_to_wordpress_com(site: str, access_token: str, local_path: str) -> Optional[str]:
-    """워드프레스닷컴 미디어 라이브러리에 로컬 이미지를 업로드하고, 실제 호스팅되는 공개 URL을 반환합니다.
-    [FIX] base64 data URI는 워드프레스닷컴 콘텐츠 정제(sanitizer)가 보안상 걸러내어 이미지가
-    통째로 깨지는 원인이었습니다. 대신 정식 미디어 업로드 API로 실제 URL을 발급받아 사용합니다."""
-    try:
-        with open(local_path, "rb") as f:
-            files = {"media[]": (os.path.basename(local_path), f, "image/webp")}
-            resp = requests.post(
-                f"https://public-api.wordpress.com/rest/v1.1/sites/{site}/media/new",
-                headers={"Authorization": f"Bearer {access_token}"},
-                files=files,
-                timeout=30,
-            )
-        if not resp.ok:
-            logger.warning(f"[워드프레스] 미디어 업로드 실패 (HTTP {resp.status_code}): {resp.text[:300]}")
-            return None
-        media_list = resp.json().get("media", [])
-        return media_list[0]["URL"] if media_list else None
-    except Exception as e:
-        logger.warning(f"[워드프레스] 미디어 업로드 실패 '{local_path}': {e}")
-        return None
-
-def _replace_thumbs_with_wordpress_media(html_body: str, site: str, access_token: str) -> str:
-    """본문 속 '../thumbs/파일명' 상대경로 이미지를 워드프레스 미디어 라이브러리에 업로드한 뒤
-    실제 URL로 치환합니다. 같은 파일이 여러 번 나와도 한 번만 업로드하도록 캐싱합니다."""
-    uploaded_cache: Dict[str, Optional[str]] = {}
-
-    def _replace(m: "re.Match") -> str:
-        filename = m.group(1)
-        if filename not in uploaded_cache:
-            local_path = os.path.join(DOCS_DIR, "thumbs", filename)
-            uploaded_cache[filename] = _upload_media_to_wordpress_com(site, access_token, local_path)
-        hosted_url = uploaded_cache[filename]
-        return f'src="{hosted_url}"' if hosted_url else m.group(0)
-
-    return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
-
-def _publish_to_wordpress_com(article: Dict[str, Any], source_url: str, local_thumb_path: str) -> None:
-    access_token = _get_wordpress_com_access_token()
-    theme = get_theme(article.get("category", "번역감정"))
-    site = WORDPRESS_URL.replace("https://", "").replace("http://", "").rstrip("/")
-
-    thumb_hosted_url = _upload_media_to_wordpress_com(site, access_token, local_thumb_path)
-    safe_body = _replace_thumbs_with_wordpress_media(article["html_body"], site, access_token)
-
-    hero_html = (
-        (f'<img src="{thumb_hosted_url}" alt="{html.escape(article["title"], quote=True)}" width="1280" height="720" /><br>' if thumb_hosted_url else "")
-        + f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
-        f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:10px 0 4px;">{theme["badge"]}</span>'
-    )
-    # [FIX] 표만 워드프레스 네이티브 core/table 블록으로 변환하고 나머지는 HTML 블록으로 감쌈
-    # (본문 전체를 하나의 Custom HTML 블록으로 통째로 감싸는 방식이 표 깨짐/앱 미리보기 불가의 원인이었음)
-    content_html = build_wordpress_gutenberg_content(hero_html + safe_body)
-    payload = {
-        "title": article["title"],
-        "content": content_html,
-        "status": "publish",
-        "excerpt": article.get("meta_description", ""),
-    }
-    resp = requests.post(
-        f"https://public-api.wordpress.com/rest/v1.1/sites/{site}/posts/new",
-        headers={"Authorization": f"Bearer {access_token}"},
-        data=payload,
-        timeout=30,
-    )
-    if not resp.ok:
-        raise RuntimeError(f"워드프레스닷컴 글 발행 실패 (HTTP {resp.status_code}, site={site}): {resp.text[:500]}")
-    logger.info(f"[워드프레스] 발행 완료(워드프레스닷컴): {resp.json().get('URL', '(URL 확인 불가)')}")
-
-def _upload_media_to_wordpress_self_hosted(auth_header: str, local_path: str) -> Optional[Dict[str, Any]]:
-    """자체호스팅 워드프레스 미디어 라이브러리에 업로드하고 {id, url}을 반환합니다."""
-    try:
-        with open(local_path, "rb") as f:
-            img_bytes = f.read()
-        resp = requests.post(
-            f"{WORDPRESS_URL}/wp-json/wp/v2/media",
-            headers={
-                "Authorization": auth_header,
-                "Content-Disposition": f'attachment; filename="{os.path.basename(local_path)}"',
-                "Content-Type": "image/webp",
-            },
-            data=img_bytes,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return {"id": data.get("id"), "url": data.get("source_url")}
-    except Exception as e:
-        logger.warning(f"[워드프레스] 미디어 업로드 실패 '{local_path}': {e}")
-        return None
-
-def _replace_thumbs_with_wordpress_self_hosted_media(html_body: str, auth_header: str) -> str:
-    uploaded_cache: Dict[str, Optional[str]] = {}
-
-    def _replace(m: "re.Match") -> str:
-        filename = m.group(1)
-        if filename not in uploaded_cache:
-            local_path = os.path.join(DOCS_DIR, "thumbs", filename)
-            media = _upload_media_to_wordpress_self_hosted(auth_header, local_path)
-            uploaded_cache[filename] = media["url"] if media else None
-        hosted_url = uploaded_cache[filename]
-        return f'src="{hosted_url}"' if hosted_url else m.group(0)
-
-    return re.sub(r'src="\.\./thumbs/([^"]+)"', _replace, html_body)
-
-def _publish_to_wordpress_self_hosted(article: Dict[str, Any], canonical_url: str, local_thumb_path: str) -> None:
-    auth_token = base64.b64encode(f"{WORDPRESS_USERNAME}:{WORDPRESS_APP_PASSWORD}".encode("utf-8")).decode("ascii")
-    auth_header = f"Basic {auth_token}"
-    theme = get_theme(article.get("category", "번역감정"))
-
-    # 대표이미지(썸네일) 업로드 (실패해도 본문 발행은 계속 진행)
-    featured_media_id = None
-    thumb_media = _upload_media_to_wordpress_self_hosted(auth_header, local_thumb_path)
-    if thumb_media:
-        featured_media_id = thumb_media.get("id")
-
-    # [FIX] base64 data URI는 워드프레스 콘텐츠 정제 필터가 걸러낼 수 있어(워드프레스닷컴에서 실제로 발생),
-    # 자체호스팅에서도 동일 위험을 피하기 위해 실제 미디어 업로드 방식으로 통일
-    safe_body = _replace_thumbs_with_wordpress_self_hosted_media(article["html_body"], auth_header)
-    hero_html = (
-        f'<span style="display:inline-block;background:{theme["accent"]};color:#fff;font-size:0.85em;'
-        f'font-weight:bold;padding:4px 12px;border-radius:999px;margin:0 0 14px;">{theme["badge"]}</span>'
-    )
-    # [FIX] 표만 네이티브 core/table 블록으로 변환, 나머지는 HTML 블록으로 감쌈
-    content_html = build_wordpress_gutenberg_content(hero_html + safe_body)
-    payload = {
-        "title": article["title"],
-        "content": content_html,
-        "status": "publish",
-        "excerpt": article.get("meta_description", ""),
-    }
-    if featured_media_id:
-        payload["featured_media"] = featured_media_id
-
-    resp = requests.post(
-        f"{WORDPRESS_URL}/wp-json/wp/v2/posts",
-        headers={"Authorization": auth_header, "Content-Type": "application/json"},
-        json=payload,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    logger.info(f"[워드프레스] 발행 완료(자체호스팅): {resp.json().get('link', '(URL 확인 불가)')}")
-
-def publish_to_wordpress(article: Dict[str, Any], source_url: str, thumb_url: str, local_thumb_path: str) -> None:
-    if not _wordpress_configured():
-        missing = [name for name, val in [
-            ("WORDPRESS_URL", WORDPRESS_URL),
-            ("WORDPRESS_USERNAME", WORDPRESS_USERNAME),
-            ("WORDPRESS_APP_PASSWORD", WORDPRESS_APP_PASSWORD),
-        ] if not val]
-        logger.info(f"[워드프레스] 미설정으로 건너뜁니다. (비어있는 값: {', '.join(missing)})")
-        return
-    try:
-        if _wordpress_is_com_mode():
-            _publish_to_wordpress_com(article, source_url, local_thumb_path)
-        else:
-            logger.warning(
-                "[워드프레스] WORDPRESS_CLIENT_ID/SECRET이 없어 자체호스팅용 Basic Auth 방식을 시도합니다. "
-                "워드프레스닷컴(*.wordpress.com) 사이트라면 이 방식은 항상 실패합니다 — "
-                "https://developer.wordpress.com/apps/new/ 에서 앱을 등록하세요."
-            )
-            _publish_to_wordpress_self_hosted(article, source_url, local_thumb_path)
-    except Exception as e:
-        logger.error(f"[워드프레스] 발행 실패: {e}")
-
 def ensure_nojekyll() -> None:
     os.makedirs(DOCS_DIR, exist_ok=True)
     if not os.path.exists(os.path.join(DOCS_DIR, ".nojekyll")):
@@ -4795,7 +4626,7 @@ def commit_and_push_changes() -> bool:
         if diff_check.returncode == 0:
             logger.info("[git] 변경사항 없음, 사전 push 생략")
             return True
-        commit_msg = f"자동 파이프라인 실행(사전 push): {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        commit_msg = f"자동 파이프라인 실행(사전 push): {now_kst().strftime('%Y-%m-%d %H:%M')}"
         subprocess.run(["git", "commit", "-m", commit_msg], check=True, capture_output=True)
         subprocess.run(["git", "push"], check=True, capture_output=True)
         logger.info("[git] GitHub Pages 사전 push 완료 (외부 발행 시 이미지 URL이 실제로 존재함을 보장)")
@@ -5039,7 +4870,7 @@ def build_ab_title_variants(article: Dict[str, Any]) -> Dict[str, Any]:
         queue = load_queue()
         log = queue.get("ab_title_log") or []
         log.append({
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": now_kst().strftime("%Y-%m-%d"),
             "expression": expr,
             "variant": pick,
             "title": chosen,
@@ -5582,7 +5413,20 @@ def run() -> None:
         if not title:
             logger.info("대기 중인 에버그린 주제가 없습니다. EVERGREEN_TOPIC_BANK를 확인해주세요.")
             return
-        queue.setdefault("completed", []).append(title)
+
+        # [NEW-안전장치] pending에 잘못 섞여 들어온 항목이 있더라도, 최근 365일 이내 이미
+        # 발행된 키워드라면 최종 발행 직전에 한 번 더 걸러 중복발행을 막는다. (최대 pending 크기만큼 스킵 시도)
+        blocked = _topics_blocked_by_cooldown(queue)
+        skip_guard = 0
+        while title and _normalize_for_dedupe(title) in blocked and skip_guard < len(queue.get("pending", [])) + 1:
+            logger.warning(f"[중복발행 방지] '{title}'은(는) {TOPIC_REUSE_COOLDOWN_DAYS}일 이내 발행 이력이 있어 건너뜁니다.")
+            title = pick_next_topic(queue)
+            skip_guard += 1
+        if not title:
+            logger.info("[중복발행 방지] 발행 가능한(쿨다운 지난) 주제가 없습니다 — 다음 실행에서 에버그린 확장을 기다립니다.")
+            return
+
+        _record_topic_published(queue, title)
         save_queue(queue)
 
     logger.info(f"[처리 시작] 제목: {title}")
