@@ -3463,6 +3463,7 @@ def save_post(article: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str, str, s
         "date": today, "category": category, "accent": theme["accent"], "badge": theme["badge"],
         "blogger_url": "",  # [NEW] Blogger 발행 성공 후 run()에서 채워 넣는다 (관련글 링크에 사용)
         "expression": (article.get("expression") or "").strip(),
+        "meta_description": (article.get("meta_description") or "").strip(),  # [FIX-SEO] searchDescription 소급/재발행용 원본 보관
         "title_variant_id": article.get("title_variant_id", "A"),
         "title_variants": article.get("title_variants") or [title],
         "visual_quality_score": article.get("_visual_quality_score"),
@@ -4547,9 +4548,17 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         nav_html = _blogger_site_nav_html(blog_url, page_urls)
         value_html = _reader_value_box_html(article.get("expression", ""))
         footer_html = _blogger_site_footer_html(blog_url, page_urls)
+        # [FIX-SEO] Blogger '풍경' 테마는 블로그 이름을 <h1>으로, 실제 글 제목은 <h3 class="post-title">로
+        # 렌더링한다(테마 자체는 이 API로 수정 불가). 페이지별 핵심 제목 신호를 위해 본문 최상단에
+        # 진짜 글 제목을 담은 <h1>을 직접 삽입한다(시각적으로는 배지 위 작은 보조 타이틀처럼 노출).
+        seo_h1_html = (
+            f'<h1 class="seo-post-h1" style="font-size:1.05em;font-weight:600;color:#666;margin:0 0 6px;line-height:1.4;">'
+            f'{html.escape(article.get("title") or "", quote=True)}</h1>'
+        )
         content_html = (
             f'{_translate_widget()}'
             f'{nav_html}'
+            f'{seo_h1_html}'
             f'{value_html}'
             f'<div style="position:relative;margin:0;">'
             f'{_blogger_hero_img_html(thumb_url, local_thumb_path, article.get("title") or "")}'
@@ -4571,11 +4580,21 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
         expr = (article.get("expression") or "").strip()
         if expr and expr not in labels:
             labels.append(expr[:50])
+        # [FIX-SEO] Blogger Posts API의 searchDescription 필드가 바로 그 글의
+        # <meta name="description">/og:description으로 렌더링된다. 이 필드를 안 보내면
+        # 블로그 공통 기본 설명이 모든 글에 똑같이 노출되어(중복 메타디스크립션) SEO에 불리하다.
+        search_description = (article.get("meta_description") or "").strip()
+        if len(search_description) > 150:
+            search_description = search_description[:147].rstrip() + "..."
         post_payload = {
             "title": article["title"],
             "content": content_html,
             "labels": labels[:5],
         }
+        if search_description:
+            post_payload["searchDescription"] = search_description
+        else:
+            logger.warning("[블로거] meta_description이 비어있어 searchDescription을 설정하지 못했습니다 — 이 글은 블로그 기본 설명으로 노출됩니다.")
         if ADSENSE_REVIEW_MODE:
             logger.info("[블로거] ADSENSE_REVIEW_MODE=ON — 본문 수동 광고/제휴 블록 없이 발행합니다. Blogger 자동 광고만 사용하세요.")
         # [FIX] 짧은 간격으로 연달아 요청하면 토큰/권한이 멀쩡해도 구글 쪽에서 일시적으로
@@ -5293,14 +5312,40 @@ def repair_old_posts() -> None:
                     related_link_fixed += 1
                     new_content = relinked
 
+                # [FIX-SEO 소급] 이 파일 이전 버전으로 발행된 과거 글은 searchDescription이
+                # 비어있어 블로그 공통 설명이 노출되고 있었다. posts.json에 저장된 meta_description이
+                # 있으면 이번 복구 때 함께 채워 넣는다.
+                search_description = (local.get("meta_description") or "").strip()
+                if not search_description:
+                    # [FIX-SEO 소급] meta_description 필드 자체가 없던 구버전 posts.json 항목은
+                    # 표현을 이용해 최소한의 고유 설명이라도 생성해 "전체 글 동일 설명" 문제를 줄인다.
+                    fallback_expr = local.get("expression") or _extract_expression_from_title(bp_title, strict=True) or ""
+                    if fallback_expr:
+                        search_description = f'What does "{fallback_expr}" mean in Korean? Learn the real situation, not just the dictionary.'
+                if len(search_description) > 150:
+                    search_description = search_description[:147].rstrip() + "..."
+                existing_search_desc = (bp.get("searchDescription") or "").strip()
+
+                # [FIX-SEO 소급] 과거 글 본문에 페이지별 <h1>이 없으면(구버전 파이프라인으로 발행된 글)
+                # 상단에 삽입한다. 이미 있으면 중복 삽입하지 않는다.
+                if "seo-post-h1" not in new_content and "<h1" not in new_content:
+                    seo_h1_html = (
+                        f'<h1 class="seo-post-h1" style="font-size:1.05em;font-weight:600;color:#666;'
+                        f'margin:0 0 6px;line-height:1.4;">{html.escape(new_bp_title or bp_title, quote=True)}</h1>'
+                    )
+                    new_content = seo_h1_html + new_content
+
                 # 제목만 SEO로 바뀌고 본문이 동일해도 업데이트
-                if new_content == content and new_bp_title == bp_title:
+                if new_content == content and new_bp_title == bp_title and (not search_description or search_description == existing_search_desc):
                     already_up_to_date += 1
                     continue
+                update_payload = {"title": new_bp_title, "content": new_content}
+                if search_description and search_description != existing_search_desc:
+                    update_payload["searchDescription"] = search_description
                 upd = requests.put(
                     f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{bp['id']}",
                     headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-                    json={"title": new_bp_title, "content": new_content},
+                    json=update_payload,
                     timeout=30,
                 )
                 if upd.ok:
