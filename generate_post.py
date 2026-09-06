@@ -72,6 +72,72 @@ def now_kst() -> datetime:
     return datetime.now(KST)
 
 
+# =====================================================================
+# [FIX-SEO 보일러플레이트 축소] "What you will get" 박스 / 하단 안내 문구 / "About this note"
+# 고지문이 60개+ 글에 토씨 하나 안 틀리고 반복되면, 실제 크롤이 시작됐을 때 구글이
+# "대량 템플릿 생성 콘텐츠"로 판정할 위험이 있다. 의미는 그대로 유지한 채 표현만
+# 몇 가지 변형으로 돌려써서(글마다 결정적으로 같은 변형이 나오도록 시드 고정) 글 간
+# 바이트 단위 중복을 줄인다.
+# =====================================================================
+def _seeded_variant(pool: List[str], seed: str) -> str:
+    if not pool:
+        return ""
+    h = int(hashlib.md5((seed or "").encode("utf-8")).hexdigest(), 16)
+    return pool[h % len(pool)]
+
+
+READER_VALUE_VARIANTS: List[Tuple[str, str]] = [
+    ("What you will get",
+     "1) When Koreans actually say it &nbsp;·&nbsp; 2) Why a direct translation falls short &nbsp;·&nbsp; "
+     "3) A short cultural cue you can remember"),
+    ("Quick preview",
+     "1) A real situation where this comes up &nbsp;·&nbsp; 2) Why the dictionary translation feels off &nbsp;·&nbsp; "
+     "3) One cultural detail worth remembering"),
+    ("In this post",
+     "1) How Koreans actually use this &nbsp;·&nbsp; 2) Where a literal translation breaks down &nbsp;·&nbsp; "
+     "3) A cultural note that sticks"),
+    ("Before you scroll",
+     "1) A real-life moment for this expression &nbsp;·&nbsp; 2) Why translating it word-for-word falls flat &nbsp;·&nbsp; "
+     "3) A short cultural takeaway"),
+    ("Here's the short version",
+     "1) When you'll hear this in real conversation &nbsp;·&nbsp; 2) Why \"just translate it\" doesn't work &nbsp;·&nbsp; "
+     "3) A cultural nuance worth keeping"),
+]
+
+FOOTER_INTRO_VARIANTS: List[str] = [
+    "We aim for concrete examples you can use in real conversations—not keyword filler. "
+    "Nuance still varies by age, region, and relationship.",
+    "Every example here is meant to be usable in a real conversation, not just a dictionary definition. "
+    "Actual usage still shifts with age, region, and relationship.",
+    "The goal is practical, speakable examples—not generic keyword-stuffed explanations. "
+    "Nuance always depends on who you're talking to.",
+    "We focus on how people actually talk, not textbook phrasing. "
+    "Regional and generational differences are real, so treat these as patterns, not rules.",
+    "These notes are built around real conversational use, not SEO filler. "
+    "As always, nuance shifts by region, age, and relationship.",
+]
+
+EDITORIAL_FOOTER_VARIANTS: List[Tuple[str, str, str]] = [
+    ("This article explains a Korean expression for language learners. "
+     "Nuance can vary by region, age, and relationship — treat examples as common patterns, not rigid rules.",
+     " Focus expression:", " Content is editorially reviewed against a fixed teaching outline; "
+     "AI drafting tools may assist production."),
+    ("This post breaks down a Korean expression for learners. Usage can shift depending on region, age, "
+     "and relationship, so treat these examples as common patterns rather than fixed rules.",
+     " Focus expression:", " Every article follows an editorially reviewed teaching outline; "
+     "AI tools may assist in drafting."),
+    ("Written for Korean learners, this note unpacks one expression in context. Keep in mind nuance changes "
+     "by region, age, and relationship — these are common patterns, not strict rules.",
+     " Focus expression:", " Our editorial outline guides every post; AI drafting tools may be used in production."),
+    ("A learner-focused look at one Korean expression. As with most language nuance, usage varies by region, "
+     "age, and relationship — treat these as patterns, not absolutes.",
+     " Focus expression:", " Each post follows a fixed editorial outline and may use AI drafting tools."),
+    ("This note is aimed at Korean language learners exploring a single expression. Region, age, and "
+     "relationship all affect real usage, so treat the examples as common patterns rather than rules.",
+     " Focus expression:", " Content follows an editorially reviewed outline; AI may assist in the drafting process."),
+]
+
+
 def _mask_secrets(text: str) -> str:
     """[FIX] 예외 메시지(특히 requests 커넥션 오류)에 API 키가 쿼리스트링으로
     그대로 포함되어 GitHub Actions 로그에 노출되는 것을 방지한다."""
@@ -3132,22 +3198,21 @@ def validate_article_quality(article: Dict[str, Any]) -> Tuple[bool, str]:
     return True, "ok"
 
 
-def add_editorial_footer(article: Dict[str, Any]) -> Dict[str, Any]:
-    """학습 목적·편집 고지. YMYL 금융 고지가 아니라 언어 학습 블로그용 짧은 신뢰 푸터."""
+def add_editorial_footer(article: Dict[str, Any], seed: str = "") -> Dict[str, Any]:
+    """학습 목적·편집 고지. YMYL 금융 고지가 아니라 언어 학습 블로그용 짧은 신뢰 푸터.
+    [FIX-SEO] 문구를 시드 기반으로 변형해 모든 글에서 바이트 단위로 동일한 고지문이
+    반복되는 것을 피한다 (법적/사실적 내용은 동일하게 유지, 표현만 변형)."""
     expr = html.escape((article.get("expression") or "").strip())
+    intro, focus_label, closing = _seeded_variant(EDITORIAL_FOOTER_VARIANTS, seed or expr)
     footer = (
         '<div style="margin-top:2.2em;padding:14px 16px;border-radius:10px;'
         'background:#f7f7f8;border:1px solid #e8e8ea;font-size:0.88em;color:#555;line-height:1.55;">'
         '<b style="color:#333;">About this note</b><br>'
-        'This article explains a Korean expression for language learners. '
-        'Nuance can vary by region, age, and relationship — treat examples as common patterns, not rigid rules.'
+        f'{intro}'
     )
     if expr:
-        footer += f' Focus expression: <span class="notranslate">{expr}</span>.'
-    footer += (
-        ' Content is editorially reviewed against a fixed teaching outline; '
-        'AI drafting tools may assist production.</div>'
-    )
+        footer += f'{focus_label} <span class="notranslate">{expr}</span>.'
+    footer += f'{closing}</div>'
     article["html_body"] = (article.get("html_body") or "") + footer
     return article
 
@@ -3904,20 +3969,22 @@ def _blogger_site_nav_html(blog_url: str = "", page_urls: Optional[Dict[str, str
     )
 
 
-def _blogger_site_footer_html(blog_url: str = "", page_urls: Optional[Dict[str, str]] = None) -> str:
-    """글 하단 레이아웃 문구 + 정책 링크 (심사·신뢰용)."""
+def _blogger_site_footer_html(blog_url: str = "", page_urls: Optional[Dict[str, str]] = None, seed: str = "") -> str:
+    """글 하단 레이아웃 문구 + 정책 링크 (심사·신뢰용).
+    [FIX-SEO] 안내 문장을 시드 기반으로 변형해 전체 글에서 바이트 단위로 동일한 문구가
+    반복되는 것을 피한다 (사이트 이름·정책 링크 등 공통 네비게이션 요소는 그대로 유지)."""
     page_urls = page_urls or {}
     about = _blogger_page_href(blog_url, "About", page_urls.get("About", ""))
     privacy = _blogger_page_href(blog_url, "Privacy Policy", page_urls.get("Privacy Policy", ""))
     contact = _blogger_page_href(blog_url, "Contact", page_urls.get("Contact", ""))
     home = blog_url or "/"
+    intro = _seeded_variant(FOOTER_INTRO_VARIANTS, seed)
     return (
         '<footer class="site-policy-footer" style="margin-top:2.5em;padding:18px 16px;border-top:1px solid #e5e7eb;'
         'font-size:0.86em;color:#4b5563;line-height:1.6;font-family:system-ui,sans-serif;">'
         f'<p style="margin:0 0 8px;"><b style="color:#111;">{html.escape(SITE_TITLE)}</b> — '
         'practical notes on Korean expressions, nuance, and everyday culture for learners.</p>'
-        '<p style="margin:0 0 10px;">We aim for concrete examples you can use in real conversations—not keyword filler. '
-        'Nuance still varies by age, region, and relationship.</p>'
+        f'<p style="margin:0 0 10px;">{intro}</p>'
         '<p style="margin:0;display:flex;flex-wrap:wrap;gap:10px;">'
         f'<a href="{html.escape(home, quote=True)}" style="color:#2563eb;">Home</a>'
         f'<a href="{html.escape(about, quote=True)}" style="color:#2563eb;">About</a>'
@@ -3928,7 +3995,7 @@ def _blogger_site_footer_html(blog_url: str = "", page_urls: Optional[Dict[str, 
 
 
 
-def _replace_policy_chrome(html_body: str, blog_url: str = "", page_urls: Optional[Dict[str, str]] = None, expression: str = "") -> str:
+def _replace_policy_chrome(html_body: str, blog_url: str = "", page_urls: Optional[Dict[str, str]] = None, expression: str = "", seed: str = "") -> str:
     """기존 site-policy-nav / footer / reader-value 를 제거하고 올바른 URL로 다시 삽입.
     (한 번 잘못된 /p/ 링크가 들어가면 예전 리페어는 '이미 있음'으로 건너뛰어 고치지 못했음)
     """
@@ -3964,22 +4031,25 @@ def _replace_policy_chrome(html_body: str, blog_url: str = "", page_urls: Option
             cleaned,
             flags=re.IGNORECASE,
         )
+    seed = seed or expression
     nav = _blogger_site_nav_html(blog_url, page_urls)
-    value = _reader_value_box_html(expression)
-    foot = _blogger_site_footer_html(blog_url, page_urls)
+    value = _reader_value_box_html(expression, seed=seed)
+    foot = _blogger_site_footer_html(blog_url, page_urls, seed=seed)
     return nav + value + cleaned.strip() + foot
 
 
-def _reader_value_box_html(expression: str = "") -> str:
-    """본문 상단(내비 아래)에 넣는 '이 글에서 얻는 것' 박스 — 사람 편집 느낌을 보강."""
+def _reader_value_box_html(expression: str = "", seed: str = "") -> str:
+    """본문 상단(내비 아래)에 넣는 '이 글에서 얻는 것' 박스 — 사람 편집 느낌을 보강.
+    [FIX-SEO] 문구를 시드 기반으로 몇 가지 변형 중 하나로 고정 선택해, 모든 글이
+    바이트 단위로 동일한 보일러플레이트가 되는 것을 피한다."""
     focus = html.escape((expression or "").strip())
     focus_line = f' <span class="notranslate">“{focus}”</span>' if focus else ""
+    label, body = _seeded_variant(READER_VALUE_VARIANTS, seed or expression)
     return (
         '<div class="reader-value" style="margin:0 0 20px;padding:14px 16px;border-left:4px solid #2563eb;'
         'background:#eff6ff;border-radius:0 10px 10px 0;font-size:0.92em;color:#1e3a5f;line-height:1.55;">'
-        f'<b>What you will get</b>{focus_line}<br>'
-        '1) When Koreans actually say it &nbsp;·&nbsp; 2) Why a direct translation falls short &nbsp;·&nbsp; '
-        '3) A short cultural cue you can remember</div>'
+        f'<b>{label}</b>{focus_line}<br>'
+        f'{body}</div>'
     )
 
 
@@ -4546,8 +4616,9 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
             logger.warning(f"[블로거] 정책 글(Posts) URL 스캔 실패: {e}")
         page_urls = _merge_policy_page_urls(page_urls)
         nav_html = _blogger_site_nav_html(blog_url, page_urls)
-        value_html = _reader_value_box_html(article.get("expression", ""))
-        footer_html = _blogger_site_footer_html(blog_url, page_urls)
+        seo_seed = (article.get("expression") or article.get("title") or "").strip()
+        value_html = _reader_value_box_html(article.get("expression", ""), seed=seo_seed)
+        footer_html = _blogger_site_footer_html(blog_url, page_urls, seed=seo_seed)
         # [FIX-SEO] Blogger '풍경' 테마는 블로그 이름을 <h1>으로, 실제 글 제목은 <h3 class="post-title">로
         # 렌더링한다(테마 자체는 이 API로 수정 불가). 페이지별 핵심 제목 신호를 위해 본문 최상단에
         # 진짜 글 제목을 담은 <h1>을 직접 삽입한다(시각적으로는 배지 위 작은 보조 타이틀처럼 노출).
@@ -5232,6 +5303,20 @@ def repair_old_posts() -> None:
                 )
                 if new_content != before_chrome:
                     pass
+
+                # [FIX-SEO 소급] "About this note" 고지문도 모든 과거 글에서 바이트 단위로 동일했으므로,
+                # 시드 기반 변형 문구로 교체한다 (법적/사실적 내용은 동일, 표현만 변형).
+                editorial_seed = expr_for_box or bp_title
+                new_editorial_footer = add_editorial_footer(
+                    {"expression": expr_for_box, "html_body": ""}, seed=editorial_seed
+                )["html_body"]
+                new_content = re.sub(
+                    r'<div\b[^>]*>\s*<b style="color:#333;">About this note</b>.*?</div>',
+                    lambda _m: new_editorial_footer,
+                    new_content,
+                    count=1,
+                    flags=re.DOTALL,
+                )
                 # [FIX] 리페어 시 이전 글 썸네일(JPEG) 복구 — Blogger 본문 히어로 교체
                 if local:
                     rel = (local.get("thumb") or "").strip()
@@ -5530,7 +5615,7 @@ def run() -> None:
     article = insert_manual_ads(article)  # ADSENSE_REVIEW_MODE=true면 내부에서 no-op
     article = add_coupang_markup(article)  # 심사 모드면 no-op
     article = add_ymyl_disclaimer(article)
-    article = add_editorial_footer(article)  # 학습 목적·편집 고지 (AdSense 신뢰)
+    article = add_editorial_footer(article, seed=(article.get("expression") or article.get("title") or ""))  # 학습 목적·편집 고지 (AdSense 신뢰)
 
     post_meta, json_ld, thumb_url, local_thumb_path, post_url = save_post(article)
     posts = update_index(post_meta)
