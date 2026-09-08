@@ -1097,12 +1097,18 @@ def build_json_ld(article: Dict[str, Any], canonical_url: str, thumb_url: str, d
         }
 
     data.pop("@context", None)
+    # [FIX-SEO] Rich Results 테스트에서 "이름 없는 항목"(BreadcrumbList position 1) 오류가 발견됨 —
+    # 원인이 예전 버전 코드로 발행된 글의 잔존 JSON-LD든, 다른 경로로 name이 비었든 상관없이
+    # 항상 유효한 문자열이 들어가도록 각 position마다 폴백을 둔다.
+    home_name = (SITE_TITLE or "Home").strip() or "Home"
+    cat_name = (article.get("category") or "번역감정").strip() or "번역감정"
+    title_name = (title or "Post").strip() or "Post"
     breadcrumb = {
         "@type": "BreadcrumbList",
         "itemListElement": [
-            {"@type": "ListItem", "position": 1, "name": SITE_TITLE, "item": (SITE_URL + "/") if SITE_URL else "../index.html"},
-            {"@type": "ListItem", "position": 2, "name": article.get("category", "번역감정"), "item": (SITE_URL + "/") if SITE_URL else "../index.html"},
-            {"@type": "ListItem", "position": 3, "name": title, "item": canonical_url},
+            {"@type": "ListItem", "position": 1, "name": home_name, "item": (SITE_URL + "/") if SITE_URL else "../index.html"},
+            {"@type": "ListItem", "position": 2, "name": cat_name, "item": (SITE_URL + "/") if SITE_URL else "../index.html"},
+            {"@type": "ListItem", "position": 3, "name": title_name, "item": canonical_url},
         ],
     }
     graph_nodes = [data, breadcrumb]
@@ -3852,11 +3858,16 @@ def request_google_indexing(url: str) -> bool:
         if resp.ok:
             logger.info(f"[색인 요청] 완료: {url}")
             return True
-        # [FIX] 스코프 미동의(403)나 속성 소유권 미확인(403) 등 원인이 다양해 본문을 그대로 로그에 남김
-        logger.warning(f"[색인 요청] 실패(HTTP {resp.status_code}), 발행 자체는 정상 진행됩니다: {resp.text[:300]}")
+        # [FIX] 스코프 미동의(403 insufficientPermissions)나 속성 소유권 미확인(403 forbidden) 등
+        # 원인이 다양해 본문을 그대로 로그에 남기되, 흔한 원인은 바로 알 수 있게 안내 문구를 덧붙인다.
+        hint = ""
+        if resp.status_code == 403:
+            hint = (" — GOOGLE_REFRESH_TOKEN에 'https://www.googleapis.com/auth/indexing' 스코프가 "
+                    "없거나, 이 계정이 Search Console 속성의 '소유자'로 등록되어 있지 않을 가능성이 높습니다.")
+        logger.warning(f"[색인 요청] 실패(HTTP {resp.status_code}){hint} 발행 자체는 정상 진행됩니다: {_mask_secrets(resp.text[:300])}")
         return False
     except Exception as e:
-        logger.warning(f"[색인 요청] 오류(건너뜀): {e}")
+        logger.warning(f"[색인 요청] 오류(건너뜀): {_mask_secrets(str(e))}")
         return False
 
 def strip_interactive_widgets(html_body: str) -> str:
@@ -4139,6 +4150,18 @@ def ensure_blogger_policy_pages() -> Dict[str, str]:
                     json=payload,
                     timeout=30,
                 )
+                # [FIX-SEO] PUT 바디의 status/isDraft 필드는 Blogger v3 API에서 신뢰할 수 있는
+                # 쓰기 필드가 아니다(문서화된 방식이 아님). 페이지가 어떤 이유로든 초안(DRAFT) 상태로
+                # 남아있으면 방문 시 리디렉션/미노출이 발생할 수 있으므로, 공식 publish 엔드포인트로
+                # 확실히 LIVE 상태로 전환한다.
+                try:
+                    requests.post(
+                        f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/pages/{meta['id']}/publish",
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=30,
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"[블로거 페이지] publish 확인 실패({title}): {_mask_secrets(str(e))}")
                 if upd.ok:
                     url = (upd.json() or {}).get("url") or meta.get("url") or ""
                     if url:
@@ -4157,12 +4180,22 @@ def ensure_blogger_policy_pages() -> Dict[str, str]:
                     data = cre.json() or {}
                     if data.get("url"):
                         page_urls[title] = data["url"]
+                    new_page_id = data.get("id", "")
+                    if new_page_id:
+                        try:
+                            requests.post(
+                                f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/pages/{new_page_id}/publish",
+                                headers={"Authorization": f"Bearer {access_token}"},
+                                timeout=30,
+                            )
+                        except requests.exceptions.RequestException as e:
+                            logger.warning(f"[블로거 페이지] publish 확인 실패({title}): {_mask_secrets(str(e))}")
                     logger.info(f"[블로거 페이지] 생성: {title} → {page_urls.get(title, '')}")
                 else:
                     logger.warning(f"[블로거 페이지] 생성 실패({title}): HTTP {cre.status_code} {cre.text[:200]}")
         return page_urls
     except Exception as e:
-        logger.warning(f"[블로거 페이지] 동기화 건너뜀: {e}")
+        logger.warning(f"[블로거 페이지] 동기화 건너뜀: {_mask_secrets(str(e))}")
         return page_urls
 
 
@@ -4676,7 +4709,28 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
             resp = requests.post(url, headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}, json=post_payload, timeout=30)
             if resp.ok:
                 blogger_url = resp.json().get("url")
+                new_post_id = resp.json().get("id", "")
                 logger.info(f"[블로거] 발행 완료: {blogger_url or '(URL 확인 불가)'}")
+                # [FIX-SEO] JSON-LD의 BreadcrumbList position 3 "item"은 발행 전엔 실제 Blogger
+                # 영구링크(/YYYY/MM/slug_randomdigits.html)를 알 수 없어 임시 URL(canonical_url,
+                # 원래 GitHub Pages용 /posts/슬러그.html 경로)을 넣어뒀다. 발행 성공 후 진짜 URL을
+                # 알게 됐으니, 그 자리만 정확한 값으로 바로 잡아 한 번 더 갱신한다.
+                if blogger_url and new_post_id and canonical_url and canonical_url != blogger_url:
+                    try:
+                        fixed_content = content_html.replace(canonical_url, blogger_url)
+                        if fixed_content != content_html:
+                            fix_resp = requests.put(
+                                f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/{new_post_id}",
+                                headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                                json={"content": fixed_content},
+                                timeout=30,
+                            )
+                            if fix_resp.ok:
+                                logger.info("[블로거] JSON-LD 브레드크럼 URL을 실제 영구링크로 보정 완료")
+                            else:
+                                logger.warning(f"[블로거] 브레드크럼 URL 보정 실패(HTTP {fix_resp.status_code}) — 발행 자체는 정상")
+                    except requests.exceptions.RequestException as e:
+                        logger.warning(f"[블로거] 브레드크럼 URL 보정 중 오류(건너뜀): {_mask_secrets(str(e))}")
                 return blogger_url
             if resp.status_code in (403, 429, 503) and attempt < 3:
                 wait = 20 * attempt
@@ -5317,6 +5371,32 @@ def repair_old_posts() -> None:
                     count=1,
                     flags=re.DOTALL,
                 )
+                # [FIX-SEO 소급] JSON-LD(BreadcrumbList 등)도 과거 코드가 만든 게 이름 누락이나
+                # 잘못된 canonical URL(원래 GitHub Pages용 placeholder)을 가진 경우가 있었다.
+                # 리페어 시점엔 이 글의 진짜 Blogger URL을 이미 알고 있으므로, 완전히 새로 만들어 교체한다.
+                real_url = bp.get("url", "") or blogger_url_by_title.get(norm_title, "") or (new_bp_title or bp_title)
+                repair_article_for_ld = {
+                    "title": new_bp_title or bp_title,
+                    "meta_description": (local.get("meta_description") if local else "") or "",
+                    "category": (local.get("category") if local else "") or "번역감정",
+                    "expression": expr_for_box,
+                }
+                thumb_for_ld = ""
+                if local:
+                    rel = (local.get("thumb") or "").strip()
+                    thumb_for_ld = f"{SITE_URL.rstrip('/')}/{rel}" if (SITE_URL and rel) else ""
+                date_for_ld = (local.get("date") if local else "") or now_kst().strftime("%Y-%m-%d")
+                new_json_ld = build_json_ld(repair_article_for_ld, real_url, thumb_for_ld, date_for_ld, platform="blogger")
+                new_content, _ld_subs = re.subn(
+                    r'<script type="application/ld\+json">.*?</script>',
+                    lambda _m: f'<script type="application/ld+json">{new_json_ld}</script>',
+                    new_content,
+                    count=1,
+                    flags=re.DOTALL,
+                )
+                if not _ld_subs:
+                    new_content += f'<script type="application/ld+json">{new_json_ld}</script>'
+
                 # [FIX] 리페어 시 이전 글 썸네일(JPEG) 복구 — Blogger 본문 히어로 교체
                 if local:
                     rel = (local.get("thumb") or "").strip()
