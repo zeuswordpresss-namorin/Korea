@@ -5224,18 +5224,18 @@ def repair_old_posts() -> None:
         if os.path.exists(post_path):
             try:
                 with open(post_path, "r", encoding="utf-8") as f:
-                    html = f.read()
-                original_html = html
+                    post_html = f.read()
+                original_html = post_html
                 # [H.O.L.D. 리페어] 고정 5단 H2 변주 + 문화 단정 완화
-                html = _apply_hold_content_repair(html, title or p.get("file", ""))
+                post_html = _apply_hold_content_repair(post_html, title or p.get("file", ""))
                 btn_html = _tts_buttons_html(expression, theme)
                 # [FIX] 단순 "playKoreanTTS 문자열 포함 여부"만 보면, 과거 다른 방식(이미지 위
                 # 오버레이 등)으로 들어간 낡은/깨진 버튼도 "이미 있음"으로 오판해 방치하게 된다.
                 # 지금 코드가 만드는 정확한 마크업이 그대로 있을 때만 "이미 있음"으로 인정한다.
-                if btn_html and btn_html in html:
+                if btn_html and btn_html in post_html:
                     pass
                 else:
-                    cleaned = re.sub(r'<button\b[^>]*playKoreanTTS.*?</button>', '', html, flags=re.DOTALL)
+                    cleaned = re.sub(r'<button\b[^>]*playKoreanTTS.*?</button>', '', post_html, flags=re.DOTALL)
                     # [FIX] id="heroThumb" 속성은 비교적 최근에 추가된 것이라, 그 이전에
                     # 발행된 글들은 이 정규식에 하나도 안 걸려 "0개 패치"로 조용히 건너뛰어졌다.
                     # <div class="hero"> 블록 전체(이미지 태그 형태와 무관하게)를 기준으로 넓힌다.
@@ -5245,13 +5245,13 @@ def repair_old_posts() -> None:
                         cleaned, count=1, flags=re.DOTALL,
                     )
                     if new_html != cleaned:
-                        html = new_html
+                        post_html = new_html
                         fixed_buttons += 1
-                    elif btn_html and btn_html not in html:
+                    elif btn_html and btn_html not in post_html:
                         logger.warning(f"[복구] 히어로 이미지 패턴을 찾지 못해 발음버튼을 못 넣었습니다: {title}")
-                if html != original_html:
+                if post_html != original_html:
                     with open(post_path, "w", encoding="utf-8") as f:
-                        f.write(html)
+                        f.write(post_html)
             except Exception as e:
                 logger.warning(f"[복구] 본문/발음버튼 패치 실패({title}): {e}")
 
