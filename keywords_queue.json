@@ -35,5 +35,13 @@
   "daily_stats": {
     "date": "",
     "count": 0
+  },
+  "format_bag": [],
+  "last_format": "",
+  "quality_flags": [],
+  "_schema_notes": {
+    "format_bag": "8가지 글 형식(포맷)을 '뽑기 주머니' 방식으로 순환. 비면 자동으로 8개를 다시 셔플해 채움(generate_post.py: pick_next_content_format)",
+    "last_format": "직전에 사용한 형식 id — 주머니 경계에서 연속 중복 방지용",
+    "quality_flags": "repair_old_posts()가 얇은 본문(AdSense 최소 품질 기준 미달)을 감지했지만 자동 재생성에 실패한 글 목록. {title,url,reason,date} 형태. 수동 확인 후 직접 삭제하거나 GEMINI_API_KEY를 설정해 다음 리페어에서 자동 재시도되게 할 것"
   }
 }
