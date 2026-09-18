@@ -18,6 +18,10 @@ on:
         default: ""
   schedule:
     - cron: "0 * * * *"   # 매시 정각마다 실행 후보로 판정 (하루 랜덤 2회만 실제 발행, 나머지는 자동으로 건너뜀)
+                           # [FIX] 발행 여부와 무관하게 자동 리페어(과거 글 위반 리스크 점검·복구)는
+                           # 이 매시 실행마다 시도되며, generate_post.py 내부의 하루 1회 마커로 중복 실행만 방지한다.
+                           # (예전에는 발행 게이트 뒤에서 호출되어 발행이 스킵되는 대부분의 시간대에는
+                           # 리페어도 함께 건너뛰어지는 결함이 있었음 — 게이트보다 앞으로 이동해 수정됨)
 
 permissions:
   contents: write
@@ -34,7 +38,9 @@ jobs:
     runs-on: ubuntu-latest
     # [FIX] 10분 제한에 실제로 걸려 실패한 사례 확인됨 (Gemini 생성+이미지+발행+push 합산 시
     # 10분을 넘을 수 있음). 여유를 두어 20분으로 상향.
-    timeout-minutes: 20
+    # [FIX-추가] 자동 리페어가 이제 매시 실행마다 시도되고, 위반 리스크(얇은 본문) 발견 시
+    # Gemini로 글 전체를 재생성하는 추가 API 호출이 여러 건 생길 수 있어 25분으로 재상향.
+    timeout-minutes: 25
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
@@ -76,10 +82,19 @@ jobs:
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
           ADSENSE_CLIENT_ID: ${{ vars.ADSENSE_CLIENT_ID }}
           ADSENSE_SLOT_ID: ${{ vars.ADSENSE_SLOT_ID }}
+          # [NEW-수익 최적화] 승인 후 여러 광고 단위를 콤마로 구분해 순환 배치하고 싶을 때 사용.
+          # 비어 있으면 ADSENSE_SLOT_ID 하나만 사용(기존과 동일). 예: "1234567890,9876543210"
+          ADSENSE_SLOT_IDS: ${{ vars.ADSENSE_SLOT_IDS }}
+          # [NEW-수익 최적화] 글 1개당 최대 광고 슬롯 수(기본 2). 섹션 수가 적으면 자동으로 줄어듦.
+          ADSENSE_MAX_AD_SLOTS: ${{ vars.ADSENSE_MAX_AD_SLOTS || '2' }}
           BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          # [NEW] 자동 리페어(과거 글 위반 리스크 자동 점검·복구) 하루 1회 실행 스위치.
+          # true(기본값)면 매시 실행마다 시도하되 날짜 마커로 하루 1회만 실제 수행됨.
+          # 문제 발생 시 false로 내려 임시 비활성화 가능.
+          AUTO_REPAIR_ONCE_PER_DAY: "true"
           # --- 썸네일용 무료 스톡 이미지(Pexels) ---
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           # --- SNS (있으면 자동 공유) ---
