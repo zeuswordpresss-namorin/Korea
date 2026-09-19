@@ -265,6 +265,9 @@ FONT_CANDIDATES = [
 
 DOCS_DIR = "docs"
 POSTS_DIR = os.path.join(DOCS_DIR, "posts")
+# [FIX-무한반복] 썸네일 리페어 버전. 이 값을 바꾸면 다음 자동 리페어 때 모든 글의 썸네일을
+# 강제로 한 번 더 재생성한다(향후 generate_thumbnail 로직을 개선했을 때 올릴 것).
+THUMB_REPAIR_VERSION = "2026-09-19-v1"
 # [인스타툰 한컷] 표현→실제 사용 순간 시각화 (4:5, Instagram/Threads 단일)
 INSTATOON_SIZE = (1080, 1350)  # 4:5 피드
 INSTATOON_PUBLIC_DIR = os.path.join(DOCS_DIR, "instatoon")
@@ -4945,6 +4948,22 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
             "content": content_html,
             "labels": labels[:5],
         }
+        # [FIX-URL] Blogger는 제목에 한글·따옴표·괄호가 섞이면 자동 슬러그 생성에 실패해
+        # ".../2026/09/8234659876543219876.html" 같은 숫자(포스트 ID) 기반 URL을 쓰는 경우가 있다.
+        # 로마자 표현(영문) 기반의 읽기 좋은 슬러그를 명시적으로 요청해 이를 방지한다.
+        # Blogger가 이 힌트를 무시하고 다른 URL을 배정하더라도, 발행 성공 후 실제 반환된 URL을
+        # 그대로 사용하므로(아래 blogger_url = resp.json().get("url")) 부작용은 없다.
+        custom_slug = romanize_korean(expr) if expr else ""
+        if not custom_slug:
+            custom_slug = slugify(article.get("keyword") or article.get("title") or "post")
+        custom_slug = re.sub(r"[^a-z0-9\-]", "", custom_slug.lower().replace(" ", "-"))
+        custom_slug = re.sub(r"-{2,}", "-", custom_slug).strip("-")[:60] or "post"
+        if blog_url:
+            # [요청 반영] 날짜(/YYYY/MM/)와 .html 확장자 없이 로마자 슬러그만 요청.
+            # ※ Blogger는 플랫폼 구조상 게시물 URL에 .html을 강제하는 경우가 대부분이라
+            # 이 힌트를 거부할 수 있다. 거부(400) 시 아래 재시도 루프에서 URL 힌트 없이
+            # 자동으로 한 번 더 시도하며, 최종적으로는 Blogger가 실제로 부여한 URL을 사용한다.
+            post_payload["url"] = f"{blog_url}/{custom_slug}"
         if search_description:
             post_payload["searchDescription"] = search_description
         else:
@@ -4982,6 +5001,13 @@ def publish_to_blogger(article: Dict[str, Any], canonical_url: str, thumb_url: s
                     except requests.exceptions.RequestException as e:
                         logger.warning(f"[블로거] 브레드크럼 URL 보정 중 오류(건너뜀): {_mask_secrets(str(e))}")
                 return blogger_url
+            if resp.status_code == 400 and "url" in post_payload:
+                logger.warning(
+                    f"[블로거] 커스텀 URL 힌트({post_payload['url']})가 거부되어 자동 URL로 재시도합니다: "
+                    f"{resp.text[:200]}"
+                )
+                post_payload.pop("url", None)
+                continue  # 다음 attempt에서 URL 힌트 없이 즉시 재요청 (대기 없음)
             if resp.status_code in (403, 429, 503) and attempt < 3:
                 wait = 20 * attempt
                 logger.warning(f"[블로거] 일시적 오류({resp.status_code}), {wait}초 대기 후 재시도 ({attempt}/3): {resp.text[:200]}")
@@ -5525,31 +5551,40 @@ def repair_old_posts() -> None:
             logger.info(f"[복구][SEO 제목] {expression} → {new_title}")
 
         # 1) 썸네일 재생성 — 항상 JPEG로 저장하고 posts.json 경로를 .jpg로 통일
-        old_thumb_rel = (p.get("thumb") or "").strip()
-        base_name = os.path.splitext(os.path.basename(old_thumb_rel) or "thumb")[0]
-        if not base_name or base_name == "thumb":
-            base_name = slugify(expression or title)[:40] or "thumb"
-        new_thumb_rel = f"thumbs/{base_name}.jpg"
-        thumb_path = os.path.join(DOCS_DIR, new_thumb_rel)
-        os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
-        try:
-            generate_thumbnail(title, thumb_path, theme, category, "", expression)
-            if not os.path.isfile(thumb_path):
-                # 생성기가 다른 확장자로 쓴 경우 흡수
-                for ext in (".jpg", ".jpeg", ".png", ".webp"):
-                    alt = os.path.join(DOCS_DIR, "thumbs", base_name + ext)
-                    if os.path.isfile(alt):
-                        if ext != ".jpg":
-                            Image.open(alt).convert("RGB").save(thumb_path, format="JPEG", quality=88)
-                        break
-            if os.path.isfile(thumb_path):
-                p["thumb"] = new_thumb_rel
-                fixed_thumbs += 1
-                logger.info(f"[복구] 썸네일 재생성: {new_thumb_rel}")
-            else:
-                logger.warning(f"[복구] 썸네일 파일이 생성되지 않음: {title}")
-        except Exception as e:
-            logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
+        # [FIX-무한반복] 이미 현재 리페어 버전으로 정상 재생성된 글은 매일 또 다시 만들지 않는다.
+        # (기존에는 posts.json에 몇 백 개가 쌓이면 하루 1회씩 "영원히" 전체를 재생성해
+        # 실행시간·로그만 낭비하는 문제가 있었음)
+        if p.get("thumb_repair_version") == THUMB_REPAIR_VERSION and os.path.isfile(
+            os.path.join(DOCS_DIR, p.get("thumb", ""))
+        ):
+            pass  # 이미 처리됨 — 건너뜀
+        else:
+            old_thumb_rel = (p.get("thumb") or "").strip()
+            base_name = os.path.splitext(os.path.basename(old_thumb_rel) or "thumb")[0]
+            if not base_name or base_name == "thumb":
+                base_name = slugify(expression or title)[:40] or "thumb"
+            new_thumb_rel = f"thumbs/{base_name}.jpg"
+            thumb_path = os.path.join(DOCS_DIR, new_thumb_rel)
+            os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
+            try:
+                generate_thumbnail(title, thumb_path, theme, category, "", expression)
+                if not os.path.isfile(thumb_path):
+                    # 생성기가 다른 확장자로 쓴 경우 흡수
+                    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                        alt = os.path.join(DOCS_DIR, "thumbs", base_name + ext)
+                        if os.path.isfile(alt):
+                            if ext != ".jpg":
+                                Image.open(alt).convert("RGB").save(thumb_path, format="JPEG", quality=88)
+                            break
+                if os.path.isfile(thumb_path):
+                    p["thumb"] = new_thumb_rel
+                    p["thumb_repair_version"] = THUMB_REPAIR_VERSION
+                    fixed_thumbs += 1
+                    logger.info(f"[복구] 썸네일 재생성: {new_thumb_rel}")
+                else:
+                    logger.warning(f"[복구] 썸네일 파일이 생성되지 않음: {title}")
+            except Exception as e:
+                logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
 
         # 1-b) 이전 글 인스타툰 없으면 자동 생성
         try:
