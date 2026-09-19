@@ -5461,9 +5461,11 @@ def _rewrite_title_in_html(html_body: str, old_title: str, new_title: str) -> st
 # =====================================================================
 def _attempt_violation_regeneration(
     expr: str, category: str, local_thumb_rel: str, blog_url: str,
-    page_urls: Dict[str, str], seed: str,
+    page_urls: Dict[str, str], seed: str, site_assets_ok: bool = True,
 ) -> Optional[Tuple[str, str, str]]:
-    """성공 시 (new_title, new_content_html, new_meta_description)을 반환한다."""
+    """성공 시 (new_title, new_content_html, new_meta_description)을 반환한다.
+    site_assets_ok=False면(GitHub Pages 접근 불가 확인됨) 공개 썸네일 URL을 쓰지 않고
+    _blogger_hero_img_html이 자동으로 base64 안전망을 쓰도록 빈 문자열을 넘긴다."""
     if not GEMINI_API_KEY or not expr:
         return None
     try:
@@ -5482,7 +5484,7 @@ def _attempt_violation_regeneration(
         fresh["html_body"] = enhance_tables(fresh["html_body"], theme_fresh["accent"])
         fresh["html_body"] = _wrap_webtoon_panels(fresh["html_body"], theme_fresh)
 
-        thumb_pub = f"{SITE_URL.rstrip('/')}/{local_thumb_rel}" if (SITE_URL and local_thumb_rel) else ""
+        thumb_pub = f"{SITE_URL.rstrip('/')}/{local_thumb_rel}" if (SITE_URL and local_thumb_rel and site_assets_ok) else ""
         local_thumb_abs = os.path.join(DOCS_DIR, local_thumb_rel) if local_thumb_rel else ""
         nav_html = _blogger_site_nav_html(blog_url, page_urls)
         value_html = _reader_value_box_html(expr, seed=seed)
@@ -5715,6 +5717,17 @@ def repair_old_posts() -> None:
             except Exception:
                 pass
             repair_page_urls = _merge_policy_page_urls(repair_page_urls)
+            # [FIX-썸네일 깨짐] 글마다 매번 확인하면 너무 느려지므로, 사이트 대표 자산(favicon)
+            # 하나로 GitHub Pages가 실제로 서빙 중인지 1회만 빠르게 확인해 재사용한다.
+            site_assets_ok = (
+                _wait_for_url_ready(f"{SITE_URL.rstrip('/')}/favicon.png", timeout_sec=15, interval_sec=3)
+                if SITE_URL else False
+            )
+            if SITE_URL and not site_assets_ok:
+                logger.warning(
+                    f"[복구] GitHub Pages 접근 확인 실패({SITE_URL}) — 이번 리페어의 Blogger 썸네일은 "
+                    "base64 임베드로 대체합니다."
+                )
             resp = requests.get(
                 f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -5830,7 +5843,7 @@ def repair_old_posts() -> None:
                 if local:
                     rel = (local.get("thumb") or "").strip()
                     local_thumb = os.path.join(DOCS_DIR, rel) if rel else ""
-                    pub = f"{SITE_URL.rstrip('/')}/{rel}" if (SITE_URL and rel) else ""
+                    pub = f"{SITE_URL.rstrip('/')}/{rel}" if (SITE_URL and rel and site_assets_ok) else ""
                     if local_thumb and os.path.isfile(local_thumb):
                         before_img = new_content
                         new_content = _repair_blogger_hero_image(
@@ -5940,7 +5953,7 @@ def repair_old_posts() -> None:
                     fix_result = _attempt_violation_regeneration(
                         expr_for_box, local.get("category", "번역감정"),
                         local.get("thumb", ""), repair_blog_url, repair_page_urls,
-                        seed=expr_for_box or bp_title,
+                        seed=expr_for_box or bp_title, site_assets_ok=site_assets_ok,
                     )
                     if fix_result:
                         new_bp_title, new_content, fresh_meta = fix_result
@@ -6206,15 +6219,20 @@ def run() -> None:
 
     # [FIX-썸네일 깨짐] GitHub Pages 배포 지연으로 Blogger가 아직 없는 이미지를 스크래핑하는
     # 것을 막기 위해, 발행 직전 최대 60초 동안 썸네일 URL이 실제로 열리는지 확인한다.
+    # [FIX-근본 대응] 60초를 기다려도 안 열리면(배포 지연이 아니라 SITE_URL 설정 자체가 잘못됐거나
+    # GitHub Pages가 비활성 상태인 경우 등) 재시도만으로는 절대 해결되지 않으므로, 그 깨진 URL을
+    # Blogger에 그대로 넘기지 않고 즉시 base64 임베드 이미지로 전환해 무조건 보이게 한다.
+    blogger_thumb_url = thumb_url
     if content_quality_ok and thumb_url.startswith(("http://", "https://")):
         if _wait_for_url_ready(thumb_url, timeout_sec=60):
             logger.info(f"[썸네일] GitHub Pages 배포 확인 완료: {thumb_url}")
         else:
             logger.warning(
-                f"[썸네일] GitHub Pages 배포 확인 시간 초과(60초): {thumb_url} — "
-                "발행은 계속 진행하되 처음엔 썸네일이 깨져 보일 수 있습니다 "
-                "(방문자 브라우저에서 자동 재시도됨)."
+                f"[썸네일] GitHub Pages 배포 확인 실패(60초 내 응답 없음): {thumb_url} — "
+                "SITE_URL 설정 또는 GitHub Pages 활성화 상태를 확인하세요. "
+                "이번 발행은 안전하게 임베드 이미지(base64)로 대체합니다."
             )
+            blogger_thumb_url = ""  # _blogger_hero_img_html이 자동으로 data-URI 안전망으로 폴백
 
     if not content_quality_ok:
         # [FIX-AdSense 안전장치] 재생성까지 시도했는데도 품질 게이트(최소 글자 수/expression 등장/
@@ -6227,7 +6245,7 @@ def run() -> None:
         )
         blogger_url = None
     else:
-        blogger_url = publish_to_blogger(article, post_url, thumb_url, local_thumb_path)
+        blogger_url = publish_to_blogger(article, post_url, blogger_thumb_url, local_thumb_path)
     if blogger_url:
         # [NEW] 이 글의 실제 Blogger 주소를 posts.json에 저장해, 다음 글들의 "관련 글" 링크가
         # 이 글을 가리킬 때 (더 이상 없는) GitHub Pages 주소가 아닌 이 주소를 쓰게 한다.
