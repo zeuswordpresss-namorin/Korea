@@ -4806,15 +4806,21 @@ def _repair_blogger_hero_image(html_content: str, local_thumb_path: str, title: 
 def _blogger_hero_img_html(thumb_url: str, local_thumb_path: str, title: str, expression: str = "") -> str:
     """Blogger 본문 히어로 이미지.
     [개편-이미지 최적화] Base64 data-URI를 1순위로 쓰던 방식을 제거하고, GitHub Pages에 이미
-    push된 공개 이미지 URL(외부 로딩)을 1순위로 사용한다. commit_and_push_changes()가 Blogger
-    발행보다 먼저 실행되므로 이 URL은 발행 시점에 항상 실제로 존재한다 (base64보다 페이지 용량↓,
-    캐싱·CDN 활용 가능). data-URI는 공개 URL이 없는 예외 상황에서만 안전망으로만 사용한다.
+    push된 공개 이미지 URL(외부 로딩)을 1순위로 사용한다. base64보다 페이지 용량↓, 캐싱·CDN 활용 가능.
+    data-URI는 공개 URL이 없는 예외 상황에서만 안전망으로만 사용한다.
+    [FIX-썸네일 깨짐] git push 직후에도 GitHub Pages 배포(빌드)에는 수십 초~수 분의 지연이 있을 수
+    있어, Blogger가 이 글을 발행/스크래핑하는 시점에 이미지가 아직 존재하지 않을 수 있다.
+    onerror 시 자동 재시도하는 _retryHeroImage(요청부에서 이미 스크립트로 삽입됨)를 연결해,
+    처음 깨져 보여도 방문자 브라우저에서 몇 초 간격으로 최대 6회까지 자동 복구를 시도한다.
     alt 텍스트에는 로마자 표기 키워드를 포함해(SEO) 해외 학습자 검색 유입을 강화한다."""
     alt = html.escape(_seo_alt_text(expression, title), quote=True)
     src = (thumb_url or "").strip()
     style = "max-width:100%;height:auto;border-radius:8px;display:block;background:#1a1a1a;"
     if src.startswith("http://") or src.startswith("https://"):
-        return f'<img src="{html.escape(src, quote=True)}" style="{style}" alt="{alt}" loading="eager">'
+        return (
+            f'<img src="{html.escape(src, quote=True)}" style="{style}" alt="{alt}" '
+            f'loading="eager" data-retry="0" onerror="_retryHeroImage(this)">'
+        )
 
     # 공개 URL이 없을 때만(SITE_URL 미설정 등) 로컬 JPEG를 data-URI 안전망으로 사용
     data_uri = ""
@@ -5086,6 +5092,32 @@ def log_adsense_readiness() -> None:
 # - 실패해도 예외를 던지지 않고 False만 반환합니다 (git push 실패가 전체 파이프라인을
 #   중단시키지 않도록 하기 위함; 워크플로의 마지막 커밋 스텝이 안전망으로 남아있음).
 # =====================================================================
+def _wait_for_url_ready(url: str, timeout_sec: int = 60, interval_sec: int = 4) -> bool:
+    """[NEW-썸네일 깨짐 방지] git push 후 GitHub Pages가 실제로 파일을 서빙하기까지는
+    수십 초~수 분의 배포 지연이 있을 수 있다. Blogger가 이 글을 발행/스크래핑하는 시점에
+    이미지가 아직 없으면 Blogger 자체의 목록 미리보기 썸네일이 영구히 비어 보일 수 있으므로,
+    발행 직전에 최대 timeout_sec초 동안 폴링해 실제로 열리는지 확인한다.
+    (실패해도 예외를 던지지 않고 False만 반환 — 발행 자체를 막지는 않으며, 브라우저 측
+    onerror 재시도(_retryHeroImage)가 마지막 안전망 역할을 한다.)"""
+    if not url or not url.startswith(("http://", "https://")):
+        return False
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            resp = requests.head(url, timeout=8, allow_redirects=True)
+            if resp.status_code == 200:
+                return True
+            if resp.status_code in (403, 404, 405):
+                # 일부 서버/CDN은 HEAD를 제대로 지원하지 않으므로 GET으로 한 번 더 확인
+                resp = requests.get(url, timeout=8, stream=True)
+                if resp.status_code == 200:
+                    return True
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(interval_sec)
+    return False
+
+
 def commit_and_push_changes() -> bool:
     try:
         subprocess.run(["git", "config", "user.name", "auto-blog-bot"], check=True, capture_output=True)
@@ -6171,6 +6203,18 @@ def run() -> None:
         article["_card_news"] = {}
 
     commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
+
+    # [FIX-썸네일 깨짐] GitHub Pages 배포 지연으로 Blogger가 아직 없는 이미지를 스크래핑하는
+    # 것을 막기 위해, 발행 직전 최대 60초 동안 썸네일 URL이 실제로 열리는지 확인한다.
+    if content_quality_ok and thumb_url.startswith(("http://", "https://")):
+        if _wait_for_url_ready(thumb_url, timeout_sec=60):
+            logger.info(f"[썸네일] GitHub Pages 배포 확인 완료: {thumb_url}")
+        else:
+            logger.warning(
+                f"[썸네일] GitHub Pages 배포 확인 시간 초과(60초): {thumb_url} — "
+                "발행은 계속 진행하되 처음엔 썸네일이 깨져 보일 수 있습니다 "
+                "(방문자 브라우저에서 자동 재시도됨)."
+            )
 
     if not content_quality_ok:
         # [FIX-AdSense 안전장치] 재생성까지 시도했는데도 품질 게이트(최소 글자 수/expression 등장/
