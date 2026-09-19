@@ -5542,6 +5542,7 @@ def repair_old_posts() -> None:
         logger.info(f"[복구] GitHub Pages 공개 산출물 정리 완료 — {removed_public_files}개 파일 삭제 (이미지·posts.json·대시보드는 유지)")
 
     fixed_thumbs = 0
+    skipped_thumbs = 0
     fixed_card_news = 0
     fixed_buttons = 0
     deleted_other_niche = 0
@@ -5591,7 +5592,7 @@ def repair_old_posts() -> None:
         if p.get("thumb_repair_version") == THUMB_REPAIR_VERSION and os.path.isfile(
             os.path.join(DOCS_DIR, p.get("thumb", ""))
         ):
-            pass  # 이미 처리됨 — 건너뜀
+            skipped_thumbs += 1  # 이미 처리됨 — 건너뜀
         else:
             old_thumb_rel = (p.get("thumb") or "").strip()
             base_name = os.path.splitext(os.path.basename(old_thumb_rel) or "thumb")[0]
@@ -5692,7 +5693,7 @@ def repair_old_posts() -> None:
         update_seo_files(kept_posts)
 
     logger.info(
-        f"[복구] GitHub Pages 완료 — 썸네일 {fixed_thumbs}개, 인스타툰 {fixed_card_news}개, 발음버튼 {fixed_buttons}개 패치, "
+        f"[복구] GitHub Pages 완료 — 썸네일 재생성 {fixed_thumbs}개(스킵 {skipped_thumbs}개), 인스타툰 {fixed_card_news}개, 발음버튼 {fixed_buttons}개 패치, "
         f"다른 주제 글 {deleted_other_niche}개 삭제 (표현 추출 실패 {skipped_no_expression}개는 그대로 둠)"
     )
 
@@ -6054,8 +6055,14 @@ def repair_old_posts() -> None:
     else:
         logger.info("[복구] Blogger 미설정으로 Blogger 복구는 건너뜁니다.")
 
-    commit_and_push_changes()
-    logger.info("[복구] 전체 완료, 변경사항 push 완료")
+    push_ok = commit_and_push_changes()
+    if push_ok:
+        logger.info("[복구] 전체 완료, 변경사항 push 완료")
+    else:
+        logger.error(
+            "[복구] 전체 완료했지만 git push에 실패했습니다 — 이번 리페어 결과(썸네일 스킵 마커 포함)가 "
+            "저장소에 반영되지 않았을 수 있습니다. 다음 실행에서도 같은 항목이 반복 처리될 수 있습니다."
+        )
 
 def run() -> None:
     is_repair_only = len(sys.argv) > 1 and sys.argv[1].strip().lower() == "repair"
