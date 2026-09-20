@@ -11,11 +11,11 @@ GitHub Actions 위에서 실행되는 자동 블로그 파이프라인 스크립
 - [품질 게이트] 본문 길이·expression 본문 등장·SEO 제목·문화 절대 단정·H2 개수·meta 길이 검사
 - [주제 확장] 큐 고갈 임박 시 Gemini로 신규 표현 제안 → 정규화 중복 제거 후 pending/extra_topics 편입
 - [A/B 제목] 발행 시 SEO 제목 2안 생성·선택, posts.json에 variant 기록 (장기 성과 추적 기반)
-- [인스타툰 품질] 플랜/본문 기반 가독·표현 일관성 점수 → 낮으면 1회 재생성 유도
+- [시각 품질 점수] 본문 기반 가독·표현 일관성 점수 산출 (품질 게이트·대시보드 추적용)
 - [업그레이드] 방문자 언어 감지 자동 번역 (버튼 숨김) 및 표 1.5배 확대 기능
 - [AdSense] 심사 모드(ADSENSE_REVIEW_MODE): 본문 수동광고·제휴 블록 생략, 품질 게이트,
   편집 고지, Blogger About/Privacy/Contact 페이지 동기화, 라벨 구조화
-- [SNS] Blogger 발행 성공 후 Threads·Instagram Graph API 자동 공유 (Secrets 설정 시에만)
+- [SNS] Blogger 발행 성공 후 Threads 자동 공유 (Secrets 설정 시에만)
 - [SEO] 제목 Meaning/What Does 패턴, 검색형 H2, Topic Cluster 내부링크 2~3개, 문화 단정 완화
 """
 
@@ -152,7 +152,6 @@ def _mask_secrets(text: str) -> str:
         globals().get("OPENAI_API_KEY", ""),
         globals().get("PEXELS_API_KEY", ""),
         globals().get("THREADS_ACCESS_TOKEN", ""),
-        globals().get("INSTAGRAM_ACCESS_TOKEN", ""),
     ):
         if secret and secret in text:
             text = text.replace(secret, "***REDACTED***")
@@ -179,22 +178,16 @@ ENGLISH_SLOGAN = os.environ.get("ENGLISH_SLOGAN", "Learn Korean, Understand Kore
 
 # --- [NEW] SNS 채널 (설정된 것만 홈페이지 하단에 아이콘으로 노출, 없으면 자동으로 숨김) ---
 SNS_PINTEREST_URL = os.environ.get("SNS_PINTEREST_URL", "")
-SNS_INSTAGRAM_URL = os.environ.get("SNS_INSTAGRAM_URL", "")
 SNS_X_URL = os.environ.get("SNS_X_URL", "")
 
-# --- [NEW] Threads / Instagram 자동 발행 (Blogger 성공 직후)
+# --- [NEW] Threads 자동 발행 (Blogger 성공 직후)
 # Threads: Meta 개발자 앱(Threads use case) + threads_basic, threads_content_publish
-# Instagram: Professional(Business/Creator) + Facebook Page 연결 + instagram_content_publish
 # 미설정 시 조용히 건너뜀. 실패해도 Blogger 발행 결과는 유지.
 THREADS_ENABLED = os.environ.get("THREADS_ENABLED", "true").strip().lower() in ("1", "true", "yes", "y")
 THREADS_USER_ID = os.environ.get("THREADS_USER_ID", "").strip()
 THREADS_ACCESS_TOKEN = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
 THREADS_API_BASE = os.environ.get("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
 
-INSTAGRAM_ENABLED = os.environ.get("INSTAGRAM_ENABLED", "true").strip().lower() in ("1", "true", "yes", "y")
-INSTAGRAM_USER_ID = os.environ.get("INSTAGRAM_USER_ID", "").strip()  # IG Professional user id
-INSTAGRAM_ACCESS_TOKEN = os.environ.get("INSTAGRAM_ACCESS_TOKEN", "").strip()
-INSTAGRAM_API_BASE = os.environ.get("INSTAGRAM_API_BASE", "https://graph.facebook.com/v21.0").rstrip("/")
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
 GA_MEASUREMENT_ID = os.environ.get("GA_MEASUREMENT_ID", "")
 GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "")
@@ -268,11 +261,6 @@ POSTS_DIR = os.path.join(DOCS_DIR, "posts")
 # [FIX-무한반복] 썸네일 리페어 버전. 이 값을 바꾸면 다음 자동 리페어 때 모든 글의 썸네일을
 # 강제로 한 번 더 재생성한다(향후 generate_thumbnail 로직을 개선했을 때 올릴 것).
 THUMB_REPAIR_VERSION = "2026-09-19-v1"
-# [인스타툰 한컷] 표현→실제 사용 순간 시각화 (4:5, Instagram/Threads 단일)
-INSTATOON_SIZE = (1080, 1350)  # 4:5 피드
-INSTATOON_PUBLIC_DIR = os.path.join(DOCS_DIR, "instatoon")
-INSTATOON_DOWNLOAD_DIR = os.environ.get("INSTATOON_DOWNLOAD_DIR", "downloads/instatoon")
-INSTATOON_CUTS = 1
 # [NEW] 구글 블로그(Blogger)만 메인으로 발행하고, GitHub Pages는 이미지 호스팅(docs/thumbs)과
 # posts.json(내부 상태) 용도로만 남긴다. 개별 글 페이지·홈페이지(index.html)·sitemap.xml처럼
 # "공개 사이트"로 보일 수 있는 산출물은 더 이상 만들지 않는다 (중복 콘텐츠 방지).
@@ -1850,6 +1838,22 @@ def _load_font(size: int):
     logger.warning("한글 폰트를 찾지 못해 기본 폰트로 대체합니다 (한글이 깨져 보일 수 있음).")
     return ImageFont.load_default()
 
+
+_HANGUL_FONT_CACHE: Dict[str, bool] = {}
+
+
+def _hangul_font_available() -> bool:
+    """[NEW-썸네일 안정화] 실제 한글 지원 TTF 파일이 설치되어 있는지 확인(1회 계산 후 캐시).
+    apt/curl 폰트 확보가 실패한 러너에서는 PIL이 ImageFont.load_default()(한글 미지원 비트맵
+    폰트)로 조용히 대체되어, 한글 텍스트가 빈 사각형(tofu)으로 깨져 보이는 문제가 있었다.
+    이 함수가 False를 반환하면 썸네일에 한글을 아예 그리지 않고 로마자만 사용해 이를 원천 차단한다."""
+    if "ok" not in _HANGUL_FONT_CACHE:
+        _HANGUL_FONT_CACHE["ok"] = any(
+            os.path.exists(p) and os.path.getsize(p) > 0 for p in FONT_CANDIDATES
+        )
+    return _HANGUL_FONT_CACHE["ok"]
+
+
 def _make_gradient_background(size: Tuple[int, int], colors: List[Tuple[int, int, int]]):
     w, h = size
     base = Image.new("RGB", size, colors[0])
@@ -2070,28 +2074,42 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
         img.alpha_composite(texture)
         draw = ImageDraw.Draw(img)
 
-    if expression and len(expression) <= 20:
-        expr_font_size = 128 if len(expression) <= 6 else (96 if len(expression) <= 10 else 68)
-        expr_font = _load_font(expr_font_size)
+    # [개편-썸네일 안정화] 폰트 설치 여부와 무관하게 항상 렌더링 가능한 로마자(영문) 표현을
+    # 메인 헤드라인으로 사용한다. 한글 원문은 실제 한글 지원 폰트가 확인된 경우에만
+    # 헤드라인 아래 보조 텍스트로 작게 추가한다 (폰트 실패 시에도 헤드라인 자체는 항상 정상 출력).
+    roman_headline = romanize_korean(expression).upper() if expression else ""
+    hangul_ok = _hangul_font_available()
+    headline = roman_headline or (expression if hangul_ok else "")
+    show_kr_line = bool(roman_headline and hangul_ok and expression)
+
+    if headline and len(headline) <= 40:
+        headline_font_size = 108 if len(headline) <= 10 else (84 if len(headline) <= 18 else 60)
+        headline_font = _load_font(headline_font_size)
         max_text_w = w - 100
-        lines = _wrap_by_pixel_width(draw, expression, expr_font, max_text_w)[:2]
-        line_h = expr_font_size + 16
+        lines = _wrap_by_pixel_width(draw, headline, headline_font, max_text_w)[:2]
+        line_h = headline_font_size + 16
         # 영문 한 줄 서브타이틀(빈 썸네일처럼 보이지 않게)
         sub = 'Korean expression · Learn the nuance'
         sub_font = _load_font(28)
-        sub_h = 36
-        total_h = line_h * len(lines) + sub_h + 20
+        kr_font = _load_font(40) if show_kr_line else None
+        kr_line = f"「{expression}」" if show_kr_line else ""
+        total_h = line_h * len(lines) + (52 if kr_line else 0) + 36 + 20
         ty = h // 2 - total_h // 2
 
         text_fill = _blend_rgb((255, 255, 255), accent_rgb, 0.22) + (255,)
         text_stroke = _blend_rgb(accent_rgb, (0, 0, 0), 0.55) + (240,)
         for line in lines:
-            lb = draw.textbbox((0, 0), line, font=expr_font)
+            lb = draw.textbbox((0, 0), line, font=headline_font)
             tw = lb[2] - lb[0]
             tx = (w - tw) / 2 - lb[0]
-            draw.text((tx, ty - lb[1]), line, font=expr_font, fill=text_fill,
+            draw.text((tx, ty - lb[1]), line, font=headline_font, fill=text_fill,
                        stroke_width=5, stroke_fill=text_stroke)
             ty += line_h
+        if kr_line:
+            kb = draw.textbbox((0, 0), kr_line, font=kr_font)
+            draw.text(((w - (kb[2] - kb[0])) / 2 - kb[0], ty + 6 - kb[1]), kr_line, font=kr_font,
+                      fill=(255, 255, 255, 235))
+            ty += 52
         sb = draw.textbbox((0, 0), sub, font=sub_font)
         draw.text(((w - (sb[2] - sb[0])) / 2 - sb[0], ty + 12 - sb[1]), sub, font=sub_font,
                   fill=(255, 255, 255, 230))
@@ -2130,902 +2148,6 @@ def _generate_thumbnail_local(title: str, output_path: str, theme: Dict[str, Any
 
 
 
-
-
-
-def _instatoon_slug(expression: str, title: str) -> str:
-    base = (expression or title or "post").strip()
-    base = re.sub(r"[^\w가-힣\-]+", "_", base)[:40].strip("_") or "post"
-    return base
-
-
-def _strip_html_for_instatoon(html_body: str, limit: int = 2800) -> str:
-    t = re.sub(r"<script[\s\S]*?</script>", " ", html_body or "", flags=re.I)
-    t = re.sub(r"<style[\s\S]*?</style>", " ", t, flags=re.I)
-    t = re.sub(r"<[^>]+>", " ", t)
-    t = re.sub(r"&nbsp;", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t[:limit]
-
-
-# ─── MASTER PROMPT: 표현+본문 → 분석 → 콘티 → 이미지 프롬프트 ───
-INSTATOON_MASTER_SYSTEM = """# MASTER PROMPT
-# Korean Expression → One-Cut Instagram Webtoon Generator
-
-당신은 한국어와 한국 문화를 전문적으로 다루는
-25년 경력의 인스타툰 작가이자 스토리텔러,
-캐릭터 연출가, 이미지 생성 프롬프트 디렉터다.
-
-목표는 한국어 표현을 "설명하는 이미지"가 아니라
-그 표현이 실제 생활에서 튀어나오는 가장 공감되는 순간을
-하나의 인스타툰 장면으로 만드는 것이다.
-
-[USER INPUT]
-한국어 표현 + 블로그 본문만 주어진다.
-
-[1. CONTENT ANALYSIS]
-본문을 분석해 내부적으로 추출한다.
-A. 핵심 한국어 표현
-B. 사전적 의미
-C. 실제 한국인이 사용하는 의미
-D. 문자 그대로 번역했을 때 생길 수 있는 오해
-E. 실제 사용 상황
-F. 표현에 담긴 감정
-G. 한국 문화와 관련된 부분
-H. 외국인이 이해하기 어려운 부분
-I. 한국인이 공감할 수 있는 생활 장면
-J. 이 콘텐츠에서 가장 중요한 한 가지 메시지
-본문에 없는 사실은 임의로 추가하지 않는다.
-"한국인은 모두 이렇게 말한다" 같은 일반화 금지.
-
-[2. 핵심 메시지 1개]
-한 컷에 모든 내용을 넣지 말고 가장 강한 메시지 하나만.
-예: 직역하면 이상하지만 실제로는 자연스럽다 / 상황에 따라 감정이 달라진다 / 이런 상황에서 쓴다 / 직역 오해 / 누구나 공감할 순간
-
-[3. EMOTION ENGINE]
-①감탄 ②놀람 ③기쁨 ④감동 ⑤당황 ⑥황당함 ⑦어이없음 ⑧분노 ⑨실망 ⑩걱정 ⑪체념 ⑫민망함 ⑬부끄러움 ⑭설렘 ⑮귀여움 ⑯공감 ⑰복합
-필요하면 2개 조합.
-
-[4. SCENE ENGINE]
-표현마다 완전히 다른 실제 상황 1개만 선택.
-음식/카페/쇼핑/여행/직장/학교/친구/가족/연애/소개팅/SNS/메신저/전화/대중교통/편의점/식당/집/거리/회사회의/문화상황/일상관계
-예:
-미쳤다→엄청난 음식 감탄
-눈치 보다→여러 사람 앞에서 말할까 망설임
-대박→예상 못한 소식
-괜찮아→힘들지만 안심시키는 말
-애매하다→두 선택지 사이 고민
-정이 들다→익숙한 사람/장소와 이별
-답답하다→대화가 안 통하는 순간
-동일 템플릿 금지.
-
-[5. EMPATHY ENGINE]
-한국인이 자기 경험을 떠올릴 수 있는가?
-공감 포인트 1개. 약하면 더 일상적 상황으로 변경.
-
-[6. VISUAL HOOK]
-썸네일에서도 사건·표정이 먼저 보이게.
-과장 표정, 결정적 순간, 말과 상황의 불일치 등.
-긴 설명문·사전정의·가만히 서 있는 장면 금지.
-
-[7. STORY]
-상황 발생 → 감정 → 한국어 표현 → 의미 발견 (이미지는 한 순간)
-
-[8. CHARACTER]
-기본 주인공 1명, 필요시 +상대 1명, 최대 3명.
-캐릭터 디자인이 표현보다 앞서지 않게.
-
-[9. FOREIGNER RULE]
-항상 넣지 말 것.
-직역 오해·한영 의미 차이·문화 차이가 핵심일 때만.
-부정적으로 묘사하지 말 것.
-
-[10. CAMERA]
-감정→closeup / 행동→medium / 상황→wide / 오해→두 반응 동시 / 감동→공간 관계
-
-[11. COMPOSITION]
-Instagram 4:5 vertical. 시선: 사건→표정→표현→짧은 메시지. 여백 유지.
-
-[12. DIALOGUE]
-구어체만. 1~3 말풍선. 핵심 표현 철자 유지. 문어·교과서체 금지.
-
-[13. CULTURAL MESSAGE]
-하단 1~2줄. 본문에 없는 문화 사실 창작 금지.
-
-[14-17]
-시각 은유는 과하지 않게. Modern Korean Instagram webtoon, clean line art, expressive face, simple background.
-텍스트 최소. 포즈·배경·구도 반복 금지.
-
-[18. OUTPUT]
-반드시 아래 JSON만 출력 (마크다운 코드펜스·설명 문장 금지):
-{
-  "core_message": "한 문장",
-  "situation": "장소 + 시간 + 사건",
-  "place": "카페|식당|직장|집|거리|지하철|메신저|쇼핑|여행|학교|편의점|기타",
-  "empathy": "한국인 공감 한 줄",
-  "emotion_primary": "감탄|놀람|기쁨|감동|당황|황당함|어이없음|분노|실망|걱정|체념|민망|부끄러움|설렘|귀여움|공감|복합",
-  "emotion_secondary": "",
-  "characters": [{"role":"주인공","desc":"외형","action":"행동","face":"표정"}],
-  "camera": "closeup|medium|wide",
-  "visual_hook": "첫 시선 사건",
-  "bubbles": ["구어 대사"],
-  "highlight_expression": "표현 원문 그대로",
-  "footer": "하단 1~2줄",
-  "color_mood": "bright|warm|cool|dry|soft",
-  "use_foreigner": false,
-  "foreign_bubble": "",
-  "final_image_prompt": "English scene prompt for illustration WITHOUT any text letters in the image; describe place, characters, faces, actions, camera; mention the expression only as meaning context",
-  "negative_prompt": "photorealistic, 3D render, cinematic realism, text, letters, words, Korean characters, English words, signage, watermark, logo, crowded composition, bad anatomy, emotionless, stiff pose, visual clutter"
-}
-"""
-
-
-
-
-
-def _fallback_master_plan(article: Dict[str, Any]) -> Dict[str, Any]:
-    expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "") or "이 표현"
-    meta = (article.get("meta_description") or "").strip()
-    body = _strip_html_for_instatoon(article.get("html_body") or "", 600)
-    seed = int(hashlib.md5(f"{expr}|{meta}|{body[:60]}".encode()).hexdigest(), 16)
-    # (pattern, emotion, place, bubble, mood, english_scene_NO_TEXT, camera)
-    rules = [
-        (r"세배|명절|설날|추석|새해", "공감", "집", f"새해 복 많이 받으세요. 세배 올립니다.", "warm",
-         "Korean New Year family living room, young adult in hanbok or neat clothes bowing deeply to elders seated on floor cushions, low table with fruit, warm indoor light", "wide"),
-        (r"감사|고마", "공감", "카페", f"정말 감사해요.", "soft",
-         "Korean cafe, person receiving help from friend, both smiling, hands together in thanks", "medium"),
-        (r"미쳤|대박|레전드|최고", "감탄", "식당", f"와… {expr}!", "bright",
-         "Korean restaurant table full of delicious food, young person eyes wide with joy tasting a bite", "closeup"),
-        (r"눈치|망설|조심", "당황", "직장", f"지금은 말하기 좀…", "cool",
-         "Korean office meeting, person half-raising hand then freezing, colleagues looking, awkward smile", "medium"),
-        (r"괜찮", "체념", "카페", f"{expr}…", "soft",
-         "Korean cafe, person smiling weakly saying they are fine while eyes look tired, coffee cup", "closeup"),
-        (r"정(이|이 )?들|그리", "감동", "거리", f"{expr}…", "warm",
-         "Seoul street at dusk, person watching a departing bus, soft nostalgic expression", "wide"),
-        (r"답답|억울", "황당함", "메신저", f"아, {expr}.", "dry",
-         "person staring at smartphone chat, frustrated face, simple bedroom background", "closeup"),
-        (r"애매", "당황", "카페", f"음… {expr}해.", "cool",
-         "person between two menu boards in Korean cafe, unsure expression, hand on chin", "medium"),
-        (r"화나|짜증|열받", "분노", "메신저", f"진짜 {expr}.", "dry",
-         "person gripping phone tightly, angry expression, subway seat", "closeup"),
-        (r"설레|두근", "설렘", "거리", f"왜 이렇게 {expr}리지?", "warm",
-         "person checking phone with shy smile on Seoul street, soft pink evening light", "medium"),
-        (r"민망|창피|부끄", "민망함", "카페", f"아… {expr}해.", "cool",
-         "person covering face with hand in Korean cafe, ears red, friend laughing gently", "medium"),
-    ]
-    emotion, place, bubble, mood = "공감", "카페", expr, "soft"
-    scene_en = "everyday Korean moment with clear facial emotion, simple background"
-    camera = "medium"
-    blob = f"{expr} {meta} {body}"
-    for pat, em, pl, bu, mo, sc, cam in rules:
-        if re.search(pat, blob):
-            emotion, place, bubble, mood, scene_en, camera = em, pl, bu, mo, sc, cam
-            break
-    else:
-        # hash-based variety so same default doesn't always look identical
-        places = [
-            ("카페", "Korean cafe table, expressive face", "medium"),
-            ("거리", "Seoul sidewalk, person reacting", "medium"),
-            ("집", "Korean home interior, emotional moment", "medium"),
-            ("직장", "Korean office desk, reaction shot", "closeup"),
-            ("지하철", "Seoul subway, person reacting", "closeup"),
-        ]
-        place, scene_en, camera = places[seed % len(places)]
-    sit = f"{place}에서 「{expr}」가 나온 순간"
-    final_prompt = (
-        f"Korean webtoon illustration, clean line art, soft flat colors, {camera} shot. "
-        f"{scene_en}. Emotion: {emotion}. "
-        f"Depict the real Korean life moment for the expression '{expr}'. "
-        f"No text, no letters, no Korean characters, no English words, no signs, no watermark."
-    )
-    return {
-        "core_message": meta[:90] if meta else f"「{expr}」가 실제로 쓰이는 순간",
-        "situation": sit,
-        "place": place,
-        "empathy": "아, 진짜 저 상황에선 저 말이 나오지.",
-        "emotion_primary": emotion,
-        "emotion_secondary": "",
-        "characters": [{"role": "주인공", "desc": "한국인 청년", "action": "그 순간의 행동", "face": emotion}],
-        "camera": camera,
-        "visual_hook": sit,
-        "bubbles": [bubble if bubble != expr else f"{expr}."],
-        "highlight_expression": expr,
-        "footer": f"한국에서는 이런 순간에 「{expr}」라고 말하기도 해요.",
-        "color_mood": mood,
-        "use_foreigner": False,
-        "foreign_bubble": "",
-        "final_image_prompt": final_prompt,
-        "negative_prompt": (
-            "photorealistic, 3D render, text, letters, words, Korean characters, English words, "
-            "signage, speech bubble with text, watermark, logo, crowded, bad anatomy, stiff pose"
-        ),
-    }
-
-
-
-def plan_instatoon_from_blog(article: Dict[str, Any]) -> Dict[str, Any]:
-    """마스터 프롬프트: 표현+본문 → 분석·상황·콘티·최종 이미지 프롬프트."""
-    expr = (article.get("expression") or "").strip() or _extract_expression_from_title(article.get("title") or "")
-    body = _strip_html_for_instatoon(article.get("html_body") or "", 2400)
-    title = article.get("title") or ""
-    meta = article.get("meta_description") or ""
-    plan = _fallback_master_plan(article)
-    user = (
-        f"한국어 표현:\n{expr}\n\n"
-        f"블로그 제목:\n{title}\n\n"
-        f"메타 요약:\n{meta}\n\n"
-        f"블로그 본문:\n{body or '(본문 없음 — 제목·표현만으로 설계)'}\n"
-    )
-    if not GEMINI_API_KEY:
-        logger.info("[인스타툰] GEMINI 없음 — 로컬 마스터 폴백 콘티")
-        return plan
-    try:
-        url = GEMINI_URL.format(api_key=GEMINI_API_KEY)
-        resp = requests.post(
-            url,
-            json={
-                "system_instruction": {"parts": [{"text": INSTATOON_MASTER_SYSTEM}]},
-                "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {
-                    "temperature": 0.9,
-                    "maxOutputTokens": 2048,
-                    "responseMimeType": "application/json",
-                },
-            },
-            timeout=50,
-        )
-        if resp.status_code in (429, 503):
-            logger.warning(f"[인스타툰] Gemini {resp.status_code} — 로컬 콘티 (할당량 보호)")
-            return plan
-        if not resp.ok:
-            logger.warning(f"[인스타툰] Gemini HTTP {resp.status_code}")
-            return plan
-        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        m = re.search(r"\{[\s\S]*\}", text_out)
-        if not m:
-            return plan
-        parsed = json.loads(m.group(0))
-        for k, v in parsed.items():
-            if v is not None and v != "":
-                plan[k] = v
-        plan["highlight_expression"] = expr  # 철자 고정
-        # 이미지 AI에는 글자 없이 장면만 (오버레이에서 한국어 합성)
-        if plan.get("final_image_prompt") and "no text" not in plan["final_image_prompt"].lower():
-            plan["final_image_prompt"] = (plan["final_image_prompt"].rstrip(".") +
-                ". No text, no letters, no Korean or English writing in the image.")
-
-        if isinstance(plan.get("bubbles"), str):
-            plan["bubbles"] = [plan["bubbles"]]
-        if not isinstance(plan.get("bubbles"), list) or not plan["bubbles"]:
-            plan["bubbles"] = [expr]
-        if not plan.get("final_image_prompt"):
-            plan["final_image_prompt"] = _fallback_master_plan(article)["final_image_prompt"]
-        logger.info(
-            f"[인스타툰] 마스터 콘티 OK — {plan.get('place')} / {plan.get('emotion_primary')} / "
-            f"{(plan.get('situation') or '')[:40]}"
-        )
-        return plan
-    except Exception as e:
-        logger.warning(f"[인스타툰] 마스터 설계 실패, 폴백: {_mask_secrets(str(e))}")
-        return plan
-
-
-_MOOD_PALETTE = {
-    "bright": [(255, 248, 230), (255, 230, 200), (255, 140, 70)],
-    "warm": [(255, 245, 240), (255, 210, 200), (220, 110, 100)],
-    "cool": [(245, 248, 255), (210, 220, 240), (100, 130, 190)],
-    "dry": [(248, 248, 245), (220, 215, 200), (140, 130, 110)],
-    "soft": [(250, 248, 252), (230, 220, 235), (150, 130, 180)],
-}
-
-
-
-
-
-
-
-
-
-def _try_cloudflare_flux_bytes(prompt: str) -> Optional[bytes]:
-    """완전 무료 고성능: Cloudflare Workers AI FLUX.1-schnell
-
-    POST /client/v4/accounts/{id}/ai/run/@cf/black-forest-labs/flux-1-schnell
-    body: { "prompt": "...", "steps": 4 }
-    응답: JSON { result: { image: base64 } } 또는 image/* 바이너리
-    """
-    account = (CLOUDFLARE_ACCOUNT_ID or os.environ.get("CLOUDFLARE_ACCOUNT_ID", "") or "").strip()
-    token = (CLOUDFLARE_API_TOKEN or os.environ.get("CLOUDFLARE_API_TOKEN", "") or "").strip()
-    if not account or not token:
-        logger.warning(
-            "[인스타툰] Cloudflare Secrets 없음 — FLUX 건너뜀 "
-            f"(ACCOUNT_ID={'Y' if account else 'N'}, API_TOKEN={'Y' if token else 'N'})"
-        )
-        return None
-
-    full = (prompt or "").strip()[:1800]
-    if not full:
-        return None
-    full += (
-        ". Korean Instagram webtoon illustration style, clean simple line art, "
-        "expressive character face, minimal background, vertical portrait composition, "
-        "cute manhwa look, no photorealism, no watermark, no logo"
-    )
-
-    import base64 as b64mod
-
-    # 공식 모델 ID
-    models = [
-        "@cf/black-forest-labs/flux-1-schnell",
-    ]
-    # 페이로드 변형: steps 공식 파라미터 (num_steps 아님). width/height는 지원 시만.
-    payloads = [
-        {"prompt": full, "steps": 4},
-        {"prompt": full, "steps": 6},
-        {"prompt": full},
-        {"prompt": full, "steps": 4, "width": 768, "height": 1024},
-    ]
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-    last_err = ""
-
-    def _decode_response(r: "requests.Response") -> Optional[bytes]:
-        ctype = (r.headers.get("Content-Type") or "").lower()
-        if "image" in ctype and r.content and len(r.content) > 1500:
-            return r.content
-        # JSON
-        try:
-            data = r.json()
-        except Exception:
-            return None
-        # 에러 메시지
-        if isinstance(data, dict) and data.get("success") is False:
-            errs = data.get("errors") or data.get("messages") or data
-            raise RuntimeError(str(errs)[:300])
-        candidates = []
-        if isinstance(data, dict):
-            candidates.append(data.get("image"))
-            res = data.get("result")
-            if isinstance(res, dict):
-                candidates.append(res.get("image"))
-                candidates.append(res.get("b64"))
-            elif isinstance(res, str):
-                candidates.append(res)
-            candidates.append(data.get("result"))
-        for c in candidates:
-            if not c or not isinstance(c, str):
-                continue
-            s = c.strip()
-            if s.startswith("data:image"):
-                s = s.split(",", 1)[-1]
-            try:
-                raw = b64mod.b64decode(s)
-                if len(raw) > 1500:
-                    return raw
-            except Exception:
-                continue
-        return None
-
-    for model in models:
-        url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
-        for i, body in enumerate(payloads):
-            try:
-                logger.info(f"[인스타툰] Cloudflare FLUX 요청: {model} fmt={i} keys={list(body.keys())}")
-                r = requests.post(url, headers=headers, json=body, timeout=120)
-                if r.status_code in (401, 403):
-                    last_err = f"인증 실패 HTTP {r.status_code}: {r.text[:250]}"
-                    logger.warning(f"[인스타툰] {last_err}")
-                    # 토큰 권한 문제면 다른 fmt도 동일
-                    return None
-                if r.status_code in (429, 503):
-                    last_err = f"HTTP {r.status_code}: {r.text[:150]}"
-                    logger.warning(f"[인스타툰] Cloudflare {last_err}")
-                    time.sleep(10)
-                    continue
-                if not r.ok:
-                    last_err = f"HTTP {r.status_code}: {r.text[:280]}"
-                    logger.warning(f"[인스타툰] Cloudflare {last_err}")
-                    continue
-                try:
-                    raw = _decode_response(r)
-                except RuntimeError as e:
-                    last_err = str(e)
-                    logger.warning(f"[인스타툰] Cloudflare API 에러: {last_err}")
-                    continue
-                if raw:
-                    logger.info(f"[인스타툰] Cloudflare FLUX 성공 ({len(raw)} bytes)")
-                    return raw
-                last_err = f"응답 파싱 실패 ctype={r.headers.get('Content-Type')} body={r.text[:160]}"
-                logger.warning(f"[인스타툰] {last_err}")
-            except Exception as e:
-                last_err = _mask_secrets(str(e))
-                logger.warning(f"[인스타툰] Cloudflare 예외: {last_err}")
-    logger.warning(f"[인스타툰] Cloudflare FLUX 실패 — {last_err}")
-    return None
-
-
-
-def _try_hf_flux_bytes(prompt: str) -> Optional[bytes]:
-    """Hugging Face Inference — FLUX.1-schnell (무료 토큰).
-
-    Secrets: HF_TOKEN (https://huggingface.co/settings/tokens)
-    """
-    token = (HF_TOKEN or os.environ.get("HUGGINGFACE_TOKEN", "") or "").strip()
-    if not token:
-        return None
-    full = (prompt or "").strip()[:1500]
-    if not full:
-        return None
-    full += " Korean webtoon style, clean lines, expressive face, vertical portrait"
-
-    models = [
-        "black-forest-labs/FLUX.1-schnell",
-        "black-forest-labs/FLUX.1-dev",
-    ]
-    headers = {"Authorization": f"Bearer {token}"}
-    for model in models:
-        url = f"https://api-inference.huggingface.co/models/{model}"
-        try:
-            logger.info(f"[인스타툰] HF FLUX 요청: {model}")
-            r = requests.post(
-                url,
-                headers=headers,
-                json={"inputs": full, "parameters": {"width": 768, "height": 1024}},
-                timeout=120,
-            )
-            if r.status_code in (401, 403):
-                logger.warning(f"[인스타툰] HF 인증 실패 HTTP {r.status_code}")
-                return None
-            if r.status_code == 503:
-                # 모델 로딩
-                time.sleep(15)
-                r = requests.post(
-                    url, headers=headers,
-                    json={"inputs": full, "parameters": {"width": 768, "height": 1024}},
-                    timeout=120,
-                )
-            if r.ok and r.content and len(r.content) > 2000 and "image" in (r.headers.get("Content-Type") or "image"):
-                logger.info(f"[인스타툰] HF FLUX 성공 ({len(r.content)} bytes)")
-                return r.content
-            logger.warning(f"[인스타툰] HF HTTP {r.status_code}: {r.text[:180]}")
-        except Exception as e:
-            logger.warning(f"[인스타툰] HF 예외: {_mask_secrets(str(e))}")
-    return None
-
-
-def _try_pollinations_image_bytes(prompt: str) -> Optional[bytes]:
-    """완전 무료·키 불필요 — Pollinations (보조)."""
-    full = (prompt or "").strip()
-    if not full:
-        return None
-    short = full[:700].replace("\n", " ")
-    import urllib.parse
-    q = urllib.parse.quote(short)
-    urls = [
-        f"https://image.pollinations.ai/prompt/{q}?width=1080&height=1350&nologo=true&model=flux",
-        f"https://image.pollinations.ai/prompt/{q}?width=768&height=1024&nologo=true",
-    ]
-    for url in urls:
-        try:
-            logger.info("[인스타툰] Pollinations 무료 요청")
-            r = requests.get(url, timeout=90, headers={"User-Agent": "LearnKoreanBot/1.0"})
-            if r.ok and r.content and len(r.content) > 2000:
-                ctype = r.headers.get("Content-Type") or ""
-                if "image" in ctype or r.content[:3] in (b"\xff\xd8\xff", b"\x89PN"):
-                    logger.info(f"[인스타툰] Pollinations 성공 ({len(r.content)} bytes)")
-                    return r.content
-            logger.warning(f"[인스타툰] Pollinations HTTP {r.status_code}")
-        except Exception as e:
-            logger.warning(f"[인스타툰] Pollinations 예외: {e}")
-        time.sleep(3)
-    return None
-
-
-def _try_openai_image_bytes(prompt: str, negative: str = "") -> Optional[bytes]:
-    """선택: OPENAI_API_KEY 가 있을 때만."""
-    key = (OPENAI_API_KEY or "").strip()
-    if not key:
-        return None
-    import base64 as b64mod
-    full = (prompt or "").strip()[:3000]
-    if not full:
-        return None
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    for model, size in (("dall-e-2", "1024x1024"), ("gpt-image-1-mini", "1024x1536")):
-        try:
-            payload = {"model": model, "prompt": full, "n": 1, "size": size}
-            if model.startswith("dall-e"):
-                payload["response_format"] = "b64_json"
-            r = requests.post("https://api.openai.com/v1/images/generations", headers=headers, json=payload, timeout=90)
-            if not r.ok:
-                continue
-            item = ((r.json() or {}).get("data") or [{}])[0]
-            b64 = item.get("b64_json")
-            if b64:
-                logger.info(f"[인스타툰] OpenAI 성공: {model}")
-                return b64mod.b64decode(b64)
-            url = item.get("url")
-            if url:
-                ir = requests.get(url, timeout=60)
-                if ir.ok:
-                    return ir.content
-        except Exception:
-            continue
-    return None
-
-
-def _try_ai_image_bytes(prompt: str, negative: str = "") -> Optional[bytes]:
-    """무료 고성능 우선순위:
-    1) Cloudflare FLUX.1-schnell (일 1만 Neurons 무료)
-    2) Hugging Face FLUX (무료 토큰)
-    3) Pollinations (키 없음)
-    4) OpenAI (선택, 유료)
-    """
-    for fn, name in (
-        (lambda: _try_cloudflare_flux_bytes(prompt), "Cloudflare FLUX"),
-        (lambda: _try_hf_flux_bytes(prompt), "HF FLUX"),
-        (lambda: _try_pollinations_image_bytes(prompt), "Pollinations"),
-        (lambda: _try_openai_image_bytes(prompt, negative), "OpenAI"),
-    ):
-        try:
-            raw = fn()
-            if raw:
-                return raw
-        except Exception as e:
-            logger.warning(f"[인스타툰] {name} 예외: {e}")
-    return None
-
-
-
-def _emotion_pose_key(emotion: str) -> str:
-    e = (emotion or "").lower()
-    pairs = [
-        (("감탄", "기쁨", "설렘", "귀여"), "happy"),
-        (("놀람",), "shock"),
-        (("당황", "민망", "부끄", "애매"), "think"),
-        (("황당", "어이", "실망", "답답"), "annoyed"),
-        (("분노", "억울"), "angry"),
-        (("걱정",), "worry"),
-        (("체념", "괜찮"), "tired_smile"),
-        (("감동", "공감", "정"), "warm"),
-    ]
-    for keys, pose in pairs:
-        if any(k in e for k in keys):
-            return pose
-    return "neutral"
-
-
-def _draw_webtoon_character(draw, cx, cy, pose: str, scale: float = 1.0):
-    """귀여운 웹툰 인물 (메타 라벨 없음)."""
-    s = scale
-    ink = (30, 30, 30)
-    skin = (255, 224, 198)
-    hair = (40, 40, 45)
-    blush = (255, 160, 150)
-    # hair
-    draw.ellipse([cx - 58 * s, cy - 78 * s, cx + 58 * s, cy - 10 * s], fill=hair, outline=ink, width=3)
-    # head
-    draw.ellipse([cx - 52 * s, cy - 58 * s, cx + 52 * s, cy + 48 * s], fill=skin, outline=ink, width=3)
-    # eyes + mouth by pose
-    ey = cy - 8 * s
-    if pose in ("happy", "warm"):
-        for ex in (-20, 20):
-            draw.arc([cx + (ex - 12) * s, ey - 6 * s, cx + (ex + 12) * s, ey + 12 * s], 200, 340, fill=ink, width=3)
-        draw.arc([cx - 14 * s, cy + 12 * s, cx + 14 * s, cy + 30 * s], 20, 160, fill=ink, width=3)
-    elif pose == "shock":
-        for ex in (-20, 20):
-            draw.ellipse([cx + (ex - 10) * s, ey - 14 * s, cx + (ex + 10) * s, ey + 8 * s], fill=ink)
-            draw.ellipse([cx + (ex - 3) * s, ey - 8 * s, cx + (ex + 4) * s, ey - 1 * s], fill=(255, 255, 255))
-        draw.ellipse([cx - 10 * s, cy + 10 * s, cx + 10 * s, cy + 30 * s], fill=ink)
-        draw.ellipse([cx + 48 * s, cy - 50 * s, cx + 62 * s, cy - 36 * s], fill=(255, 80, 80))
-        draw.rectangle([cx + 53 * s, cy - 70 * s, cx + 58 * s, cy - 52 * s], fill=(255, 80, 80))
-    elif pose in ("think", "worry"):
-        for ex in (-20, 20):
-            draw.arc([cx + (ex - 10) * s, ey - 4 * s, cx + (ex + 10) * s, ey + 12 * s], 200, 340, fill=ink, width=3)
-        draw.line([(cx - 8 * s, cy + 18 * s), (cx + 8 * s, cy + 18 * s)], fill=ink, width=2)
-        draw.ellipse([cx + 40 * s, cy - 25 * s, cx + 52 * s, cy - 8 * s], fill=(150, 210, 255), outline=ink, width=2)
-        draw.text((cx + 55 * s, cy - 70 * s), "?", font=_load_font(int(34 * s)), fill=ink)
-    elif pose in ("annoyed", "angry"):
-        for ex in (-20, 20):
-            draw.ellipse([cx + (ex - 8) * s, ey - 10 * s, cx + (ex + 8) * s, ey + 6 * s], fill=ink)
-        draw.line([(cx - 32 * s, ey - 22 * s), (cx - 8 * s, ey - 12 * s)], fill=ink, width=3)
-        draw.line([(cx + 8 * s, ey - 12 * s), (cx + 32 * s, ey - 22 * s)], fill=ink, width=3)
-        draw.arc([cx - 12 * s, cy + 16 * s, cx + 12 * s, cy + 32 * s], 200, 340, fill=ink, width=3)
-    elif pose == "tired_smile":
-        for ex in (-20, 20):
-            draw.arc([cx + (ex - 11) * s, ey - 2 * s, cx + (ex + 11) * s, ey + 14 * s], 200, 340, fill=ink, width=3)
-        draw.arc([cx - 12 * s, cy + 14 * s, cx + 12 * s, cy + 28 * s], 20, 150, fill=ink, width=2)
-        draw.ellipse([cx + 38 * s, cy - 5 * s, cx + 48 * s, cy + 12 * s], fill=(150, 210, 255), outline=ink, width=1)
-    else:
-        for ex in (-20, 20):
-            draw.ellipse([cx + (ex - 7) * s, ey - 10 * s, cx + (ex + 7) * s, ey + 6 * s], fill=ink)
-        draw.arc([cx - 12 * s, cy + 10 * s, cx + 12 * s, cy + 26 * s], 20, 160, fill=ink, width=2)
-    # blush
-    for ex in (-30, 30):
-        draw.ellipse([cx + (ex - 9) * s, cy + 8 * s, cx + (ex + 9) * s, cy + 18 * s], fill=blush)
-    # body
-    shirt = (120, 170, 230) if pose != "angry" else (220, 100, 100)
-    draw.rounded_rectangle(
-        [cx - 55 * s, cy + 48 * s, cx + 55 * s, cy + 150 * s],
-        radius=int(22 * s), fill=shirt, outline=ink, width=3,
-    )
-    # arm gesture
-    if pose in ("happy", "shock"):
-        draw.line([(cx + 55 * s, cy + 70 * s), (cx + 95 * s, cy + 30 * s)], fill=ink, width=5)
-        draw.ellipse([cx + 88 * s, cy + 18 * s, cx + 110 * s, cy + 40 * s], fill=skin, outline=ink, width=2)
-    elif pose in ("think", "worry"):
-        draw.line([(cx + 50 * s, cy + 70 * s), (cx + 75 * s, cy + 20 * s)], fill=ink, width=5)
-        draw.ellipse([cx + 68 * s, cy + 5 * s, cx + 90 * s, cy + 28 * s], fill=skin, outline=ink, width=2)
-
-
-def _draw_place_simple(draw, place: str, w: int, ground_y: int, ink, accent):
-    p = (place or "").lower()
-    if any(k in p for k in ("식당", "카페", "음식", "편의")):
-        # table + cup
-        draw.ellipse([w // 2 - 90, ground_y - 20, w // 2 + 90, ground_y + 30], outline=ink, width=3)
-        draw.ellipse([w // 2 + 100, ground_y - 50, w // 2 + 150, ground_y], outline=ink, width=3)
-        draw.rectangle([w // 2 + 118, ground_y, w // 2 + 132, ground_y + 40], outline=ink, width=2)
-    elif any(k in p for k in ("직장", "회사", "회의", "학교")):
-        draw.rectangle([60, ground_y - 80, 180, ground_y + 20], outline=ink, width=2)
-        draw.rectangle([w - 200, ground_y - 100, w - 70, ground_y + 20], outline=ink, width=2)
-    elif any(k in p for k in ("메신저", "sns", "전화")):
-        draw.rounded_rectangle([w // 2 + 80, ground_y - 120, w // 2 + 170, ground_y + 20], radius=16, outline=ink, width=3)
-    elif any(k in p for k in ("거리", "여행", "지하철", "버스")):
-        draw.polygon([(50, ground_y), (120, ground_y - 100), (190, ground_y)], outline=ink, width=3)
-        draw.line([(40, ground_y + 10), (w - 40, ground_y + 10)], fill=(180, 180, 180), width=3)
-    elif any(k in p for k in ("집", "가족")):
-        draw.polygon([(70, ground_y - 20), (130, ground_y - 90), (190, ground_y - 20)], outline=ink, width=3)
-        draw.rectangle([85, ground_y - 20, 175, ground_y + 40], outline=ink, width=2)
-    elif any(k in p for k in ("쇼핑",)):
-        draw.rectangle([w - 220, ground_y - 90, w - 80, ground_y + 20], outline=ink, width=2)
-
-
-def _render_plan_storyboard(plan: Dict[str, Any], blogger_url: str = "") -> Image.Image:
-    """마스터 콘티 → 실제 웹툰 1컷 (메타 라벨 박스 없음)."""
-    w, h = INSTATOON_SIZE
-    mood = (plan.get("color_mood") or "soft").lower()
-    pal = _MOOD_PALETTE.get(mood) or _MOOD_PALETTE["soft"]
-    seed = int(hashlib.md5(json.dumps(plan, ensure_ascii=False, sort_keys=True).encode()).hexdigest(), 16)
-    img = _make_random_gradient_background((w, h), [pal[0], (255, 255, 255), pal[1]], seed=seed % 99991).convert("RGB")
-    draw = ImageDraw.Draw(img)
-    ink = (30, 30, 34)
-    accent = pal[2]
-    expr = plan.get("highlight_expression") or ""
-    pose = _emotion_pose_key(str(plan.get("emotion_primary") or ""))
-
-    # 1) situation hook (short)
-    y = 48
-    hook = plan.get("visual_hook") or plan.get("situation") or ""
-    for line in _wrap_by_pixel_width(draw, hook, _load_font(30), w - 120)[:2]:
-        lb = draw.textbbox((0, 0), line, font=_load_font(30))
-        draw.text(((w - (lb[2] - lb[0])) / 2, y), line, font=_load_font(30), fill=(100, 100, 105))
-        y += (lb[3] - lb[1]) + 6
-    y += 18
-
-    # 2) speech bubbles only
-    for i, b in enumerate((plan.get("bubbles") or [expr])[:3]):
-        b = str(b).strip()
-        if not b:
-            continue
-        font = _load_font(42 if expr and expr in b else 34)
-        lines = _wrap_by_pixel_width(draw, b, font, 760)[:3]
-        pad = 18
-        widths = [draw.textbbox((0, 0), ln, font=font)[2] - draw.textbbox((0, 0), ln, font=font)[0] for ln in lines]
-        heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
-        bw = max(widths) + pad * 2
-        bh = sum(heights) + 8 * max(len(lines) - 1, 0) + pad * 2
-        x = 100 if i == 0 else 140
-        hi = bool(expr and expr in b)
-        draw.rounded_rectangle([x, y, x + bw, y + bh], radius=24, fill=(255, 255, 255), outline=accent if hi else ink, width=4 if hi else 3)
-        draw.polygon([(x + 40, y + bh - 1), (x + 24, y + bh + 22), (x + 70, y + bh - 1)], fill=(255, 255, 255), outline=accent if hi else ink)
-        cy = y + pad
-        for j, ln in enumerate(lines):
-            draw.text((x + pad, cy), ln, font=font, fill=ink)
-            cy += heights[j] + 8
-        y += bh + 30
-
-    if plan.get("use_foreigner") and plan.get("foreign_bubble"):
-        fb = str(plan["foreign_bubble"])[:40]
-        draw.rounded_rectangle([w - 360, max(y - 90, 200), w - 50, max(y - 90, 200) + 70], radius=20, fill=(255, 255, 255), outline=ink, width=3)
-        draw.text((w - 340, max(y - 75, 215)), fb, font=_load_font(28), fill=ink)
-
-    # 3) character + place (center-bottom of art area)
-    char_y = int(h * 0.55)
-    ground = char_y + 160
-    _draw_place_simple(draw, str(plan.get("place") or ""), w, ground, ink, accent)
-    if plan.get("use_foreigner"):
-        _draw_webtoon_character(draw, w // 2 - 120, char_y, pose, scale=1.1)
-        _draw_webtoon_character(draw, w // 2 + 140, char_y + 10, "shock", scale=1.0)
-    else:
-        _draw_webtoon_character(draw, w // 2, char_y, pose, scale=1.2)
-
-    # 4) cultural footer + CTA
-    foot = (plan.get("footer") or "").strip()
-    fy = h - 150
-    for line in _wrap_by_pixel_width(draw, foot, _load_font(26), w - 100)[:2]:
-        lb = draw.textbbox((0, 0), line, font=_load_font(26))
-        draw.text(((w - (lb[2] - lb[0])) / 2, fy), line, font=_load_font(26), fill=(70, 70, 75))
-        fy += (lb[3] - lb[1]) + 6
-    if blogger_url:
-        draw.rectangle([0, h - 70, w, h], fill=accent)
-        cta = "탭하면 구글 블로그에서 이어서 읽기"
-        b = draw.textbbox((0, 0), cta, font=_load_font(28))
-        draw.text(((w - (b[2] - b[0])) / 2, h - 58), cta, font=_load_font(28), fill=(255, 255, 255))
-        u = blogger_url.replace("https://", "").replace("http://", "")[:60]
-        b2 = draw.textbbox((0, 0), u, font=_load_font(18))
-        draw.text(((w - (b2[2] - b2[0])) / 2, h - 26), u, font=_load_font(18), fill=(255, 255, 255))
-
-    tag = f"「{expr}」"
-    tb = draw.textbbox((0, 0), tag, font=_load_font(22))
-    draw.rounded_rectangle(
-        [w - 56 - (tb[2] - tb[0]), 24, w - 24, 24 + (tb[3] - tb[1]) + 12],
-        radius=10, fill=(255, 255, 255), outline=accent, width=2,
-    )
-    draw.text((w - 48 - (tb[2] - tb[0]), 28), tag, font=_load_font(22), fill=accent)
-    return img
-
-
-
-
-def _build_scene_only_prompt(plan: Dict[str, Any]) -> str:
-    """AI용 장면 프롬프트 — 글자 절대 금지, 표현의 실제 상황만."""
-    expr = plan.get("highlight_expression") or ""
-    place = str(plan.get("place") or "")
-    situation = plan.get("situation") or plan.get("visual_hook") or ""
-    emotion = plan.get("emotion_primary") or "neutral"
-    camera = plan.get("camera") or "medium"
-    # final_image_prompt가 장면 설명이면 우선 사용하되 글자 금지 재강조
-    base = (plan.get("final_image_prompt") or "").strip()
-    if len(base) > 40:
-        return (
-            base
-            + " STRICT: no text, no letters, no Korean, no English, no speech bubbles with writing, "
-            + "no signs, blank areas for later text overlay only."
-        )
-    place_en = {
-        "카페": "Korean cafe interior",
-        "식당": "Korean restaurant with food",
-        "직장": "Korean office meeting",
-        "회사": "Korean office",
-        "집": "Korean family home living room",
-        "거리": "Seoul street",
-        "지하철": "Seoul subway",
-        "메신저": "looking at smartphone messages",
-        "쇼핑": "Korean convenience store",
-        "여행": "travel viewpoint Korea",
-        "학교": "Korean school hallway",
-        "편의점": "Korean convenience store",
-    }.get(place, "Korean everyday setting")
-    chars = plan.get("characters") or []
-    if chars and isinstance(chars[0], dict):
-        c0 = chars[0]
-        char_desc = f"{c0.get('desc') or 'young Korean'}, face: {c0.get('face') or emotion}, doing: {c0.get('action') or 'reacting'}"
-    else:
-        char_desc = f"young Korean, facial expression of {emotion}"
-    return (
-        f"Korean manhwa webtoon single panel, clean line art, soft colors, {camera} shot. "
-        f"Location: {place_en}. Situation: {situation}. Character: {char_desc}. "
-        f"This is the exact moment Koreans would say '{expr}'. "
-        f"Strong readable face emotion. Simple background. "
-        f"STRICT RULES: no text anywhere, no letters, no Korean characters, no English, "
-        f"no speech bubbles, no signs, no watermark, no logo."
-    )
-
-
-
-def _overlay_korean_ui(base: Image.Image, plan: Dict[str, Any], blogger_url: str = "") -> Image.Image:
-    """AI 장면 위에 (1) AI가 그린 깨진 글자 영역 가리기 (2) 정확한 한국어 말풍선 합성."""
-    w, h = INSTATOON_SIZE
-    img = base.convert("RGB").resize((w, h), Image.Resampling.LANCZOS)
-    draw = ImageDraw.Draw(img)
-    # AI 모델이 상단/옆에 넣는 깨진 한글·말풍선을 덮음 (장면 인물은 유지)
-    cover = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    cd = ImageDraw.Draw(cover)
-    # 상단 좌·우 말풍선 영역 + 우측 상단 칩 영역
-    cd.rounded_rectangle([20, 20, int(w * 0.62), int(h * 0.28)], radius=20, fill=(255, 255, 255, 245))
-    cd.rounded_rectangle([int(w * 0.45), 20, w - 20, int(h * 0.32)], radius=20, fill=(255, 255, 255, 230))
-    cd.rectangle([w - 220, 16, w - 12, 70], fill=(255, 255, 255, 250))
-    img = Image.alpha_composite(img.convert("RGBA"), cover).convert("RGB")
-    draw = ImageDraw.Draw(img)
-
-    ink = (25, 25, 28)
-    accent = (230, 90, 60)
-    expr = (plan.get("highlight_expression") or "").strip()
-    bubbles = plan.get("bubbles") or []
-    if isinstance(bubbles, str):
-        bubbles = [bubbles]
-    bubbles = [str(b).strip() for b in bubbles if str(b).strip()]
-    # 표현이 말풍선에 꼭 들어가게
-    if expr:
-        if not bubbles:
-            bubbles = [expr]
-        elif not any(expr in b for b in bubbles):
-            bubbles = [expr] + bubbles
-    y = 36
-    for i, b in enumerate(bubbles[:2]):
-        font = _load_font(40 if i == 0 else 32)
-        lines = _wrap_by_pixel_width(draw, b, font, 700)[:3]
-        if not lines:
-            continue
-        pad = 16
-        widths = [draw.textbbox((0, 0), ln, font=font)[2] - draw.textbbox((0, 0), ln, font=font)[0] for ln in lines]
-        heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
-        bw = max(widths) + pad * 2
-        bh = sum(heights) + 8 * max(len(lines) - 1, 0) + pad * 2
-        x = 40 if i == 0 else 72
-        draw.rounded_rectangle([x, y, x + bw, y + bh], radius=22, fill=(255, 255, 255), outline=ink, width=3)
-        draw.polygon([(x + 40, y + bh - 1), (x + 24, y + bh + 16), (x + 60, y + bh - 1)], fill=(255, 255, 255), outline=ink)
-        cy = y + pad
-        for j, ln in enumerate(lines):
-            draw.text((x + pad, cy), ln, font=font, fill=ink)
-            cy += heights[j] + 8
-        y += bh + 26
-    if expr:
-        tag = f"「{expr}」"
-        tf = _load_font(24)
-        tb = draw.textbbox((0, 0), tag, font=tf)
-        tw, th = tb[2] - tb[0], tb[3] - tb[1]
-        tx, ty = w - tw - 36, 24
-        draw.rounded_rectangle([tx - 10, ty - 6, tx + tw + 10, ty + th + 6], radius=10, fill=(255, 255, 255), outline=accent, width=2)
-        draw.text((tx, ty), tag, font=tf, fill=accent)
-    foot = (plan.get("footer") or "").strip()
-    if foot:
-        fy = h - 148
-        draw.rectangle([0, fy - 14, w, h - 68], fill=(255, 255, 255))
-        ff = _load_font(24)
-        for line in _wrap_by_pixel_width(draw, foot, ff, w - 80)[:2]:
-            lb = draw.textbbox((0, 0), line, font=ff)
-            draw.text(((w - (lb[2] - lb[0])) / 2, fy), line, font=ff, fill=(70, 70, 75))
-            fy += (lb[3] - lb[1]) + 6
-    if blogger_url:
-        draw.rectangle([0, h - 66, w, h], fill=accent)
-        cta = "탭하면 구글 블로그에서 이어서 읽기"
-        bf = _load_font(26)
-        bb = draw.textbbox((0, 0), cta, font=bf)
-        draw.text(((w - (bb[2] - bb[0])) / 2, h - 54), cta, font=bf, fill=(255, 255, 255))
-        u = blogger_url.replace("https://", "").replace("http://", "")[:56]
-        uf = _load_font(18)
-        ub = draw.textbbox((0, 0), u, font=uf)
-        draw.text(((w - (ub[2] - ub[0])) / 2, h - 24), u, font=uf, fill=(255, 255, 255))
-    return img
-
-
-
-def generate_instatoon_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    """인스타툰·교육용 웹툰.
-    현재 이미지 파이프라인은 비활성화 상태이지만, 본문 기반 품질 점수는 항상 산출한다.
-    점수 < 55이면 로그로 재생성 권고를 남겨 장기적으로 재활성 시 자동 재시도 기반을 제공한다.
-    """
-    score, reason = score_content_for_visual(article)
-    article["_visual_quality_score"] = score
-    article["_visual_quality_reason"] = reason
-    if score < 55:
-        logger.warning(f"[인스타툰 품질] 점수 {score:.0f}/100 ({reason}) — 시각 콘텐츠 재생성 권고")
-    else:
-        logger.info(f"[인스타툰 품질] 점수 {score:.0f}/100 ({reason})")
-
-    logger.info("[인스타툰] 교육용 웹툰 이미지 생성 비활성화 — 품질 점수만 기록")
-    return {
-        "slug": "",
-        "local_paths": [],
-        "public_urls": [],
-        "click_url": "",
-        "blogger_url": (blogger_url or "").strip(),
-        "download_dir": "",
-        "disabled": True,
-        "quality_score": score,
-        "quality_reason": reason,
-    }
-
-
-
-def generate_card_news_images(article: Dict[str, Any], blogger_url: str = "") -> Dict[str, Any]:
-    return generate_instatoon_images(article, blogger_url)
-
-
-def _card_news_slug(expression: str, title: str) -> str:
-    return _instatoon_slug(expression, title)
 
 
 
@@ -4046,7 +3168,6 @@ def _social_row_html() -> str:
     """설정된 SNS 채널만 아이콘으로 노출 (하나도 설정 안 되어 있으면 빈 문자열)"""
     links = []
     if SNS_PINTEREST_URL: links.append(f'<a href="{SNS_PINTEREST_URL}" target="_blank" rel="noopener" aria-label="Pinterest">📌</a>')
-    if SNS_INSTAGRAM_URL: links.append(f'<a href="{SNS_INSTAGRAM_URL}" target="_blank" rel="noopener" aria-label="Instagram">📷</a>')
     if SNS_X_URL: links.append(f'<a href="{SNS_X_URL}" target="_blank" rel="noopener" aria-label="X">𝕏</a>')
     if not links:
         return ""
@@ -4447,7 +3568,7 @@ def ensure_blogger_policy_pages() -> Dict[str, str]:
 
 
 # =====================================================================
-# [NEW] Threads + Instagram 자동 발행 (Blogger 발행 성공 후)
+# [NEW] Threads 자동 발행 (Blogger 발행 성공 후)
 # - 이미지 URL은 공개 접근 가능해야 함 (GitHub Pages thumbs URL 사용)
 # - 토큰/ID 미설정 시 스킵. 예외는 로그 후 삼킴 (메인 파이프라인 보호)
 # =====================================================================
@@ -4466,9 +3587,9 @@ def _sns_caption(article: Dict[str, Any], blogger_url: str, *, platform: str) ->
         lines.append(f"Korean expression: “{expr}”")
     if title:
         lines.append(title)
-    lines.append("한 컷으로 상황만 보고, 자세한 뉘앙스는 블로그에서 확인하세요.")
+    lines.append("자세한 뉘앙스와 예문은 블로그에서 확인하세요.")
     lines.append("Learn Korean → understand how Koreans think & speak.")
-    tags = ["#LearnKorean", "#KoreanLanguage", "#한국어", "#KoreanCulture", "#인스타툰"]
+    tags = ["#LearnKorean", "#KoreanLanguage", "#한국어", "#KoreanCulture"]
     if cat:
         tags.insert(0, f"#{cat.replace(' ', '')}")
     lines.append(" ".join(tags))
@@ -4561,213 +3682,14 @@ def publish_to_threads(article: Dict[str, Any], blogger_url: str, image_url: str
         return None
 
 
-def publish_to_instagram(article: Dict[str, Any], blogger_url: str, image_url: str) -> Optional[str]:
-    """Instagram Professional 계정 이미지 게시 (텍스트 단독 불가 → 썸네일 필수)."""
-    if not INSTAGRAM_ENABLED:
-        return None
-    if not (INSTAGRAM_USER_ID and INSTAGRAM_ACCESS_TOKEN):
-        logger.info("[Instagram] 미설정(INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN) — 건너뜁니다.")
-        return None
-    if not image_url:
-        logger.warning("[Instagram] image_url 비어 있음 — 건너뜁니다.")
-        return None
-    caption = _sns_caption(article, blogger_url, platform="instagram")
-    try:
-        create = requests.post(
-            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media",
-            data={
-                "image_url": image_url,
-                "caption": caption,
-                "access_token": INSTAGRAM_ACCESS_TOKEN,
-            },
-            timeout=60,
-        )
-        if not create.ok:
-            logger.warning(f"[Instagram] 컨테이너 생성 실패 HTTP {create.status_code}: {create.text[:400]}")
-            return None
-        creation_id = (create.json() or {}).get("id")
-        if not creation_id:
-            logger.warning(f"[Instagram] creation_id 없음: {create.text[:300]}")
-            return None
-        ready = _wait_media_container_ready(
-            f"{INSTAGRAM_API_BASE}/{creation_id}",
-            INSTAGRAM_ACCESS_TOKEN,
-            label="Instagram",
-        )
-        if not ready:
-            logger.warning("[Instagram] 컨테이너 준비 시간 초과 — 발행 시도는 계속합니다.")
-        pub = requests.post(
-            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media_publish",
-            data={"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
-            timeout=60,
-        )
-        if not pub.ok:
-            logger.warning(f"[Instagram] 발행 실패 HTTP {pub.status_code}: {pub.text[:400]}")
-            return None
-        media_id = (pub.json() or {}).get("id", "")
-        logger.info(f"[Instagram] 발행 완료 id={media_id}")
-        return media_id or creation_id
-    except Exception as e:
-        logger.warning(f"[Instagram] 예외(건너뜀): {e}")
-        return None
-
-
-def _publish_threads_carousel(article: Dict[str, Any], blogger_url: str, image_urls: List[str]) -> Optional[str]:
-    """Threads 캐러셀(카드뉴스). 실패 시 None."""
-    if not (THREADS_ENABLED and THREADS_USER_ID and THREADS_ACCESS_TOKEN):
-        return None
-    if len(image_urls) < 2:
-        return None
-    caption = _sns_caption(article, blogger_url, platform="threads")
-    try:
-        child_ids = []
-        for url in image_urls[:10]:
-            r = requests.post(
-                f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads",
-                data={
-                    "media_type": "IMAGE",
-                    "image_url": url,
-                    "is_carousel_item": "true",
-                    "access_token": THREADS_ACCESS_TOKEN,
-                },
-                timeout=60,
-            )
-            if not r.ok:
-                logger.warning(f"[Threads] 캐러셀 자식 실패: {r.status_code} {r.text[:200]}")
-                return None
-            cid = (r.json() or {}).get("id")
-            if not cid:
-                return None
-            child_ids.append(cid)
-            _wait_media_container_ready(f"{THREADS_API_BASE}/{cid}", THREADS_ACCESS_TOKEN, label="Threads-child")
-        parent = requests.post(
-            f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads",
-            data={
-                "media_type": "CAROUSEL",
-                "children": ",".join(child_ids),
-                "text": caption,
-                "access_token": THREADS_ACCESS_TOKEN,
-            },
-            timeout=60,
-        )
-        if not parent.ok:
-            logger.warning(f"[Threads] 캐러셀 부모 실패: {parent.status_code} {parent.text[:300]}")
-            return None
-        creation_id = (parent.json() or {}).get("id")
-        if not creation_id:
-            return None
-        _wait_media_container_ready(f"{THREADS_API_BASE}/{creation_id}", THREADS_ACCESS_TOKEN, label="Threads-carousel")
-        pub = requests.post(
-            f"{THREADS_API_BASE}/{THREADS_USER_ID}/threads_publish",
-            data={"creation_id": creation_id, "access_token": THREADS_ACCESS_TOKEN},
-            timeout=60,
-        )
-        if not pub.ok:
-            logger.warning(f"[Threads] 캐러셀 발행 실패: {pub.status_code} {pub.text[:300]}")
-            return None
-        mid = (pub.json() or {}).get("id", "")
-        logger.info(f"[Threads] 카드뉴스 캐러셀 발행 완료 id={mid}")
-        return mid or creation_id
-    except Exception as e:
-        logger.warning(f"[Threads] 캐러셀 예외: {e}")
-        return None
-
-
-def _publish_instagram_carousel(article: Dict[str, Any], blogger_url: str, image_urls: List[str]) -> Optional[str]:
-    """Instagram 캐러셀(카드뉴스)."""
-    if not (INSTAGRAM_ENABLED and INSTAGRAM_USER_ID and INSTAGRAM_ACCESS_TOKEN):
-        return None
-    if len(image_urls) < 2:
-        return None
-    caption = _sns_caption(article, blogger_url, platform="instagram")
-    try:
-        child_ids = []
-        for url in image_urls[:10]:
-            r = requests.post(
-                f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media",
-                data={
-                    "image_url": url,
-                    "is_carousel_item": "true",
-                    "access_token": INSTAGRAM_ACCESS_TOKEN,
-                },
-                timeout=60,
-            )
-            if not r.ok:
-                logger.warning(f"[Instagram] 캐러셀 자식 실패: {r.status_code} {r.text[:200]}")
-                return None
-            cid = (r.json() or {}).get("id")
-            if not cid:
-                return None
-            child_ids.append(cid)
-            _wait_media_container_ready(f"{INSTAGRAM_API_BASE}/{cid}", INSTAGRAM_ACCESS_TOKEN, label="IG-child")
-        parent = requests.post(
-            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media",
-            data={
-                "media_type": "CAROUSEL",
-                "children": ",".join(child_ids),
-                "caption": caption,
-                "access_token": INSTAGRAM_ACCESS_TOKEN,
-            },
-            timeout=60,
-        )
-        if not parent.ok:
-            logger.warning(f"[Instagram] 캐러셀 부모 실패: {parent.status_code} {parent.text[:300]}")
-            return None
-        creation_id = (parent.json() or {}).get("id")
-        if not creation_id:
-            return None
-        _wait_media_container_ready(f"{INSTAGRAM_API_BASE}/{creation_id}", INSTAGRAM_ACCESS_TOKEN, label="IG-carousel")
-        pub = requests.post(
-            f"{INSTAGRAM_API_BASE}/{INSTAGRAM_USER_ID}/media_publish",
-            data={"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
-            timeout=60,
-        )
-        if not pub.ok:
-            logger.warning(f"[Instagram] 캐러셀 발행 실패: {pub.status_code} {pub.text[:300]}")
-            return None
-        mid = (pub.json() or {}).get("id", "")
-        logger.info(f"[Instagram] 카드뉴스 캐러셀 발행 완료 id={mid}")
-        return mid or creation_id
-    except Exception as e:
-        logger.warning(f"[Instagram] 캐러셀 예외: {e}")
-        return None
-
-
 def publish_to_sns(article: Dict[str, Any], blogger_url: str, image_url: str) -> None:
-    """Blogger 성공 후: 인스타툰 → Threads/Instagram 캐러셀 업로드."""
+    """Blogger 발행 성공 후: Threads에 썸네일 이미지로 공유 (토큰 미설정 시 내부에서 스킵)."""
     if not blogger_url:
         return
-    card = article.get("_card_news") if isinstance(article.get("_card_news"), dict) else None
-    try:
-        # 블로그 URL이 생긴 뒤 CTA 슬라이드 보강 위해 1회 더 생성(덮어쓰기)
-        card = generate_instatoon_images(article, blogger_url)
-        article["_card_news"] = card  # 키 유지(하위호환)
-        commit_and_push_changes()
-    except Exception as e:
-        logger.warning(f"[인스타툰] 생성 실패(썸네일 폴백): {e}")
-
-    urls = (card or {}).get("public_urls") or []
-    if not urls:
-        # 폴백: 기존 썸네일 단일 이미지
-        if image_url and (image_url.startswith("http://") or image_url.startswith("https://")):
-            urls = [image_url]
-        else:
-            logger.warning("[SNS] 업로드할 공개 이미지 URL 없음 — 스킵")
-            return
-
-    if len(urls) >= 2:
-        th = _publish_threads_carousel(article, blogger_url, urls)
-        if not th:
-            publish_to_threads(article, blogger_url, urls[0])
-        ig = _publish_instagram_carousel(article, blogger_url, urls)
-        if not ig:
-            publish_to_instagram(article, blogger_url, urls[0])
-    else:
-        publish_to_threads(article, blogger_url, urls[0])
-        publish_to_instagram(article, blogger_url, urls[0])
-
-    if card and card.get("download_dir"):
-        logger.info(f"[인스타툰] 로컬 다운로드 폴더: {card['download_dir']}")
+    if not (image_url and (image_url.startswith("http://") or image_url.startswith("https://"))):
+        logger.warning("[SNS] 업로드할 공개 이미지 URL 없음 — 스킵")
+        return
+    publish_to_threads(article, blogger_url, image_url)
 
 
 
@@ -5391,7 +4313,7 @@ def build_ab_title_variants(article: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def score_content_for_visual(article: Dict[str, Any]) -> Tuple[float, str]:
-    """인스타툰·카드뉴스용 본문 품질 점수 (0~100).
+    """본문 품질 점수 (0~100).
     텍스트 가독·표현 일관성·카테고리 신호 기반. 낮으면 재생성 유도에 사용.
     """
     expr = (article.get("expression") or "").strip()
@@ -5543,7 +4465,6 @@ def repair_old_posts() -> None:
 
     fixed_thumbs = 0
     skipped_thumbs = 0
-    fixed_card_news = 0
     fixed_buttons = 0
     deleted_other_niche = 0
     skipped_no_expression = 0
@@ -5621,33 +4542,6 @@ def repair_old_posts() -> None:
             except Exception as e:
                 logger.warning(f"[복구] 썸네일 재생성 실패({title}): {e}")
 
-        # 1-b) 이전 글 인스타툰 없으면 자동 생성
-        try:
-            slug_cn = _instatoon_slug(expression, title)
-            need_card = True
-            for base in (INSTATOON_DOWNLOAD_DIR, INSTATOON_PUBLIC_DIR):
-                folder = os.path.join(base, slug_cn)
-                if os.path.isdir(folder):
-                    try:
-                        if any(fn.lower().endswith(".png") for fn in os.listdir(folder)):
-                            need_card = False
-                            break
-                    except Exception:
-                        pass
-            if need_card:
-                article_stub = {
-                    "title": title,
-                    "expression": expression,
-                    "category": category,
-                    "meta_description": (p.get("meta_description") or title),
-                    "html_body": "",
-                }
-                # 인스타툰 생성 제거 — 스킵
-                pass
-                logger.info(f"[복구] 인스타툰 생성: {slug_cn}")
-        except Exception as e:
-            logger.warning(f"[복구] 인스타툰 생성 실패({title}): {e}")
-
         # 2) 본문 HTML의 히어로 영역에 발음 듣기 버튼이 없거나 낡은 형태면 최신 버튼으로 교체
         post_path = os.path.join(DOCS_DIR, p["file"])
         if os.path.exists(post_path):
@@ -5693,7 +4587,7 @@ def repair_old_posts() -> None:
         update_seo_files(kept_posts)
 
     logger.info(
-        f"[복구] GitHub Pages 완료 — 썸네일 재생성 {fixed_thumbs}개(스킵 {skipped_thumbs}개), 인스타툰 {fixed_card_news}개, 발음버튼 {fixed_buttons}개 패치, "
+        f"[복구] GitHub Pages 완료 — 썸네일 재생성 {fixed_thumbs}개(스킵 {skipped_thumbs}개), 발음버튼 {fixed_buttons}개 패치, "
         f"다른 주제 글 {deleted_other_niche}개 삭제 (표현 추출 실패 {skipped_no_expression}개는 그대로 둠)"
     )
 
@@ -6193,7 +5087,7 @@ def run() -> None:
 
     # [A/B 제목] SEO 2안 생성·선택 + queue 로그 (장기 성과 추적)
     article = build_ab_title_variants(article)
-    # [인스타툰 품질] 본문 기반 점수 선산출 (이미지 파이프라인 비활성 시에도 메타에 남김)
+    # [시각 품질 점수] 본문 기반 점수 산출 (대시보드 추적용)
     v_score, v_reason = score_content_for_visual(article)
     article["_visual_quality_score"] = v_score
     article["_visual_quality_reason"] = v_reason
@@ -6212,15 +5106,6 @@ def run() -> None:
     if PUBLISH_GITHUB_PAGES_SITE:
         update_seo_files(posts)
     build_lead_magnet_pdf(posts)  # [NEW] 무료 PDF 리드마그넷 자동 갱신
-
-    # [인스타툰] Blogger/SNS 전 5컷 생성 → downloads/instatoon + docs/instatoon
-    try:
-        card_meta = generate_instatoon_images(article, blogger_url="")
-        article["_card_news"] = card_meta
-        logger.info(f"[인스타툰] 사전 생성 완료: {card_meta.get('download_dir')}")
-    except Exception as e:
-        logger.warning(f"[인스타툰] 사전 생성 실패: {e}")
-        article["_card_news"] = {}
 
     commit_and_push_changes()  # [NEW] 외부 발행 전 GitHub Pages에 이미지가 실제로 존재하도록 먼저 push
 
@@ -6262,13 +5147,7 @@ def run() -> None:
     # [NEW] 발행 직후 Google에 색인 생성을 자동으로 요청한다 (Search Console에서 손으로 누르던 작업 자동화)
     if blogger_url:
         request_google_indexing(blogger_url)  # Blogger가 메인 발행처이므로 이 주소만 색인 요청
-        # [NEW] Threads + Instagram 자동 공유 (토큰 없으면 내부에서 스킵)
-        # 한 컷에 블로그 URL 반영 후 SNS (클릭 전환용)
-        try:
-            article["_card_news"] = generate_instatoon_images(article, blogger_url)
-            commit_and_push_changes()
-        except Exception as _e:
-            logger.warning(f"[인스타툰] 발행 URL 반영 재생성 실패: {_e}")
+        # [NEW] Threads 자동 공유 (토큰 없으면 내부에서 스킵)
         publish_to_sns(article, blogger_url, thumb_url)
 
     if not manual_title and not is_manual_trigger:
