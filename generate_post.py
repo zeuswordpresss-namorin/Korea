@@ -3984,9 +3984,28 @@ def ensure_ads_txt() -> None:
         logger.warning(f"[애드센스] ads.txt 생성 실패(건너뜀): {e}")
 
 
+def _check_site_url_sane() -> None:
+    """[NEW-설정 오류 감지] SITE_URL이 실수로 Blogger 자체 도메인으로 설정되면, 썸네일 등
+    정적 자산(docs/thumbs/...) URL이 절대 정상 동작하지 않는다(Blogger는 그런 경로를
+    이미지로 서빙하지 않고 홈페이지/404 안내 페이지로 응답하며, 이게 200을 반환하면
+    '정상'으로 오판되어 실제로는 텅 빈 히어로 이미지가 발행되는 원인이 된다).
+    SITE_URL은 GitHub Pages 주소(예: https://사용자명.github.io/저장소명, 또는 그 커스텀
+    도메인)여야 한다."""
+    if not SITE_URL:
+        return
+    lowered = SITE_URL.lower()
+    if "blogspot.com" in lowered or "blogger.com" in lowered:
+        logger.error(
+            f"[설정 오류 의심] SITE_URL({SITE_URL})이 Blogger 도메인처럼 보입니다. "
+            "SITE_URL은 GitHub Pages 주소여야 합니다(예: https://사용자명.github.io/저장소명). "
+            "이 값이 잘못되면 썸네일 이미지가 계속 깨져 보입니다 — GitHub Secrets/Variables에서 확인하세요."
+        )
+
+
 def log_adsense_readiness() -> None:
     """[NEW-애드센스] 실행 시작 시 승인·수익화 준비 상태를 한 줄 체크리스트로 요약 로그.
     문제를 미리 파악할 수 있도록 매 실행 시작 시 자동으로 남긴다."""
+    _check_site_url_sane()
     checks = [
         ("ADSENSE_CLIENT_ID 설정", bool(ADSENSE_CLIENT_ID)),
         ("CONTACT_EMAIL 설정", bool(CONTACT_EMAIL)),
@@ -4019,25 +4038,46 @@ def _wait_for_url_ready(url: str, timeout_sec: int = 60, interval_sec: int = 4) 
     수십 초~수 분의 배포 지연이 있을 수 있다. Blogger가 이 글을 발행/스크래핑하는 시점에
     이미지가 아직 없으면 Blogger 자체의 목록 미리보기 썸네일이 영구히 비어 보일 수 있으므로,
     발행 직전에 최대 timeout_sec초 동안 폴링해 실제로 열리는지 확인한다.
+    [FIX-오탐 방지] 상태코드 200만으로는 부족하다 — SITE_URL이 잘못 설정되어(예: GitHub Pages
+    주소가 아니라 Blogger 주소를 가리키는 경우) 그 도메인이 이미지 대신 홈페이지/404 안내
+    페이지(HTML)를 200으로 반환하면 '정상'으로 오판하게 된다. 실제 응답의 Content-Type이
+    image/*인지까지 확인해야 진짜로 이미지가 존재한다고 신뢰할 수 있다.
     (실패해도 예외를 던지지 않고 False만 반환 — 발행 자체를 막지는 않으며, 브라우저 측
     onerror 재시도(_retryHeroImage)가 마지막 안전망 역할을 한다.)"""
     if not url or not url.startswith(("http://", "https://")):
         return False
+
+    def _looks_like_image(resp) -> bool:
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        return ctype.startswith("image/")
+
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
             resp = requests.head(url, timeout=8, allow_redirects=True)
             if resp.status_code == 200:
-                return True
-            if resp.status_code in (403, 404, 405):
+                if _looks_like_image(resp):
+                    return True
+                # HEAD가 Content-Type을 안 주거나 애매하면 GET으로 실제 바이트를 확인
+                resp = requests.get(url, timeout=8, stream=True)
+                if resp.status_code == 200 and _looks_like_image(resp):
+                    return True
+                if resp.status_code == 200:
+                    logger.warning(
+                        f"[썸네일] {url} 이(가) 200을 반환했지만 이미지가 아닙니다 "
+                        f"(Content-Type: {resp.headers.get('Content-Type')}) — SITE_URL 설정을 확인하세요."
+                    )
+                    return False
+            elif resp.status_code in (403, 404, 405):
                 # 일부 서버/CDN은 HEAD를 제대로 지원하지 않으므로 GET으로 한 번 더 확인
                 resp = requests.get(url, timeout=8, stream=True)
-                if resp.status_code == 200:
+                if resp.status_code == 200 and _looks_like_image(resp):
                     return True
         except requests.exceptions.RequestException:
             pass
         time.sleep(interval_sec)
     return False
+
 
 
 def commit_and_push_changes() -> bool:
