@@ -11,17 +11,12 @@ on:
         options:
           - publish
           - refresh
-          - repair
       title:
         description: "발행할 한국어 표현/키워드 (비워두면 100개 주제뱅크 큐에서 자동 발췌) — 수동 실행은 하루 발행 한도의 영향을 받지 않습니다"
         required: false
         default: ""
   schedule:
     - cron: "0 * * * *"   # 매시 정각마다 실행 후보로 판정 (하루 랜덤 2회만 실제 발행, 나머지는 자동으로 건너뜀)
-                           # [FIX] 발행 여부와 무관하게 자동 리페어(과거 글 위반 리스크 점검·복구)는
-                           # 이 매시 실행마다 시도되며, generate_post.py 내부의 하루 1회 마커로 중복 실행만 방지한다.
-                           # (예전에는 발행 게이트 뒤에서 호출되어 발행이 스킵되는 대부분의 시간대에는
-                           # 리페어도 함께 건너뛰어지는 결함이 있었음 — 게이트보다 앞으로 이동해 수정됨)
 
 permissions:
   contents: write
@@ -38,9 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     # [FIX] 10분 제한에 실제로 걸려 실패한 사례 확인됨 (Gemini 생성+이미지+발행+push 합산 시
     # 10분을 넘을 수 있음). 여유를 두어 20분으로 상향.
-    # [FIX-추가] 자동 리페어가 이제 매시 실행마다 시도되고, 위반 리스크(얇은 본문) 발견 시
-    # Gemini로 글 전체를 재생성하는 추가 API 호출이 여러 건 생길 수 있어 25분으로 재상향.
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
@@ -91,22 +84,14 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          # [NEW] 자동 리페어(과거 글 위반 리스크 자동 점검·복구) 하루 1회 실행 스위치.
-          # true(기본값)면 매시 실행마다 시도하되 날짜 마커로 하루 1회만 실제 수행됨.
-          # 문제 발생 시 false로 내려 임시 비활성화 가능.
-          AUTO_REPAIR_ONCE_PER_DAY: "true"
           # --- 썸네일용 무료 스톡 이미지(Pexels) ---
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           # --- SNS (있으면 자동 공유) ---
           THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
-          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "refresh" ]; then
             python generate_post.py refresh
-          elif [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.action_type }}" == "repair" ]; then
-            python generate_post.py repair
           else
             python generate_post.py "${{ github.event.inputs.title }}"
           fi
